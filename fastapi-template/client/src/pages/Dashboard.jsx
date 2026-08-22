@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import MarketTicker from "../components/MarketTicker";
 import TradeLog from "../components/TradeLog";
 import RiskGauge from "../components/RiskGauge";
@@ -9,6 +9,7 @@ import ErrorBoundary from "../components/ErrorBoundary";
 import { SkeletonCard } from "../components/SkeletonLoaders";
 import { useApi } from "../hooks/useApi";
 import { useMarket } from "../context/MarketContext";
+import { API_BASE } from "../config";
 import {
   RefreshCw,
   TrendingUp,
@@ -23,6 +24,11 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   TrendingDown,
+  Search,
+  Plus,
+  Sparkles,
+  X,
+  CheckCircle2,
 } from "lucide-react";
 
 const ASSET_CLASSES = [
@@ -45,6 +51,21 @@ export default function Dashboard() {
   const [activeAssetTab, setActiveAssetTab] = useState("ALL");
   const [selectedSymbol, setSelectedSymbol] = useState("NIFTY50");
 
+  // Universal Search State
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [userCustomSymbols, setUserCustomSymbols] = useState(() => {
+    try {
+      const saved = localStorage.getItem("tradetron_custom_symbols");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const searchContainerRef = useRef(null);
+
   // Central Market Data Feed (Single WebSocket Session Feed)
   const { quotes: liveMarketMap, isConnected: isWsConnected, tickCount: liveTicksCount, lastUpdated: lastTickTime } = useMarket();
 
@@ -54,6 +75,80 @@ export default function Dashboard() {
   const { data: initialTrades, refetch: refetchTrades } = useApi("/api/trades?limit=20");
   const { data: summaryData, loading: summaryLoading, refetch: refetchSummary } = useApi("/api/dashboard/summary");
 
+  // Debounced Universal Instrument Search across NSE/BSE/NFO/MCX/Crypto/Forex
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setSearchResults([]);
+      setIsSearching(false);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setIsSearching(true);
+      try {
+        const res = await fetch(`${API_BASE}/api/market-data/instruments/search?q=${encodeURIComponent(searchQuery)}&limit=15`);
+        if (res.ok) {
+          const data = await res.json();
+          setSearchResults(data.instruments || []);
+        }
+      } catch (err) {
+        console.error("Dashboard instrument search error:", err);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 200);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  // Click outside to close search dropdown
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(e.target)) {
+        setShowDropdown(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const handleSelectInstrument = async (item) => {
+    if (!item?.symbol) return;
+    const sym = item.symbol.toUpperCase().trim();
+
+    if (!userCustomSymbols.includes(sym)) {
+      const updated = [sym, ...userCustomSymbols];
+      setUserCustomSymbols(updated);
+      try {
+        localStorage.setItem("tradetron_custom_symbols", JSON.stringify(updated));
+      } catch {}
+    }
+
+    setSelectedSymbol(sym);
+
+    try {
+      await fetch(`${API_BASE}/api/market-data/subscribe`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbols: [sym] }),
+      });
+    } catch (e) {
+      console.debug("Subscribe error:", e);
+    }
+
+    setSearchQuery("");
+    setShowDropdown(false);
+  };
+
+  const handleRemoveCustomSymbol = (symToRemove, e) => {
+    e.stopPropagation();
+    const updated = userCustomSymbols.filter((s) => s !== symToRemove);
+    setUserCustomSymbols(updated);
+    try {
+      localStorage.setItem("tradetron_custom_symbols", JSON.stringify(updated));
+    } catch {}
+  };
+
   const refreshAll = () => {
     refetchMarket();
     refetchRisk();
@@ -61,8 +156,32 @@ export default function Dashboard() {
     refetchTrades();
   };
 
-  const displayedSymbols = SYMBOL_MAP[activeAssetTab] || SYMBOL_MAP.ALL;
+  const displayedSymbols = useMemo(() => {
+    const base = SYMBOL_MAP[activeAssetTab] || SYMBOL_MAP.ALL;
+    return [...new Set([...userCustomSymbols, ...base])];
+  }, [activeAssetTab, userCustomSymbols]);
+
   const currentSelectedData = liveMarketMap[selectedSymbol] || { price: 24850.0 };
+
+  const getExchangeColor = (exchange) => {
+    switch (exchange) {
+      case "NSE":
+        return "bg-amber-500/15 text-amber-300 border-amber-500/30";
+      case "BSE":
+        return "bg-blue-500/15 text-blue-300 border-blue-500/30";
+      case "NFO":
+        return "bg-purple-500/15 text-purple-300 border-purple-500/30";
+      case "MCX":
+        return "bg-orange-500/15 text-orange-300 border-orange-500/30";
+      case "BINANCE":
+        return "bg-yellow-500/15 text-yellow-300 border-yellow-500/30";
+      case "CDS":
+      case "FOREX":
+        return "bg-emerald-500/15 text-emerald-300 border-emerald-500/30";
+      default:
+        return "bg-slate-700/50 text-slate-300 border-slate-600";
+    }
+  };
 
   // Dynamic Real-time Calculations from Live Market Pipeline with bulletproof fallbacks
   const liveMarketStats = useMemo(() => {
@@ -278,40 +397,145 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Asset Class Filter Tabs */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.06] pb-3">
-        <div className="flex flex-wrap gap-1.5">
-          {ASSET_CLASSES.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveAssetTab(tab.id)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
-                activeAssetTab === tab.id
-                  ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm"
-                  : "bg-surface-800/60 hover:bg-surface-750 text-slate-400 border border-white/[0.04]"
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
+      {/* Asset Class Filter Tabs & User Search */}
+      <div className="space-y-3 border-b border-white/[0.06] pb-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap gap-1.5">
+            {ASSET_CLASSES.map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveAssetTab(tab.id)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                  activeAssetTab === tab.id
+                    ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm"
+                    : "bg-surface-800/60 hover:bg-surface-750 text-slate-400 border border-white/[0.04]"
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2 text-[11px] text-slate-400 font-mono">
+            <Sparkles size={13} className="text-cyan-400 shrink-0" />
+            <span className="hidden sm:inline">10,000+ Master Instruments Indexed</span>
+          </div>
         </div>
 
-        <span className="text-[11px] text-slate-500 font-mono hidden sm:inline-block">
-          Click any ticker to bind live DMA chart and fast order panel
-        </span>
+        {/* Universal 10,000+ Instrument Search Bar */}
+        <div ref={searchContainerRef} className="relative z-30">
+          <div className="relative flex items-center">
+            <Search size={16} className="absolute left-3.5 text-slate-400 pointer-events-none" />
+            <input
+              type="text"
+              placeholder="Search & Add any NSE/BSE equity (e.g. TRENT, ZOMATO, RELIANCE), NFO F&O, MCX, Crypto, Forex..."
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setShowDropdown(true);
+              }}
+              onFocus={() => setShowDropdown(true)}
+              className="w-full pl-10 pr-10 py-2.5 rounded-xl bg-surface-900/90 border border-slate-800/80 focus:border-cyan-500/50 text-xs font-mono text-white placeholder:text-slate-500 shadow-glass-sm focus:outline-none focus:ring-1 focus:ring-cyan-500/30 transition-all"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery("")}
+                className="absolute right-3.5 text-slate-400 hover:text-white p-0.5 rounded-md"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+
+          {/* Search Results Dropdown */}
+          {showDropdown && searchQuery.trim().length > 0 && (
+            <div className="absolute left-0 right-0 top-full mt-2 max-h-80 overflow-y-auto rounded-2xl bg-surface-900/95 border border-slate-700/80 shadow-2xl backdrop-blur-xl z-50 divide-y divide-white/[0.05]">
+              {isSearching ? (
+                <div className="p-4 text-center text-xs text-cyan-400 flex items-center justify-center gap-2 font-mono">
+                  <RefreshCw size={13} className="animate-spin" />
+                  <span>Searching official market master catalog...</span>
+                </div>
+              ) : searchResults.length > 0 ? (
+                searchResults.map((item) => (
+                  <div
+                    key={item.symbol}
+                    onClick={() => handleSelectInstrument(item)}
+                    className="p-3 hover:bg-cyan-500/10 cursor-pointer transition-colors flex items-center justify-between gap-3 group"
+                  >
+                    <div className="flex items-center gap-2.5 overflow-hidden">
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold border shrink-0 ${getExchangeColor(item.exchange)}`}>
+                        {item.exchange}
+                      </span>
+                      <div className="overflow-hidden">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-white font-mono group-hover:text-cyan-300 transition-colors">
+                            {item.symbol}
+                          </span>
+                          <span className="text-[10px] text-slate-400 font-mono bg-slate-800 px-1.5 py-0.5 rounded">
+                            {item.segment}
+                          </span>
+                          {item.lot_size > 1 && (
+                            <span className="text-[10px] text-cyan-400 font-mono">
+                              Lot: {item.lot_size}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-slate-400 truncate mt-0.5">{item.name}</p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3 shrink-0">
+                      <div className="text-right">
+                        <span className="text-xs font-bold text-white font-mono">
+                          {item.exchange === "BINANCE" || item.segment === "CRYPTO" ? "$" : "₹"}
+                          {Number(item.base_price || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                        </span>
+                        <span className="block text-[9px] text-slate-500">Live Anchor</span>
+                      </div>
+
+                      <button
+                        className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-cyan-500/20 group-hover:bg-cyan-500 group-hover:text-slate-950 text-cyan-300 border border-cyan-500/40 transition-all flex items-center gap-1"
+                      >
+                        <Plus size={12} />
+                        <span>Add & Stream</span>
+                      </button>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="p-6 text-center text-xs text-slate-400">
+                  No instruments matching "{searchQuery}" in the master database.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Live Market Ticker Grid Powered by Real-time Pipeline */}
       <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-        {displayedSymbols.map((sym) => (
-          <MarketTicker
-            key={sym}
-            symbol={sym}
-            initialData={liveMarketMap[sym]}
-            isSelected={selectedSymbol === sym}
-            onSelect={(s) => setSelectedSymbol(s)}
-          />
-        ))}
+        {displayedSymbols.map((sym) => {
+          const isCustom = userCustomSymbols.includes(sym);
+          return (
+            <div key={sym} className="relative group">
+              <MarketTicker
+                symbol={sym}
+                initialData={liveMarketMap[sym]}
+                isSelected={selectedSymbol === sym}
+                onSelect={(s) => setSelectedSymbol(s)}
+              />
+              {isCustom && (
+                <button
+                  onClick={(e) => handleRemoveCustomSymbol(sym, e)}
+                  className="absolute top-2 right-2 p-1 rounded-md bg-slate-800/80 hover:bg-rose-500/20 text-slate-500 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                  title="Remove from Dashboard"
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       {/* ── 3-COLUMN INSTITUTIONAL TRADING TERMINAL ────────── */}

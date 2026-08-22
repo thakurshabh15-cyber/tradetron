@@ -32,8 +32,34 @@ async def get_single_quote(symbol: str):
     """Fetch real-time normalized quote for a specific ticker symbol."""
     quote = unified_market_manager.get_quote(symbol)
     if not quote:
+        # If not cached yet, subscribe it and return base instrument price
+        from app.market_data.instruments import instrument_master
+        inst = instrument_master.get_instrument(symbol)
+        if inst:
+            await unified_market_manager.subscribe([symbol])
+            return {
+                "symbol": inst.symbol,
+                "price": inst.base_price,
+                "open": inst.base_price,
+                "high": round(inst.base_price * 1.005, 2),
+                "low": round(inst.base_price * 0.995, 2),
+                "close": inst.base_price,
+                "change": 0.0,
+                "change_pct": 0.0,
+                "volume": 10000,
+                "asset_class": inst.segment,
+            }
         raise HTTPException(status_code=404, detail=f"No real-time market data available for {symbol}")
     return quote
+
+
+@router.post("/market-data/subscribe")
+async def subscribe_symbols(body: dict):
+    """Dynamically subscribe symbols to real-time market feed."""
+    symbols = body.get("symbols", [])
+    if symbols:
+        await unified_market_manager.subscribe(symbols)
+    return {"status": "SUBSCRIBED", "symbols": symbols}
 
 
 @router.get("/market-data/candles")
