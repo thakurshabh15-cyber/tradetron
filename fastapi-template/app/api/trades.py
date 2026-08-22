@@ -207,6 +207,7 @@ async def close_position(
 
 
 @router.post("/order")
+@router.post("/place")
 async def place_manual_order(
     req: ManualOrderRequest,
     user: UserRecord = Depends(get_current_user),
