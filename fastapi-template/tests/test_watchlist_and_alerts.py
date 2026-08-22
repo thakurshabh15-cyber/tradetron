@@ -77,3 +77,35 @@ def test_price_alerts_crud():
     del_res = client.delete(f"/api/watchlist/alerts/{alert['id']}")
     assert del_res.status_code == 200
     assert del_res.json()["deleted_id"] == alert["id"]
+
+
+def test_universal_instrument_search():
+    """Verify searching across NSE Equities, F&O Options, and MCX Commodities."""
+    # 1. Search NSE Equity
+    eq_res = client.get("/api/market-data/instruments/search?q=RELIANCE")
+    assert eq_res.status_code == 200
+    eq_data = eq_res.json()
+    assert eq_data["count"] >= 1
+    rel_item = next(i for i in eq_data["instruments"] if i["symbol"] == "RELIANCE")
+    assert rel_item["exchange"] == "NSE"
+    assert rel_item["segment"] == "EQUITY"
+    assert rel_item["base_price"] > 2000.0
+
+    # 2. Search F&O Option Strike
+    fno_res = client.get("/api/market-data/instruments/search?q=24800&segment=FNO")
+    assert fno_res.status_code == 200
+    fno_data = fno_res.json()
+    assert fno_data["count"] >= 1
+    assert any("24800" in i["symbol"] for i in fno_data["instruments"])
+
+    # 3. Search MCX Commodity
+    mcx_res = client.get("/api/market-data/instruments/search?q=GOLD&segment=COMMODITY")
+    assert mcx_res.status_code == 200
+    mcx_data = mcx_res.json()
+    assert mcx_data["count"] >= 1
+    assert any("GOLD" in i["symbol"] for i in mcx_data["instruments"])
+
+    # 4. Search Categories
+    cat_res = client.get("/api/market-data/instruments/categories")
+    assert cat_res.status_code == 200
+    assert len(cat_res.json()) >= 5

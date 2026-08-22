@@ -88,11 +88,14 @@ class IndianEquityMarketDataProvider(BaseMarketDataProvider):
         logger.info("Indian Equity Market Data Provider stopped")
 
     async def subscribe(self, symbols: list[str]) -> None:
+        from app.market_data.instruments import instrument_master
+
         for s in symbols:
             clean = s.upper().strip()
             self._subscribers.add(clean)
             if clean not in self._open_prices:
-                seed = _INDIAN_SEED_PRICES.get(clean, 1000.0)
+                inst = instrument_master.get_instrument(clean)
+                seed = inst.base_price if inst else _INDIAN_SEED_PRICES.get(clean, 1000.0)
                 self._open_prices[clean] = seed
 
     async def unsubscribe(self, symbols: list[str]) -> None:

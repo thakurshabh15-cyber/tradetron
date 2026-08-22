@@ -75,3 +75,43 @@ async def risk_status():
         return engine.risk_manager.get_status()
 
     return {}
+
+
+# ── Full Instrument Master Search (NSE, BSE, NFO, MCX, Crypto, Forex) ─────────
+from app.market_data.instruments import instrument_master
+
+
+@router.get("/market-data/instruments/search")
+async def search_instruments(
+    q: str = Query("", description="Search term e.g. RELIANCE, NIFTY 24800, CRUDEOIL, GOLD, BTC"),
+    exchange: Optional[str] = Query("ALL", description="Filter by exchange: ALL, NSE, BSE, NFO, MCX, BINANCE, CDS"),
+    segment: Optional[str] = Query("ALL", description="Filter by segment: ALL, EQUITY, FNO, COMMODITY, FOREX, CRYPTO"),
+    limit: int = Query(20, ge=1, le=100, description="Max results count"),
+):
+    """Search and discover real NSE/BSE Equities, F&O contracts, and MCX commodities from official master."""
+    results = instrument_master.search(
+        query=q,
+        exchange=exchange if exchange != "ALL" else None,
+        segment=segment if segment != "ALL" else None,
+        limit=limit,
+    )
+    return {
+        "query": q,
+        "exchange": exchange,
+        "segment": segment,
+        "count": len(results),
+        "instruments": results,
+    }
+
+
+@router.get("/market-data/instruments/categories")
+async def get_instrument_categories():
+    """List available market asset classes and segments."""
+    return [
+        {"id": "ALL", "label": "All Markets", "count": "10,000+"},
+        {"id": "EQUITY", "label": "NSE/BSE Equities", "count": "2,000+"},
+        {"id": "FNO", "label": "F&O Derivatives (Nifty / BankNifty / Stock Options)", "count": "5,000+"},
+        {"id": "COMMODITY", "label": "MCX Commodities (Gold, Silver, Crude)", "count": "500+"},
+        {"id": "FOREX", "label": "Forex & Currency (USD/INR)", "count": "20+"},
+        {"id": "CRYPTO", "label": "Crypto Spot (BTC, ETH, SOL)", "count": "100+"},
+    ]
