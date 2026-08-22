@@ -30,22 +30,38 @@ _COMPLETED_TASKS: set[str] = {"marketplace_setup", "broker_setup"}
 @router.get("/summary")
 async def get_dashboard_summary(db: AsyncSession = Depends(get_db)):
     """Unified dashboard summary including weekReturn, monthReturn, topStrategies, and pendingTasks."""
-    # 1. Fetch executed trades for ROI & PnL calculation
+    from datetime import timedelta
+
     trades_res = await db.execute(select(TradeRecord).order_by(TradeRecord.executed_at.desc()))
     all_trades = trades_res.scalars().all()
 
     total_realized_pnl = sum(t.pnl for t in all_trades if t.pnl is not None)
     winning_trades = sum(1 for t in all_trades if t.pnl and t.pnl > 0)
     total_trades_count = len(all_trades)
-    win_rate = round((winning_trades / total_trades_count * 100), 1) if total_trades_count > 0 else 72.5
+    win_rate = round((winning_trades / total_trades_count * 100), 1) if total_trades_count > 0 else 0.0
 
-    # Calculate returns (using capital base 100,000 for realistic percentage display)
+    # Real time-windowed returns computed strictly from executed trades
     base_capital = 100_000.0
-    week_pnl = total_realized_pnl * 0.45 if total_realized_pnl != 0 else 3420.0
-    month_pnl = total_realized_pnl if total_realized_pnl != 0 else 11850.0
+    now = datetime.now(timezone.utc)
+    week_ago = now - timedelta(days=7)
+    month_ago = now - timedelta(days=30)
 
-    week_return = round((week_pnl / base_capital) * 100, 2)
-    month_return = round((month_pnl / base_capital) * 100, 2)
+    def _get_tz_dt(dt):
+        if not dt:
+            return now
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+    week_pnl = sum(
+        t.pnl for t in all_trades
+        if t.pnl is not None and _get_tz_dt(t.executed_at) >= week_ago
+    )
+    month_pnl = sum(
+        t.pnl for t in all_trades
+        if t.pnl is not None and _get_tz_dt(t.executed_at) >= month_ago
+    )
+
+    week_return = round((week_pnl / base_capital) * 100, 2) if base_capital else 0.0
+    month_return = round((month_pnl / base_capital) * 100, 2) if base_capital else 0.0
 
     # 2. Fetch or mock top strategies
     strat_res = await db.execute(select(StrategyRecord))

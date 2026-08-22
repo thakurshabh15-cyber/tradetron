@@ -13,6 +13,7 @@ import BrokerConnectModal from "./components/BrokerConnectModal";
 import LiveOptInModal from "./components/LiveOptInModal";
 import KYCModal from "./components/KYCModal";
 import ErrorBoundary from "./components/ErrorBoundary";
+import { MarketProvider } from "./context/MarketContext";
 import { authFetch } from "./services/apiClient";
 
 import { ShieldAlert, ShieldCheck, Power, Zap, Radio, Link as LinkIcon, AlertCircle, FileCheck } from "lucide-react";
@@ -94,158 +95,157 @@ export default function App() {
   };
 
   return (
-    <BrowserRouter>
-      <div className="flex min-h-screen bg-surface-950 text-slate-300 selection:bg-accent-500/20 selection:text-accent-400">
-        <Sidebar onOpenKYC={() => setIsKYCModalOpen(true)} kycStatus={kycStatus} />
-        <main className="flex-1 lg:ml-64 pt-16 pb-20 lg:pt-6 lg:pb-8 px-4 sm:px-6 lg:px-8 space-y-6 overflow-x-hidden">
-          {/* Top Execution Control & Mode Banner */}
-          <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 p-3 rounded-xl bg-slate-900/90 border border-slate-800/80 shadow-lg">
-            {/* Mode Indicator & Regulatory Disclaimer */}
-            <div className="flex items-center gap-3">
-              <div
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all ${
-                  isLiveActive
-                    ? "bg-rose-500/15 border-rose-500/40 text-rose-400 shadow-sm shadow-rose-500/20 animate-pulse"
-                    : "bg-emerald-500/15 border-emerald-500/40 text-emerald-300 shadow-sm shadow-emerald-500/10"
-                }`}
-              >
-                {isLiveActive ? <Radio size={14} className="text-rose-400" /> : <Zap size={14} className="text-emerald-400" />}
-                <span>{isLiveActive ? "LIVE BROKER EXECUTION" : "PAPER TRADING (SIMULATION)"}</span>
-              </div>
-
-              <span className="hidden xl:inline-block text-[11px] text-slate-400">
-                {isLiveActive
-                  ? `Real capital active across ${connectedBrokers.map((b) => b.broker_name).join(", ")}.`
-                  : connectedBrokers.length === 0
-                  ? "Virtual paper balance ₹10,00,000 active. No live broker connected (Simulation Mode Only)."
-                  : "Virtual paper balance ₹10,00,000 active. Real funds are protected."}
-              </span>
-            </div>
-
-            {/* Mode Switcher, KYC Gate, Broker Link, and Panic Button */}
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setIsKYCModalOpen(true)}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-all ${
-                  kycStatus === "VERIFIED"
-                    ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
-                    : kycStatus === "PENDING"
-                    ? "bg-amber-500/10 border-amber-500/30 text-amber-400"
-                    : "bg-violet-600/20 border-violet-500/40 text-violet-300 hover:bg-violet-600/30"
-                }`}
-                title="SEBI KYC Status"
-              >
-                <ShieldCheck size={13} />
-                <span>
-                  {kycStatus === "VERIFIED"
-                    ? "KYC Verified"
-                    : kycStatus === "PENDING"
-                    ? "KYC Pending"
-                    : "Verify KYC"}
-                </span>
-              </button>
-
-              <div className="bg-slate-950 p-1 rounded-lg border border-slate-800 flex text-[11px] font-semibold">
-                <button
-                  onClick={() => handleModeSwitch("PAPER")}
-                  className={`px-2.5 py-1 rounded-md transition-all ${
-                    !isLiveActive
-                      ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-                      : "text-slate-400 hover:text-white"
-                  }`}
-                >
-                  Paper
-                </button>
-                <button
-                  onClick={() => handleModeSwitch("LIVE")}
-                  className={`px-2.5 py-1 rounded-md transition-all ${
+    <MarketProvider>
+      <BrowserRouter>
+        <div className="flex min-h-screen bg-surface-950 text-slate-300 selection:bg-accent-500/20 selection:text-accent-400">
+          <Sidebar onOpenKYC={() => setIsKYCModalOpen(true)} kycStatus={kycStatus} />
+          <main className="flex-1 lg:ml-64 pt-16 pb-20 lg:pt-6 lg:pb-8 px-4 sm:px-6 lg:px-8 space-y-6 overflow-x-hidden">
+            {/* Top Execution Control & Mode Banner */}
+            <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 p-3 rounded-xl bg-slate-900/90 border border-slate-800/80 shadow-lg">
+              {/* Mode Indicator & Regulatory Disclaimer */}
+              <div className="flex items-center gap-3">
+                <div
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all ${
                     isLiveActive
-                      ? "bg-rose-500/20 text-rose-300 border border-rose-500/30"
-                      : "text-slate-400 hover:text-white"
+                      ? "bg-rose-500/15 border-rose-500/40 text-rose-400 shadow-sm shadow-rose-500/20 animate-pulse"
+                      : "bg-emerald-500/15 border-emerald-500/40 text-emerald-300 shadow-sm shadow-emerald-500/10"
                   }`}
                 >
-                  Live Broker
-                </button>
+                  {isLiveActive ? <Radio size={14} className="text-rose-400" /> : <Zap size={14} className="text-emerald-400" />}
+                  <span>{isLiveActive ? "LIVE BROKER EXECUTION" : "PAPER TRADING (SIMULATION)"}</span>
+                </div>
+
+                <span className="hidden xl:inline-block text-[11px] text-slate-400">
+                  {isLiveActive
+                    ? `Real capital active across ${connectedBrokers.map((b) => b.broker_name).join(", ")}.`
+                    : connectedBrokers.length === 0
+                    ? "Virtual paper balance ₹10,00,000 active. No live broker connected (Simulation Mode Only)."
+                    : "Virtual paper balance ₹10,00,000 active. Real funds are protected."}
+                </span>
               </div>
 
-              <button
-                onClick={handleOpenBrokerModal}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-750 border border-slate-700 text-white text-xs font-semibold transition-all"
-              >
-                <LinkIcon size={13} className={connectedBrokers.length > 0 ? "text-emerald-400" : "text-cyan-400"} />
-                <span className="hidden sm:inline">
-                  {connectedBrokers.length > 0 ? `${connectedBrokers.length} Broker Linked` : "Connect Broker"}
-                </span>
-              </button>
+              {/* Mode Switcher, KYC Gate, Broker Link, and Panic Button */}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setIsKYCModalOpen(true)}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-all ${
+                    kycStatus === "VERIFIED"
+                      ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+                      : kycStatus === "PENDING"
+                      ? "bg-amber-500/10 border-amber-500/30 text-amber-400"
+                      : "bg-violet-600/20 border-violet-500/40 text-violet-300 hover:bg-violet-600/30"
+                  }`}
+                >
+                  <FileCheck size={13} />
+                  <span>
+                    {kycStatus === "VERIFIED" ? "KYC Verified" : kycStatus === "PENDING" ? "KYC Under Review" : "Verify KYC"}
+                  </span>
+                </button>
 
-              <button
-                onClick={() => setIsKillSwitchOpen(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white text-xs font-bold transition-all shadow-md shadow-red-600/30"
-                title="Emergency Pause All Strategies"
-              >
-                <Power size={13} />
-                <span>KILL SWITCH</span>
-              </button>
+                <div className="flex rounded-lg bg-surface-950 p-0.5 border border-white/[0.06]">
+                  <button
+                    onClick={() => handleModeSwitch("PAPER")}
+                    className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
+                      !isLiveActive
+                        ? "bg-emerald-500 text-slate-950 shadow-sm"
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    Paper Mode
+                  </button>
+                  <button
+                    onClick={() => handleModeSwitch("LIVE")}
+                    className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
+                      isLiveActive
+                        ? "bg-rose-500 text-white shadow-sm shadow-rose-500/30"
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    Live Mode
+                  </button>
+                </div>
+
+                <button
+                  onClick={handleOpenBrokerModal}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-700 bg-surface-800 hover:bg-surface-750 text-white text-xs font-medium transition-all"
+                >
+                  <LinkIcon size={13} className="text-cyan-400" />
+                  <span>
+                    {connectedBrokers.length > 0
+                      ? `${connectedBrokers.length} Broker Linked`
+                      : "Link Broker"}
+                  </span>
+                </button>
+
+                <button
+                  onClick={() => setIsKillSwitchOpen(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white text-xs font-bold transition-all shadow-md shadow-red-600/30"
+                  title="Emergency Pause All Strategies"
+                >
+                  <Power size={13} />
+                  <span>KILL SWITCH</span>
+                </button>
+              </div>
             </div>
-          </div>
 
-          {brokerWarning && (
-            <div className="flex items-center gap-2 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs animate-fade-in">
-              <AlertCircle size={15} className="shrink-0 text-amber-400" />
-              <span>{brokerWarning}</span>
-            </div>
-          )}
+            {brokerWarning && (
+              <div className="flex items-center gap-2 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs animate-fade-in">
+                <AlertCircle size={15} className="shrink-0 text-amber-400" />
+                <span>{brokerWarning}</span>
+              </div>
+            )}
 
-          <ErrorBoundary>
-            <Routes>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/marketplace" element={<Marketplace />} />
-              <Route path="/watchlist" element={<Watchlist />} />
-              <Route path="/strategies" element={<Strategies />} />
-              <Route path="/history" element={<TradeHistory />} />
-              <Route path="/settings" element={<Settings />} />
-              <Route path="/admin" element={<Admin />} />
-            </Routes>
-          </ErrorBoundary>
-        </main>
+            <ErrorBoundary>
+              <Routes>
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/marketplace" element={<Marketplace />} />
+                <Route path="/watchlist" element={<Watchlist />} />
+                <Route path="/strategies" element={<Strategies />} />
+                <Route path="/history" element={<TradeHistory />} />
+                <Route path="/settings" element={<Settings />} />
+                <Route path="/admin" element={<Admin />} />
+              </Routes>
+            </ErrorBoundary>
+          </main>
 
-        {/* Global Modals */}
-        <KillSwitchModal
-          isOpen={isKillSwitchOpen}
-          onClose={() => setIsKillSwitchOpen(false)}
-        />
-        <BrokerConnectModal
-          isOpen={isBrokerModalOpen}
-          onClose={() => setIsBrokerModalOpen(false)}
-          onLinkedSuccess={() => {
-            fetchBrokers();
-            setBrokerWarning(null);
-          }}
-        />
-        <KYCModal
-          isOpen={isKYCModalOpen}
-          onClose={() => setIsKYCModalOpen(false)}
-          onKYCUpdated={() => {
-            fetchKYCStatus();
-            setBrokerWarning(null);
-          }}
-        />
-        <LiveOptInModal
-          isOpen={isLiveOptInOpen}
-          onClose={() => setIsLiveOptInOpen(false)}
-          onConfirm={() => {
-            if (connectedBrokers.length > 0) {
-              setExecutionMode("LIVE");
-            } else {
-              setExecutionMode("PAPER");
+          {/* Global Modals */}
+          <KillSwitchModal
+            isOpen={isKillSwitchOpen}
+            onClose={() => setIsKillSwitchOpen(false)}
+          />
+          <BrokerConnectModal
+            isOpen={isBrokerModalOpen}
+            onClose={() => setIsBrokerModalOpen(false)}
+            onLinkedSuccess={() => {
+              fetchBrokers();
+              setBrokerWarning(null);
+            }}
+          />
+          <KYCModal
+            isOpen={isKYCModalOpen}
+            onClose={() => setIsKYCModalOpen(false)}
+            onKYCUpdated={() => {
+              fetchKYCStatus();
+              setBrokerWarning(null);
+            }}
+          />
+          <LiveOptInModal
+            isOpen={isLiveOptInOpen}
+            onClose={() => setIsLiveOptInOpen(false)}
+            onConfirm={() => {
+              if (connectedBrokers.length > 0) {
+                setExecutionMode("LIVE");
+              } else {
+                setExecutionMode("PAPER");
+                setIsBrokerModalOpen(true);
+              }
+            }}
+            onConnectBroker={() => {
               setIsBrokerModalOpen(true);
-            }
-          }}
-          onConnectBroker={() => {
-            setIsBrokerModalOpen(true);
-          }}
-        />
-      </div>
-    </BrowserRouter>
+            }}
+          />
+        </div>
+      </BrowserRouter>
+    </MarketProvider>
   );
 }

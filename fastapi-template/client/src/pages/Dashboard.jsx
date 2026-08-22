@@ -8,7 +8,7 @@ import FastOrderPanel from "../components/FastOrderPanel";
 import ErrorBoundary from "../components/ErrorBoundary";
 import { SkeletonCard } from "../components/SkeletonLoaders";
 import { useApi } from "../hooks/useApi";
-import { useWebSocket } from "../hooks/useWebSocket";
+import { useMarket } from "../context/MarketContext";
 import {
   RefreshCw,
   TrendingUp,
@@ -44,42 +44,15 @@ const SYMBOL_MAP = {
 export default function Dashboard() {
   const [activeAssetTab, setActiveAssetTab] = useState("ALL");
   const [selectedSymbol, setSelectedSymbol] = useState("NIFTY50");
-  const [liveTicksCount, setLiveTicksCount] = useState(0);
-  const [liveMarketMap, setLiveMarketMap] = useState({});
-  const [lastTickTime, setLastTickTime] = useState(Date.now());
+
+  // Central Market Data Feed (Single WebSocket Session Feed)
+  const { quotes: liveMarketMap, isConnected: isWsConnected, tickCount: liveTicksCount, lastUpdated: lastTickTime } = useMarket();
 
   // Base API Data Fetchers
   const { data: initialMarketData, loading: marketLoading, refetch: refetchMarket } = useApi("/api/market-data");
   const { data: riskData, loading: riskLoading, refetch: refetchRisk } = useApi("/api/risk-status");
   const { data: initialTrades, refetch: refetchTrades } = useApi("/api/trades?limit=20");
   const { data: summaryData, loading: summaryLoading, refetch: refetchSummary } = useApi("/api/dashboard/summary");
-
-  // Populate initial market data into live map
-  useEffect(() => {
-    if (initialMarketData?.market) {
-      const map = {};
-      for (const item of initialMarketData.market) {
-        map[item.symbol] = item;
-      }
-      setLiveMarketMap((prev) => ({ ...map, ...prev }));
-    }
-  }, [initialMarketData]);
-
-  // ── Central Real-time WebSocket Market Stream ──────────────────────────────
-  const handleMarketStreamMessage = useCallback((tick) => {
-    if (tick && tick.symbol) {
-      setLiveMarketMap((prev) => ({
-        ...prev,
-        [tick.symbol]: tick,
-      }));
-      setLiveTicksCount((c) => c + 1);
-      setLastTickTime(Date.now());
-    }
-  }, []);
-
-  const { isConnected: isWsConnected } = useWebSocket("/ws/market/stream", {
-    onMessage: handleMarketStreamMessage,
-  });
 
   const refreshAll = () => {
     refetchMarket();

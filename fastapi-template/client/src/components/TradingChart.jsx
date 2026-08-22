@@ -8,8 +8,8 @@ import {
   CrosshairMode,
   LineStyle,
 } from "lightweight-charts";
-import { BarChart2, TrendingUp, TrendingDown, Layers, Sliders, Activity, Clock } from "lucide-react";
-import { useWebSocket } from "../hooks/useWebSocket";
+import { BarChart2 } from "lucide-react";
+import { useMarket } from "../context/MarketContext";
 import { API_BASE } from "../config";
 
 const TIMEFRAMES = ["1m", "5m", "15m", "1h", "1D"];
@@ -28,8 +28,9 @@ export default function TradingChart({ symbol = "NIFTY50", currentPrice = 24850.
   const [chartData, setChartData] = useState({ candles: [], volumes: [], smaData: [] });
   const [loading, setLoading] = useState(true);
 
-  const { lastMessage } = useWebSocket(`/ws/market/${symbol}`);
-  const livePrice = lastMessage?.price ?? currentPrice;
+  const { getQuote } = useMarket();
+  const liveQuote = getQuote(symbol);
+  const livePrice = liveQuote?.price ?? currentPrice;
 
   // Fetch authentic historical candles from backend API
   useEffect(() => {

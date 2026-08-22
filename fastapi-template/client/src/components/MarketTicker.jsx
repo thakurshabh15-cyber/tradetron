@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { useWebSocket } from "../hooks/useWebSocket";
+import { useMarket } from "../context/MarketContext";
 import { TrendingUp, TrendingDown, Shield, Activity } from "lucide-react";
 
 export default function MarketTicker({ symbol, initialData, isSelected, onSelect }) {
-  const { lastMessage } = useWebSocket(`/ws/market/${symbol}`);
-  const data = lastMessage || initialData || { price: 0, change: 0, change_pct: 0 };
+  const { getQuote } = useMarket();
+  const liveQuote = getQuote(symbol);
+  const data = liveQuote || initialData || { price: 0, change: 0, change_pct: 0 };
 
   const [priceFlash, setPriceFlash] = useState(null); // 'UP' | 'DOWN' | null
   const prevPriceRef = useRef(data.price);

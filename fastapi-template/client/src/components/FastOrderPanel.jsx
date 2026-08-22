@@ -1,17 +1,22 @@
 import { useState } from "react";
+import { useMarket } from "../context/MarketContext";
 import { Zap, ShieldCheck, AlertCircle, ArrowUpRight, ArrowDownRight, CheckCircle2 } from "lucide-react";
 import { API_BASE } from "../config";
 
 export default function FastOrderPanel({ symbol = "NIFTY50", currentPrice = 24850.0, onOrderPlaced }) {
+  const { getQuote } = useMarket();
+  const liveQuote = getQuote(symbol);
+  const effectiveLivePrice = liveQuote?.price ?? currentPrice;
+
   const [side, setSide] = useState("BUY");
   const [quantity, setQuantity] = useState(50);
   const [orderType, setOrderType] = useState("MARKET");
-  const [customPrice, setCustomPrice] = useState(currentPrice);
+  const [customPrice, setCustomPrice] = useState(effectiveLivePrice);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [fillResult, setFillResult] = useState(null);
 
-  const price = orderType === "MARKET" ? currentPrice : Number(customPrice);
+  const price = orderType === "MARKET" ? effectiveLivePrice : Number(customPrice);
   const totalValue = quantity * price;
   const marginRequired = totalValue * 0.2; // 5x leverage approx 20% margin for intraday
 

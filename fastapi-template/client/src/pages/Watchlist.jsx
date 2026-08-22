@@ -17,6 +17,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { useApi } from "../hooks/useApi";
+import { useMarket } from "../context/MarketContext";
 import MarketTicker from "../components/MarketTicker";
 import FastOrderPanel from "../components/FastOrderPanel";
 import { alertService } from "../services/alertService";
@@ -32,6 +33,7 @@ const SEGMENT_TABS = [
 ];
 
 export default function Watchlist() {
+  const { quotes, getQuote, isConnected: isMarketConnected } = useMarket();
   const { data: watchlistData, refetch: refetchWatchlist } = useApi("/api/watchlist");
   const { data: marketData, refetch: refetchMarket } = useApi("/api/market-data");
 
@@ -168,10 +170,13 @@ export default function Watchlist() {
     }
   };
 
-  const marketMap = (marketData?.market || []).reduce((acc, curr) => {
-    acc[curr.symbol] = curr;
-    return acc;
-  }, {});
+  const marketMap = {
+    ...(marketData?.market || []).reduce((acc, curr) => {
+      acc[curr.symbol] = curr;
+      return acc;
+    }, {}),
+    ...quotes,
+  };
 
   const symbols = (watchlistData || []).map((w) => w.symbol);
 
