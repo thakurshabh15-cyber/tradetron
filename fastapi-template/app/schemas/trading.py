@@ -51,13 +51,44 @@ class Operator(str, Enum):
 # ── Strategy schemas ─────────────────────────────────────────────────────────
 
 
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
 class Condition(BaseModel):
     """A single indicator-based condition in a strategy rule."""
 
-    indicator: Indicator
-    operator: Operator
-    value: Decimal = Field(..., ge=0, description="Comparison threshold")
+    indicator: Indicator = Field(default=Indicator.PRICE)
+    operator: Operator = Field(default=Operator.GT)
+    value: Decimal = Field(default=Decimal("0.0"), ge=0, description="Comparison threshold")
     period: int = Field(default=14, ge=1, le=1000, description="Lookback period")
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_condition(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            d = dict(data)
+            if "value" not in d and "threshold" in d:
+                d["value"] = d["threshold"]
+            if "value" not in d or d["value"] is None:
+                d["value"] = 0.0
+            if "indicator" in d:
+                ind_str = str(d["indicator"]).upper()
+                if "SMA" in ind_str:
+                    d["indicator"] = "SMA"
+                elif "EMA" in ind_str:
+                    d["indicator"] = "EMA"
+                elif "RSI" in ind_str:
+                    d["indicator"] = "RSI"
+                elif "PRICE" in ind_str:
+                    d["indicator"] = "PRICE"
+                else:
+                    d["indicator"] = "PRICE"
+            if "operator" in d:
+                op_str = str(d["operator"]).lower()
+                op_map = {">": "gt", "<": "lt", ">=": "gte", "<=": "lte", "=": "eq", "==": "eq"}
+                d["operator"] = op_map.get(op_str, op_str)
+            return d
+        return data
 
 
 class Action(BaseModel):

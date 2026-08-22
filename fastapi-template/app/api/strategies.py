@@ -47,41 +47,117 @@ KillSwitchRequest.model_rebuild()
 
 
 def _row_to_read(row: StrategyRecord) -> dict:
-    """Convert a DB row to a StrategyRead-compatible dict with normalization."""
-    raw_conditions = json.loads(row.conditions_json) if row.conditions_json else []
+    """Convert a DB row to a StrategyRead-compatible dict with bulletproof normalization."""
+    raw_conditions = []
+    if row.conditions_json:
+        try:
+            raw_conditions = json.loads(row.conditions_json)
+        except Exception:
+            raw_conditions = []
+
     op_map = {">": "gt", "<": "lt", ">=": "gte", "<=": "lte", "=": "eq", "==": "eq"}
     norm_conditions = []
     for c in raw_conditions:
         if isinstance(c, dict):
             c_dict = dict(c)
+            # Normalize operator
             op = str(c_dict.get("operator", "gt")).lower()
-            c_dict["operator"] = op_map.get(op, op)
-            norm_conditions.append(c_dict)
+            c_dict["operator"] = op_map.get(op, op if op in ("lt", "lte", "gt", "gte", "eq", "cross_above", "cross_below") else "gt")
 
-    raw_action = json.loads(row.action_json) if row.action_json else {}
+            # Normalize indicator
+            ind = str(c_dict.get("indicator", "PRICE")).upper().strip()
+            if "SMA" in ind:
+                ind = "SMA"
+            elif "EMA" in ind:
+                ind = "EMA"
+            elif "RSI" in ind:
+                ind = "RSI"
+            elif "PRICE" in ind:
+                ind = "PRICE"
+            else:
+                ind = "PRICE"
+            c_dict["indicator"] = ind
+
+            # Map threshold -> value
+            val = c_dict.get("value")
+            if val is None:
+                val = c_dict.get("threshold", 0.0)
+            try:
+                c_dict["value"] = float(val)
+            except Exception:
+                c_dict["value"] = 0.0
+
+            # Period
+            try:
+                c_dict["period"] = int(c_dict.get("period", 14))
+            except Exception:
+                c_dict["period"] = 14
+
+            norm_conditions.append({
+                "indicator": c_dict["indicator"],
+                "operator": c_dict["operator"],
+                "value": c_dict["value"],
+                "period": c_dict["period"],
+            })
+
+    if not norm_conditions:
+        norm_conditions = [{
+            "indicator": "PRICE",
+            "operator": "gt",
+            "value": 0.0,
+            "period": 14,
+        }]
+
+    raw_action = {}
+    if row.action_json:
+        try:
+            raw_action = json.loads(row.action_json)
+        except Exception:
+            raw_action = {}
+
     norm_action = {}
     if isinstance(raw_action, dict):
         norm_action = dict(raw_action)
         if "action" in norm_action and "side" not in norm_action:
             norm_action["side"] = norm_action.pop("action")
-        if "side" not in norm_action:
+        if "side" not in norm_action or str(norm_action["side"]).upper() not in ("BUY", "SELL"):
             norm_action["side"] = "BUY"
-        if "quantity" not in norm_action:
+        else:
+            norm_action["side"] = str(norm_action["side"]).upper()
+        try:
+            norm_action["quantity"] = max(1, int(norm_action.get("quantity", 10)))
+        except Exception:
             norm_action["quantity"] = 10
-        if "order_type" not in norm_action:
+        if "order_type" not in norm_action or str(norm_action["order_type"]).upper() not in ("MARKET", "LIMIT"):
             norm_action["order_type"] = "MARKET"
+        else:
+            norm_action["order_type"] = str(norm_action["order_type"]).upper()
+    else:
+        norm_action = {"side": "BUY", "quantity": 10, "order_type": "MARKET"}
 
+    symbols = []
+    if row.symbols_json:
+        try:
+            symbols = json.loads(row.symbols_json)
+            if not isinstance(symbols, list):
+                symbols = [str(symbols)]
+        except Exception:
+            symbols = ["NIFTY50"]
+    if not symbols:
+        symbols = ["NIFTY50"]
+
+    from datetime import datetime, timezone
     return {
-        "id": row.id,
-        "name": row.name,
-        "symbols": json.loads(row.symbols_json) if row.symbols_json else [],
+        "id": str(row.id),
+        "name": row.name or "Strategy",
+        "symbols": symbols,
         "conditions": norm_conditions,
         "action": norm_action,
-        "enabled": row.enabled,
+        "enabled": bool(row.enabled),
         "execution_mode": getattr(row, "execution_mode", "PAPER") or "PAPER",
         "broker_account_id": getattr(row, "broker_account_id", None),
-        "capital_allocated": getattr(row, "capital_allocated", 10000.0) or 10000.0,
-        "created_at": row.created_at,
+        "capital_allocated": float(getattr(row, "capital_allocated", 10000.0) or 10000.0),
+        "created_at": row.created_at or datetime.now(timezone.utc),
     }
 
 

@@ -258,9 +258,9 @@ async def init_db() -> None:
                         name="Golden Cross SMA Trend 50/200",
                         symbols_json=json.dumps(["AAPL", "NVDA", "MSFT"]),
                         conditions_json=json.dumps([
-                            {"indicator": "sma_fast", "operator": "gt", "threshold": 0.0}
+                            {"indicator": "SMA", "operator": "gt", "value": 0.0, "period": 14}
                         ]),
-                        action_json=json.dumps({"side": "BUY", "quantity": 10}),
+                        action_json=json.dumps({"side": "BUY", "quantity": 10, "order_type": "MARKET"}),
                         enabled=True,
                         execution_mode="PAPER",
                         capital_allocated=15000.0,
@@ -269,9 +269,9 @@ async def init_db() -> None:
                         name="RSI 14 Oversold Mean Reversion",
                         symbols_json=json.dumps(["GOOGL", "AMZN", "AAPL"]),
                         conditions_json=json.dumps([
-                            {"indicator": "rsi", "operator": "lt", "threshold": 30.0}
+                            {"indicator": "RSI", "operator": "lt", "value": 30.0, "period": 14}
                         ]),
-                        action_json=json.dumps({"side": "BUY", "quantity": 5}),
+                        action_json=json.dumps({"side": "BUY", "quantity": 5, "order_type": "MARKET"}),
                         enabled=True,
                         execution_mode="PAPER",
                         capital_allocated=10000.0,
@@ -280,9 +280,9 @@ async def init_db() -> None:
                         name="Bollinger Band Volatility Breakout",
                         symbols_json=json.dumps(["NVDA", "MSFT"]),
                         conditions_json=json.dumps([
-                            {"indicator": "price", "operator": "gt", "threshold": 100.0}
+                            {"indicator": "PRICE", "operator": "gt", "value": 100.0, "period": 14}
                         ]),
-                        action_json=json.dumps({"side": "BUY", "quantity": 15}),
+                        action_json=json.dumps({"side": "BUY", "quantity": 15, "order_type": "MARKET"}),
                         enabled=True,
                         execution_mode="PAPER",
                         capital_allocated=20000.0,
@@ -290,7 +290,7 @@ async def init_db() -> None:
                 ]
                 session.add_all(default_strategies)
                 await session.commit()
-                logger.info("Default quantitative strategies seeded (Golden Cross, RSI Mean Reversion, BB Breakout)")
+                logger.info("Default trading strategies seeded")
 
             # Seed Default Admin User if not present
             admin_stmt = select(UserRecord).where(UserRecord.email == "admin@tradetron.io")
