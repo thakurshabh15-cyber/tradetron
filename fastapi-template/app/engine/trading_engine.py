@@ -263,28 +263,31 @@ class TradingEngine:
 
     async def _load_strategies(self) -> None:
         """Load active strategies from the database into memory."""
-        async with SessionLocal() as session:
-            from sqlalchemy import select
+        try:
+            async with SessionLocal() as session:
+                from sqlalchemy import select
 
-            result = await session.execute(
-                select(StrategyRecord).where(StrategyRecord.enabled == True)  # noqa: E712
-            )
-            rows = result.scalars().all()
+                result = await session.execute(
+                    select(StrategyRecord).where(StrategyRecord.enabled == True)  # noqa: E712
+                )
+                rows = result.scalars().all()
 
-            self._strategies.clear()
-            for row in rows:
-                self._strategies[row.id] = {
-                    "id": row.id,
-                    "user_id": row.user_id,
-                    "name": row.name,
-                    "symbols": json.loads(row.symbols_json),
-                    "conditions": json.loads(row.conditions_json),
-                    "action": json.loads(row.action_json),
-                    "enabled": row.enabled,
-                    "execution_mode": getattr(row, "execution_mode", "PAPER") or "PAPER",
-                    "broker_account_id": getattr(row, "broker_account_id", None),
-                    "capital_allocated": getattr(row, "capital_allocated", 10000.0),
-                }
+                self._strategies.clear()
+                for row in rows:
+                    self._strategies[row.id] = {
+                        "id": row.id,
+                        "user_id": row.user_id,
+                        "name": row.name,
+                        "symbols": json.loads(row.symbols_json),
+                        "conditions": json.loads(row.conditions_json),
+                        "action": json.loads(row.action_json),
+                        "enabled": row.enabled,
+                        "execution_mode": getattr(row, "execution_mode", "PAPER") or "PAPER",
+                        "broker_account_id": getattr(row, "broker_account_id", None),
+                        "capital_allocated": getattr(row, "capital_allocated", 10000.0),
+                    }
+        except Exception as exc:
+            logger.warning("Notice on loading active strategies from DB: %s", exc)
 
     async def reload_strategies(self) -> None:
         """Reload strategies from DB (called after CRUD operations)."""

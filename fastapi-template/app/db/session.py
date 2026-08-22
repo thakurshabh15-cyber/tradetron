@@ -4,7 +4,7 @@ Supports:
   - Local SQLite (default) via ``aiosqlite``
   - Hosted PostgreSQL (Neon, Supabase, Railway, Render, etc.) via ``asyncpg``
   - Automatic connection string normalization (postgres://, postgresql:// -> postgresql+asyncpg://)
-  - Resilient table creation and idempotent schema synchronization
+  - Resilient, synchronous table creation and idempotent schema synchronization
 """
 
 from __future__ import annotations
@@ -98,14 +98,14 @@ class Base(DeclarativeBase):
 
 async def init_db() -> None:
     """Create all tables if they don't exist and run non-breaking schema additions."""
-    from app.models.trading import (  # noqa: F401 – force model registration
+    from app.models.user import UserRecord, RevokedTokenRecord  # noqa: F401
+    from app.models.broker_account import BrokerAccountRecord  # noqa: F401
+    from app.models.trading import (  # noqa: F401
         OrderRecord,
         PositionRecord,
         StrategyRecord,
         TradeRecord,
     )
-    from app.models.user import UserRecord, RevokedTokenRecord  # noqa: F401
-    from app.models.broker_account import BrokerAccountRecord  # noqa: F401
     from app.models.marketplace import (  # noqa: F401
         MarketplaceStrategyRecord,
         StrategyDeploymentRecord,
@@ -125,130 +125,124 @@ async def init_db() -> None:
     )
     from app.models.audit import AuditLogRecord  # noqa: F401
 
-    try:
-        async with engine.begin() as conn:
+    logger.info("Initializing database tables on %s...", "SQLite" if IS_SQLITE else "PostgreSQL")
+
+    # 1. Create all tables reliably before any queries are made
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+        bool_default_false = "0" if IS_SQLITE else "FALSE"
+        bool_default_true = "1" if IS_SQLITE else "TRUE"
+
+        # Incremental migration safeguards for pre-existing tables
+        migrations = [
+            ("users", "profile_photo TEXT"),
+            ("users", "phone VARCHAR(30)"),
+            ("users", "kyc_status VARCHAR(20) DEFAULT 'PENDING'"),
+            ("users", f"two_factor_enabled BOOLEAN DEFAULT {bool_default_false}"),
+            ("users", "failed_login_attempts INTEGER DEFAULT 0"),
+            ("users", "locked_until TIMESTAMP"),
+            ("users", f"is_verified BOOLEAN DEFAULT {bool_default_true}"),
+            ("orders", "user_id VARCHAR(36)"),
+            ("orders", "broker_account_id VARCHAR(36)"),
+            ("orders", "price FLOAT"),
+            ("orders", "filled_price FLOAT"),
+            ("orders", "filled_quantity INTEGER DEFAULT 0"),
+            ("orders", "mode VARCHAR(20) DEFAULT 'PAPER'"),
+            ("orders", "error_message TEXT"),
+            ("trades", "user_id VARCHAR(36)"),
+            ("trades", "pnl_pct FLOAT"),
+            ("trades", "exit_reason VARCHAR(50)"),
+            ("trades", "entry_price FLOAT"),
+            ("trades", "exit_price FLOAT"),
+            ("trades", "mode VARCHAR(20) DEFAULT 'PAPER'"),
+            ("strategies", "user_id VARCHAR(36)"),
+            ("strategies", "execution_mode VARCHAR(20) DEFAULT 'PAPER'"),
+            ("strategies", "broker_account_id VARCHAR(36)"),
+            ("strategies", "capital_allocated FLOAT DEFAULT 10000.0"),
+            ("positions", "user_id VARCHAR(36)"),
+            ("positions", "strategy_id VARCHAR(36)"),
+            ("positions", "broker_account_id VARCHAR(36)"),
+            ("positions", "mode VARCHAR(20) DEFAULT 'PAPER'"),
+            ("broker_accounts", "token_expires_at TIMESTAMP"),
+            ("subscriptions", "razorpay_subscription_id VARCHAR(100)"),
+            ("subscriptions", "razorpay_customer_id VARCHAR(100)"),
+            ("payments", "order_id VARCHAR(100)"),
+            ("payments", "method VARCHAR(50)"),
+            ("payments", "error_reason VARCHAR(255)"),
+            ("invoices", "plan_name VARCHAR(50) DEFAULT 'PRO'"),
+            ("invoices", "gstin VARCHAR(50)"),
+            ("invoices", "billing_address TEXT"),
+        ]
+
+        for table, col_def in migrations:
             try:
-                await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, checkfirst=True))
-            except Exception as schema_err:
-                logger.warning("Notice on table/index creation (non-fatal): %s", schema_err)
+                await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col_def}"))
+            except Exception:
+                pass
 
-            bool_default_false = "0" if IS_SQLITE else "FALSE"
-            bool_default_true = "1" if IS_SQLITE else "TRUE"
+    # 2. Seed Default Plans if not present
+    async with SessionLocal() as session:
+        try:
+            existing_plans = (await session.execute(select(PlanRecord))).scalars().all()
+            if not existing_plans:
+                default_plans = [
+                    PlanRecord(
+                        name="FREE",
+                        display_name="Free Starter",
+                        description="Essential tools for paper trading and strategy testing",
+                        price_monthly=0.0,
+                        price_yearly=0.0,
+                        currency="INR",
+                        features_json=json.dumps({
+                            "max_live_strategies": 1,
+                            "max_brokers": 1,
+                            "tick_speed": "1s",
+                            "historical_candles": "15m",
+                            "priority_support": False,
+                            "vip_vps": False,
+                        }),
+                    ),
+                    PlanRecord(
+                        name="PRO",
+                        display_name="Pro Trader",
+                        description="Full multi-broker execution, 10 live strategies, and 1m real candles",
+                        price_monthly=1999.0,
+                        price_yearly=19990.0,
+                        currency="INR",
+                        features_json=json.dumps({
+                            "max_live_strategies": 10,
+                            "max_brokers": 5,
+                            "tick_speed": "realtime",
+                            "historical_candles": "1m",
+                            "priority_support": True,
+                            "vip_vps": False,
+                        }),
+                    ),
+                    PlanRecord(
+                        name="ELITE",
+                        display_name="Elite Institutional",
+                        description="Unlimited strategies, dedicated VIP execution VPS, and 24/7 hotline",
+                        price_monthly=4999.0,
+                        price_yearly=49990.0,
+                        currency="INR",
+                        features_json=json.dumps({
+                            "max_live_strategies": 999,
+                            "max_brokers": 99,
+                            "tick_speed": "sub-millisecond",
+                            "historical_candles": "tick",
+                            "priority_support": True,
+                            "vip_vps": True,
+                        }),
+                    ),
+                ]
+                session.add_all(default_plans)
+                await session.commit()
+                logger.info("Default subscription plans seeded (FREE, PRO, ELITE)")
+        except Exception as exc:
+            logger.warning("Notice on plan seeding: %s", exc)
 
-            # Non-breaking incremental migrations
-            migrations = [
-                ("users", "profile_photo TEXT"),
-                ("users", "phone VARCHAR(30)"),
-                ("users", "kyc_status VARCHAR(20) DEFAULT 'PENDING'"),
-                ("users", f"two_factor_enabled BOOLEAN DEFAULT {bool_default_false}"),
-                ("users", "failed_login_attempts INTEGER DEFAULT 0"),
-                ("users", "locked_until TIMESTAMP"),
-                ("users", f"is_verified BOOLEAN DEFAULT {bool_default_true}"),
-                ("orders", "user_id VARCHAR(36)"),
-                ("orders", "broker_account_id VARCHAR(36)"),
-                ("orders", "price FLOAT"),
-                ("orders", "filled_price FLOAT"),
-                ("orders", "filled_quantity INTEGER DEFAULT 0"),
-                ("orders", "mode VARCHAR(20) DEFAULT 'PAPER'"),
-                ("orders", "error_message TEXT"),
-                ("trades", "user_id VARCHAR(36)"),
-                ("trades", "pnl_pct FLOAT"),
-                ("trades", "exit_reason VARCHAR(50)"),
-                ("trades", "entry_price FLOAT"),
-                ("trades", "exit_price FLOAT"),
-                ("trades", "mode VARCHAR(20) DEFAULT 'PAPER'"),
-                ("strategies", "user_id VARCHAR(36)"),
-                ("strategies", "execution_mode VARCHAR(20) DEFAULT 'PAPER'"),
-                ("strategies", "broker_account_id VARCHAR(36)"),
-                ("strategies", "capital_allocated FLOAT DEFAULT 10000.0"),
-                ("positions", "user_id VARCHAR(36)"),
-                ("positions", "strategy_id VARCHAR(36)"),
-                ("positions", "broker_account_id VARCHAR(36)"),
-                ("positions", "mode VARCHAR(20) DEFAULT 'PAPER'"),
-                ("broker_accounts", "token_expires_at TIMESTAMP"),
-                ("subscriptions", "razorpay_subscription_id VARCHAR(100)"),
-                ("subscriptions", "razorpay_customer_id VARCHAR(100)"),
-                ("payments", "order_id VARCHAR(100)"),
-                ("payments", "method VARCHAR(50)"),
-                ("payments", "error_reason VARCHAR(255)"),
-                ("invoices", "plan_name VARCHAR(50) DEFAULT 'PRO'"),
-                ("invoices", "gstin VARCHAR(50)"),
-                ("invoices", "billing_address TEXT"),
-            ]
-
-            for table, col_def in migrations:
-                try:
-                    await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col_def}"))
-                except Exception:
-                    pass
-    except Exception as exc:
-        logger.warning("Database connection/migration notice: %s", exc)
-
-    # Seed Default Plans if not present
-    try:
-        async with SessionLocal() as session:
-            try:
-                existing_plans = (await session.execute(select(PlanRecord))).scalars().all()
-                if not existing_plans:
-                    default_plans = [
-                        PlanRecord(
-                            name="FREE",
-                            display_name="Free Starter",
-                            description="Essential tools for paper trading and strategy testing",
-                            price_monthly=0.0,
-                            price_yearly=0.0,
-                            currency="INR",
-                            features_json=json.dumps({
-                                "max_live_strategies": 1,
-                                "max_brokers": 1,
-                                "tick_speed": "1s",
-                                "historical_candles": "15m",
-                                "priority_support": False,
-                                "vip_vps": False,
-                            }),
-                        ),
-                        PlanRecord(
-                            name="PRO",
-                            display_name="Pro Trader",
-                            description="Full multi-broker execution, 10 live strategies, and 1m real candles",
-                            price_monthly=1999.0,
-                            price_yearly=19990.0,
-                            currency="INR",
-                            features_json=json.dumps({
-                                "max_live_strategies": 10,
-                                "max_brokers": 5,
-                                "tick_speed": "realtime",
-                                "historical_candles": "1m",
-                                "priority_support": True,
-                                "vip_vps": False,
-                            }),
-                        ),
-                        PlanRecord(
-                            name="ELITE",
-                            display_name="Elite Institutional",
-                            description="Unlimited strategies, dedicated VIP execution VPS, and 24/7 hotline",
-                            price_monthly=4999.0,
-                            price_yearly=49990.0,
-                            currency="INR",
-                            features_json=json.dumps({
-                                "max_live_strategies": 999,
-                                "max_brokers": 99,
-                                "tick_speed": "sub-millisecond",
-                                "historical_candles": "tick",
-                                "priority_support": True,
-                                "vip_vps": True,
-                            }),
-                        ),
-                    ]
-                    session.add_all(default_plans)
-                    await session.commit()
-                    logger.info("Default subscription plans seeded (FREE, PRO, ELITE)")
-            except Exception as exc:
-                logger.warning("Notice on plan seeding: %s", exc)
-    except Exception as session_exc:
-        logger.warning("Notice opening session for seeding: %s", session_exc)
-
-    logger.info("Database tables initialized cleanly on %s", "SQLite" if IS_SQLITE else "PostgreSQL")
+    logger.info("Database initialized successfully on %s", "SQLite" if IS_SQLITE else "PostgreSQL")
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

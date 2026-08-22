@@ -44,13 +44,10 @@ async def lifespan(application: FastAPI):  # noqa: ARG001
     logger = get_logger("main")
     logger.info("Starting %s…", settings.app_name)
 
-    # 1. Initialise database safely
+    # 1. Initialise database (create tables and seed data)
     from app.db.session import init_db
 
-    try:
-        await init_db()
-    except Exception as db_err:
-        logger.warning("Database initialization notice (continuing startup): %s", db_err)
+    await init_db()
 
     # 2. Create shared tick queue
     tick_queue: asyncio.Queue = asyncio.Queue(maxsize=10_000)
