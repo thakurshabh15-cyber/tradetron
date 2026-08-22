@@ -1,9 +1,10 @@
 """Production Notification & OTP Dispatch Service.
 
 Dispatches real OTP verification codes and transactional security notices via:
+- Resend API (HTTPS transactional email)
 - SMTP (SendGrid, AWS SES, Mailgun, Postmark, custom TLS/SSL SMTP)
-- SMS (Twilio, MSG91)
-- Fallback to high-visibility operational logging when credentials are not configured.
+- SMS (Twilio, MSG91 - optional, non-blocking)
+- Operational logging fallback when credentials are not configured.
 """
 
 from __future__ import annotations
@@ -15,13 +16,55 @@ import smtplib
 from typing import Any, Optional
 from urllib.parse import urlencode
 
+import httpx
+
 from app.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger("notifications.dispatcher")
 
 
-async def dispatch_email(
+async def dispatch_email_resend(
+    to_email: str,
+    subject: str,
+    text_content: str,
+    html_content: Optional[str] = None,
+) -> bool:
+    """Send transactional email via Resend HTTP API."""
+    if not settings.resend_api_key:
+        return False
+
+    url = "https://api.resend.com/emails"
+    headers = {
+        "Authorization": f"Bearer {settings.resend_api_key}",
+        "Content-Type": "application/json",
+    }
+    from_email = settings.resend_from_email or "onboarding@resend.dev"
+    payload = {
+        "from": from_email,
+        "to": [to_email],
+        "subject": subject,
+        "text": text_content,
+    }
+    if html_content:
+        payload["html"] = html_content
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+            if resp.status_code in (200, 201):
+                res_json = resp.json()
+                logger.info("Resend email sent successfully to %s: %s (id=%s)", to_email, subject, res_json.get("id"))
+                return True
+            else:
+                logger.error("Resend API error (%d): %s", resp.status_code, resp.text)
+                return False
+    except Exception as exc:
+        logger.error("Resend API request exception: %s", exc)
+        return False
+
+
+async def dispatch_email_smtp(
     to_email: str,
     subject: str,
     text_content: str,
@@ -29,13 +72,6 @@ async def dispatch_email(
 ) -> bool:
     """Send a transactional email using configured SMTP provider."""
     if not settings.smtp_host or not settings.smtp_user:
-        logger.warning(
-            "[EMAIL DISPATCH SKIPPED] SMTP_HOST or SMTP_USER not configured. "
-            "To send real emails, configure SMTP_HOST/SMTP_USER/SMTP_PASSWORD in .env. "
-            "Recipient: %s | Subject: %s",
-            to_email,
-            subject,
-        )
         return False
 
     msg = email.message.EmailMessage()
@@ -60,21 +96,46 @@ async def dispatch_email(
                     if settings.smtp_password:
                         server.login(settings.smtp_user, settings.smtp_password)
                     server.send_message(msg)
-            logger.info("Email dispatched successfully to %s: %s", to_email, subject)
+            logger.info("SMTP email dispatched successfully to %s: %s", to_email, subject)
             return True
         except Exception as exc:
-            logger.error("Failed to send email to %s via %s: %s", to_email, settings.smtp_host, exc)
+            logger.error("Failed to send email to %s via SMTP %s: %s", to_email, settings.smtp_host, exc)
             return False
 
     return await asyncio.to_thread(_sync_send)
 
 
+async def dispatch_email(
+    to_email: str,
+    subject: str,
+    text_content: str,
+    html_content: Optional[str] = None,
+) -> bool:
+    """Send transactional email using Resend API (primary) or SMTP (fallback)."""
+    if settings.resend_api_key:
+        sent = await dispatch_email_resend(to_email, subject, text_content, html_content)
+        if sent:
+            return True
+
+    if settings.smtp_host and settings.smtp_user:
+        sent = await dispatch_email_smtp(to_email, subject, text_content, html_content)
+        if sent:
+            return True
+
+    logger.warning(
+        "[EMAIL DISPATCH NOTICE] No active email provider configured (RESEND_API_KEY or SMTP). "
+        "Recipient: %s | Subject: %s",
+        to_email,
+        subject,
+    )
+    return False
+
+
 async def dispatch_sms_twilio(to_phone: str, message: str) -> bool:
-    """Send SMS via Twilio API."""
+    """Send SMS via Twilio API (optional)."""
     if not settings.twilio_account_sid or not settings.twilio_auth_token or not settings.twilio_from_number:
         return False
 
-    import aiohttp
     import base64
 
     url = f"https://api.twilio.com/2010-04-01/Accounts/{settings.twilio_account_sid}/Messages.json"
@@ -92,40 +153,36 @@ async def dispatch_sms_twilio(to_phone: str, message: str) -> bool:
     }
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, data=data, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                if resp.status in (200, 201):
-                    logger.info("Twilio SMS sent to %s", to_phone)
-                    return True
-                else:
-                    body = await resp.text()
-                    logger.error("Twilio SMS error (%d): %s", resp.status, body)
-                    return False
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(url, data=data, headers=headers)
+            if resp.status_code in (200, 201):
+                logger.info("Twilio SMS sent to %s", to_phone)
+                return True
+            else:
+                logger.error("Twilio SMS error (%d): %s", resp.status_code, resp.text)
+                return False
     except Exception as exc:
         logger.error("Twilio SMS request failed: %s", exc)
         return False
 
 
 async def dispatch_sms_msg91(to_phone: str, otp_code: str) -> bool:
-    """Send OTP SMS via MSG91 API (India)."""
+    """Send OTP SMS via MSG91 API (optional)."""
     if not settings.msg91_auth_key:
         return False
-
-    import aiohttp
 
     clean_phone = to_phone.replace("+", "").replace(" ", "").replace("-", "")
     url = f"https://api.msg91.com/api/v5/otp?template_id={settings.msg91_template_id or 'default'}&mobile={clean_phone}&authkey={settings.msg91_auth_key}&otp={otp_code}"
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                if resp.status == 200:
-                    logger.info("MSG91 OTP SMS sent to %s", to_phone)
-                    return True
-                else:
-                    body = await resp.text()
-                    logger.error("MSG91 error (%d): %s", resp.status, body)
-                    return False
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(url)
+            if resp.status_code == 200:
+                logger.info("MSG91 OTP SMS sent to %s", to_phone)
+                return True
+            else:
+                logger.error("MSG91 error (%d): %s", resp.status_code, resp.text)
+                return False
     except Exception as exc:
         logger.error("MSG91 request failed: %s", exc)
         return False
@@ -136,7 +193,7 @@ async def dispatch_otp(
     otp_code: str,
     purpose: str = "registration",
 ) -> dict[str, Any]:
-    """Universal OTP dispatcher routing to Email or SMS providers based on identifier type."""
+    """Universal OTP dispatcher routing to Email (Resend/SMTP) or SMS providers."""
     is_email = "@" in identifier
     dispatched = False
     provider_used = "none"
@@ -181,28 +238,23 @@ async def dispatch_otp(
             text_content=text_body,
             html_content=html_body,
         )
-        provider_used = "smtp" if dispatched else "smtp_unconfigured"
+        provider_used = "resend" if settings.resend_api_key and dispatched else ("smtp" if dispatched else "unconfigured")
 
     else:
-        # SMS route
+        # SMS route (optional)
         sms_body = f"Your Tradetron verification code is {otp_code}. Valid for 10 minutes. Do not share."
 
-        # Try MSG91 first if in India or MSG91 configured
         if settings.msg91_auth_key:
             dispatched = await dispatch_sms_msg91(identifier, otp_code)
             provider_used = "msg91" if dispatched else "msg91_failed"
 
-        # Fallback to Twilio
         if not dispatched and settings.twilio_account_sid:
             dispatched = await dispatch_sms_twilio(identifier, sms_body)
             provider_used = "twilio" if dispatched else "twilio_failed"
 
         if not dispatched:
-            logger.warning(
-                "[SMS DISPATCH SKIPPED] No active SMS provider configured (Twilio/MSG91). Phone: %s",
-                identifier,
-            )
-            provider_used = "sms_unconfigured"
+            logger.info("[SMS SKIPPED] SMS provider not configured for %s (non-blocking).", identifier)
+            provider_used = "sms_skipped"
 
     return {
         "dispatched": dispatched,

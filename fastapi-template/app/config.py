@@ -43,7 +43,10 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
-    # ── Email & SMS Dispatch (OTP & Notifications) ───────────────────
+    # ── Resend & SMTP Email Dispatch (OTP & Notifications) ───────────
+    resend_api_key: str = ""
+    resend_from_email: str = "onboarding@resend.dev"
+
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_user: str = ""
