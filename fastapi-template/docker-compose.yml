@@ -1,0 +1,43 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: tradetron-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: tradetron
+      POSTGRES_USER: tradetron
+      POSTGRES_PASSWORD: tradetron_secure_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tradetron -d tradetron"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tradetron-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PORT: 8080
+      DATABASE_URL: postgresql://tradetron:tradetron_secure_password@postgres:5432/tradetron
+      JWT_SECRET: dev_super_secret_jwt_key_change_in_production_123456789
+      FRONTEND_URL: http://localhost:5173
+      ALLOWED_ORIGINS: "*"
+      BROKER_MODE: simulated
+      LOG_LEVEL: INFO
+    ports:
+      - "8080:8080"
+
+volumes:
+  postgres_data:

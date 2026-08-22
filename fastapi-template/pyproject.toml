@@ -1,0 +1,35 @@
+[project]
+name = "tradetron"
+version = "1.0.0"
+description = "Algorithmic trading platform with real-time market data streaming"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi[standard]>=0.115",
+    "uvicorn[standard]>=0.30",
+    "sqlalchemy[asyncio]>=2.0",
+    "aiosqlite>=0.20",
+    "asyncpg>=0.30.0",
+    "psycopg[binary]>=3.2.0",
+    "pydantic-settings>=2.0",
+    "python-dotenv>=1.0",
+    "pyotp>=2.9",
+    "httpx>=0.27",
+    "aiohttp>=3.10",
+    "psutil>=5.9",
+    "websockets>=12.0",
+]
+
+[project.optional-dependencies]
+live = [
+    "smartapi-python>=1.4",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

@@ -1,0 +1,160 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── CSS Design Tokens & Root Variables ────────────────────────── */
+:root {
+  --bg-surface-950: #05060e;
+  --bg-surface-900: #090b17;
+  --bg-surface-850: #0e1120;
+  --bg-surface-800: #131627;
+
+  --accent-purple: #8b5cf6;
+  --accent-violet: #7c3aed;
+  --accent-red: #f43f5e;
+  --accent-coral: #fb7185;
+  --accent-cyan: #06b6d4;
+
+  --profit-green: #10b981;
+  --loss-red: #f43f5e;
+  --warning-amber: #f59e0b;
+
+  --glass-bg: rgba(13, 16, 32, 0.72);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-border-hover: rgba(139, 92, 246, 0.4);
+}
+
+/* ── Base Layer ──────────────────────────────────────────────── */
+@layer base {
+  * {
+    @apply box-border;
+  }
+
+  body {
+    @apply m-0 bg-surface-950 font-sans text-slate-300 antialiased min-h-screen;
+    background-image: 
+      radial-gradient(ellipse 80% 50% at 50% -20%, rgba(124, 58, 237, 0.15), transparent),
+      radial-gradient(ellipse 60% 40% at 100% 100%, rgba(244, 63, 94, 0.08), transparent);
+  }
+
+  ::selection {
+    background-color: rgba(139, 92, 246, 0.35);
+    color: #ffffff;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-display tracking-tight text-white;
+  }
+
+  /* Keyboard Navigation Focus States */
+  button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible {
+    @apply outline-none ring-2 ring-brand-purple/60 ring-offset-2 ring-offset-surface-950;
+  }
+
+  /* Custom Scrollbar */
+  ::-webkit-scrollbar {
+    @apply w-1.5 h-1.5;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-surface-950;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-slate-800 border border-slate-700/50;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-brand-purple/50;
+  }
+}
+
+/* ── Component Layer ─────────────────────────────────────────── */
+@layer components {
+  /* Tabular Numerals for Price & Metric Alignment */
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Glassmorphism Cards & Panels */
+  .glass-panel {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+
+  .glass-card {
+    @apply glass-panel rounded-2xl p-5 shadow-glass-sm transition-all duration-200;
+  }
+
+  .glass-card-hover {
+    @apply glass-card hover:border-brand-purple/40 hover:shadow-glass-md hover:shadow-brand-purple/5 active:scale-[0.99];
+  }
+
+  /* Interactive Buttons with Accessible Mobile Tap Target (min 44px) */
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 min-h-[44px] rounded-xl bg-gradient-to-r from-brand-violet to-brand-purple px-5 py-2.5 text-xs font-bold text-white shadow-md shadow-brand-purple/25 transition-all duration-150 hover:from-brand-purple hover:to-indigo-500 hover:shadow-lg hover:shadow-brand-purple/35 active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 min-h-[44px] rounded-xl bg-surface-800 border border-slate-700/80 px-4 py-2.5 text-xs font-semibold text-slate-200 shadow-sm transition-all duration-150 hover:bg-surface-750 hover:text-white hover:border-slate-600 active:scale-[0.97] disabled:opacity-50;
+  }
+
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2 min-h-[44px] rounded-xl bg-gradient-to-r from-brand-crimson to-brand-red px-5 py-2.5 text-xs font-bold text-white shadow-md shadow-brand-red/25 transition-all duration-150 hover:from-brand-red hover:to-rose-500 active:scale-[0.97] disabled:opacity-50;
+  }
+
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 min-h-[40px] rounded-xl border border-white/[0.08] px-3.5 py-2 text-xs font-medium text-slate-300 transition-all duration-150 hover:border-brand-purple/40 hover:bg-brand-purple/10 hover:text-white active:scale-[0.97];
+  }
+
+  /* Form Fields */
+  .input-field {
+    @apply w-full min-h-[44px] rounded-xl border border-slate-800 bg-surface-900/90 px-3.5 py-2.5 text-xs text-white placeholder-slate-500 outline-none transition-all duration-200 focus:border-brand-purple focus:ring-2 focus:ring-brand-purple/20;
+  }
+
+  .select-field {
+    @apply input-field cursor-pointer appearance-none bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIiIGhlaWdodD0iOCIgdmlld0JveD0iMCAwIDEyIDgiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHBhdGggZD0iTTEgMS41TDYgNi41TDExIDEuNSIgc3Ryb2tlPSIjOTRhM2I4IiBzdHJva2Utd2lkdGg9IjEuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PC9zdmc+')] bg-[right_14px_center] bg-no-repeat pr-10;
+  }
+
+  /* Badges */
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-bold font-mono tracking-wide uppercase;
+  }
+
+  .badge-profit {
+    @apply badge bg-emerald-500/15 text-emerald-400 border border-emerald-500/25;
+  }
+
+  .badge-loss {
+    @apply badge bg-rose-500/15 text-rose-400 border border-rose-500/25;
+  }
+
+  .badge-warning {
+    @apply badge bg-amber-500/15 text-amber-400 border border-amber-500/25;
+  }
+
+  .badge-neutral {
+    @apply badge bg-slate-800 text-slate-400 border border-slate-700;
+  }
+
+  .badge-purple {
+    @apply badge bg-brand-purple/15 text-brand-purple border border-brand-purple/25;
+  }
+
+  /* Shimmer / Skeleton Loaders */
+  .skeleton-box {
+    @apply rounded-xl bg-slate-800/60 animate-pulse;
+    background-image: linear-gradient(90deg, rgba(255, 255, 255, 0) 0, rgba(255, 255, 255, 0.04) 50%, rgba(255, 255, 255, 0) 100%);
+    background-size: 200% 100%;
+    animation: shimmer 1.8s infinite;
+  }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
