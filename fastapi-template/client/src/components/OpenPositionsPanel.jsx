@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import { useMarket } from "../context/MarketContext";
 import { API_BASE } from "../config";
 import { authFetch } from "../services/apiClient";
@@ -15,7 +15,112 @@ import {
   Zap,
 } from "lucide-react";
 
-export default function OpenPositionsPanel({
+const PositionRow = React.memo(function PositionRow({
+  pos,
+  metric,
+  isClosing,
+  onClose,
+  fmtCurrency,
+}) {
+  const isLong = pos.side === "LONG" || pos.side === "BUY";
+
+  return (
+    <tr className="hover:bg-white/[0.02] transition-colors">
+      <td className="py-3 px-3 font-mono font-bold text-white">
+        <span>{pos.symbol}</span>
+      </td>
+
+      <td className="py-3 px-3">
+        <span
+          className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+            isLong
+              ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
+              : "bg-rose-500/15 text-rose-300 border-rose-500/30"
+          }`}
+        >
+          {isLong ? "BUY / LONG" : "SELL / SHORT"}
+        </span>
+      </td>
+
+      <td className="py-3 px-3 text-right font-mono text-white">
+        {pos.quantity}
+      </td>
+
+      <td className="py-3 px-3 text-right font-mono text-slate-300">
+        {fmtCurrency(pos.entry_price, pos.symbol)}
+      </td>
+
+      <td className="py-3 px-3 text-right font-mono font-bold text-white">
+        <span className="flex items-center justify-end gap-1">
+          <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+          {fmtCurrency(metric.livePrice, pos.symbol)}
+        </span>
+      </td>
+
+      <td className="py-3 px-3 text-right font-mono font-bold">
+        <span
+          className={`inline-flex items-center gap-1 ${
+            metric.isPositive ? "text-emerald-400" : "text-rose-400"
+          }`}
+        >
+          {metric.isPositive ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}
+          <span>
+            {metric.isPositive ? "+" : ""}
+            {fmtCurrency(metric.pnl, pos.symbol)} ({metric.isPositive ? "+" : ""}
+            {metric.pnlPct.toFixed(2)}%)
+          </span>
+        </span>
+      </td>
+
+      <td className="py-3 px-3 text-center">
+        <span
+          className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${
+            pos.mode === "LIVE"
+              ? "bg-rose-500/20 text-rose-300 border-rose-500/40"
+              : "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
+          }`}
+        >
+          {pos.mode}
+        </span>
+      </td>
+
+      <td className="py-3 px-3 text-right">
+        <button
+          onClick={() => onClose(pos.id, pos.symbol)}
+          disabled={isClosing}
+          className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-300 hover:text-white transition-all disabled:opacity-50 flex items-center gap-1 ml-auto"
+          title="Close position at current market price"
+        >
+          {isClosing ? (
+            <RefreshCw size={12} className="animate-spin" />
+          ) : (
+            <XCircle size={12} />
+          )}
+          <span>{isClosing ? "Closing..." : "Close"}</span>
+        </button>
+      </td>
+    </tr>
+  );
+}, arePositionRowPropsEqual);
+
+function arePositionRowPropsEqual(prev, next) {
+  if (prev.pos?.id !== next.pos?.id) return false;
+  if (prev.pos?.symbol !== next.pos?.symbol) return false;
+  if (prev.pos?.quantity !== next.pos?.quantity) return false;
+  if (prev.pos?.entry_price !== next.pos?.entry_price) return false;
+  if (prev.pos?.mode !== next.pos?.mode) return false;
+  if (prev.isClosing !== next.isClosing) return false;
+
+  const pMet = prev.metric || {};
+  const nMet = next.metric || {};
+  if (pMet.livePrice !== nMet.livePrice) return false;
+  if (pMet.pnl !== nMet.pnl) return false;
+  if (pMet.pnlPct !== nMet.pnlPct) return false;
+
+  return true;
+}
+
+function OpenPositionsPanel({
   positions = [],
   loading = false,
   error = null,
@@ -48,29 +153,26 @@ export default function OpenPositionsPanel({
     }
   };
 
-  // Calculate total live aggregate unrealized P&L across all open positions
-  const { totalUnrealizedPnl, positionMetrics } = positions.reduce(
-    (acc, pos) => {
-      const quote = getQuote(pos.symbol) || quotes[pos.symbol];
-      const livePrice = quote?.price ?? pos.current_price ?? pos.entry_price;
-      const isLong = pos.side === "LONG" || pos.side === "BUY";
-      const delta = isLong ? livePrice - pos.entry_price : pos.entry_price - livePrice;
-      const pnl = delta * pos.quantity;
-      const pnlPct = pos.entry_price ? (delta / pos.entry_price) * 100 : 0;
-      const totalVal = livePrice * pos.quantity;
+  // Compute live unrealized P&L for all positions
+  let totalUnrealizedPnl = 0;
+  const positionMetrics = {};
 
-      acc.totalUnrealizedPnl += pnl;
-      acc.positionMetrics[pos.id] = {
-        livePrice,
-        pnl,
-        pnlPct,
-        totalVal,
-        isPositive: pnl >= 0,
-      };
-      return acc;
-    },
-    { totalUnrealizedPnl: 0, positionMetrics: {} }
-  );
+  positions.forEach((pos) => {
+    const liveQuote = getQuote(pos.symbol);
+    const livePrice = liveQuote?.price ?? pos.current_price ?? pos.entry_price;
+    const isLong = pos.side === "LONG" || pos.side === "BUY";
+    const delta = isLong ? livePrice - pos.entry_price : pos.entry_price - livePrice;
+    const pnl = delta * pos.quantity;
+    const pnlPct = pos.entry_price ? (delta / pos.entry_price) * 100 : 0;
+
+    positionMetrics[pos.id] = {
+      livePrice,
+      pnl,
+      pnlPct,
+      isPositive: pnl >= 0,
+    };
+    totalUnrealizedPnl += pnl;
+  });
 
   const isTotalPositive = totalUnrealizedPnl >= 0;
 
@@ -177,85 +279,16 @@ export default function OpenPositionsPanel({
                   pnlPct: 0,
                   isPositive: true,
                 };
-                const isLong = pos.side === "LONG" || pos.side === "BUY";
-                const isClosing = closingId === pos.id;
 
                 return (
-                  <tr key={pos.id} className="hover:bg-white/[0.02] transition-colors">
-                    <td className="py-3 px-3 font-mono font-bold text-white">
-                      <span>{pos.symbol}</span>
-                    </td>
-
-                    <td className="py-3 px-3">
-                      <span
-                        className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
-                          isLong
-                            ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
-                            : "bg-rose-500/15 text-rose-300 border-rose-500/30"
-                        }`}
-                      >
-                        {isLong ? "BUY / LONG" : "SELL / SHORT"}
-                      </span>
-                    </td>
-
-                    <td className="py-3 px-3 text-right font-mono text-white">
-                      {pos.quantity}
-                    </td>
-
-                    <td className="py-3 px-3 text-right font-mono text-slate-300">
-                      {fmtCurrency(pos.entry_price, pos.symbol)}
-                    </td>
-
-                    <td className="py-3 px-3 text-right font-mono font-bold text-white">
-                      <span className="flex items-center justify-end gap-1">
-                        <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-                        {fmtCurrency(metric.livePrice, pos.symbol)}
-                      </span>
-                    </td>
-
-                    <td className="py-3 px-3 text-right font-mono font-bold">
-                      <span
-                        className={`inline-flex items-center gap-1 ${
-                          metric.isPositive ? "text-emerald-400" : "text-rose-400"
-                        }`}
-                      >
-                        {metric.isPositive ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}
-                        <span>
-                          {metric.isPositive ? "+" : ""}
-                          {fmtCurrency(metric.pnl, pos.symbol)} ({metric.isPositive ? "+" : ""}
-                          {metric.pnlPct.toFixed(2)}%)
-                        </span>
-                      </span>
-                    </td>
-
-                    <td className="py-3 px-3 text-center">
-                      <span
-                        className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${
-                          pos.mode === "LIVE"
-                            ? "bg-rose-500/20 text-rose-300 border-rose-500/40"
-                            : "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
-                        }`}
-                      >
-                        {pos.mode}
-                      </span>
-                    </td>
-
-                    <td className="py-3 px-3 text-right">
-                      <button
-                        onClick={() => handleClosePosition(pos.id, pos.symbol)}
-                        disabled={isClosing}
-                        className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-300 hover:text-white transition-all disabled:opacity-50 flex items-center gap-1 ml-auto"
-                        title="Close position at current market price"
-                      >
-                        {isClosing ? (
-                          <RefreshCw size={12} className="animate-spin" />
-                        ) : (
-                          <XCircle size={12} />
-                        )}
-                        <span>{isClosing ? "Closing..." : "Close"}</span>
-                      </button>
-                    </td>
-                  </tr>
+                  <PositionRow
+                    key={pos.id}
+                    pos={pos}
+                    metric={metric}
+                    isClosing={closingId === pos.id}
+                    onClose={handleClosePosition}
+                    fmtCurrency={fmtCurrency}
+                  />
                 );
               })}
             </tbody>
@@ -265,3 +298,25 @@ export default function OpenPositionsPanel({
     </div>
   );
 }
+
+function areOpenPositionsPropsEqual(prev, next) {
+  if (prev.loading !== next.loading) return false;
+  if (prev.error !== next.error) return false;
+  if (prev.onRetry !== next.onRetry) return false;
+  if (prev.onPositionClosed !== next.onPositionClosed) return false;
+
+  const pList = prev.positions || [];
+  const nList = next.positions || [];
+  if (pList.length !== nList.length) return false;
+
+  for (let i = 0; i < pList.length; i++) {
+    if (pList[i].id !== nList[i].id) return false;
+    if (pList[i].current_price !== nList[i].current_price) return false;
+    if (pList[i].unrealized_pnl !== nList[i].unrealized_pnl) return false;
+    if (pList[i].status !== nList[i].status) return false;
+  }
+
+  return true;
+}
+
+export default React.memo(OpenPositionsPanel, areOpenPositionsPropsEqual);

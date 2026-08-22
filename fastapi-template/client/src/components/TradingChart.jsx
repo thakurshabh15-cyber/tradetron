@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo } from "react";
+import React, { useEffect, useRef, useState, useMemo } from "react";
 import {
   createChart,
   CandlestickSeries,
@@ -10,11 +10,12 @@ import {
 } from "lightweight-charts";
 import { BarChart2 } from "lucide-react";
 import { useMarket } from "../context/MarketContext";
+import { ErrorState } from "./SkeletonLoaders";
 import { API_BASE } from "../config";
 
 const TIMEFRAMES = ["1m", "5m", "15m", "1h", "1D"];
 
-export default function TradingChart({ symbol = "NIFTY50", currentPrice = 24850.0 }) {
+function TradingChart({ symbol = "NIFTY50", currentPrice = 24850.0 }) {
   const chartContainerRef = useRef(null);
   const chartInstanceRef = useRef(null);
   const candleSeriesRef = useRef(null);
@@ -391,3 +392,11 @@ export default function TradingChart({ symbol = "NIFTY50", currentPrice = 24850.
     </div>
   );
 }
+
+function areTradingChartPropsEqual(prevProps, nextProps) {
+  if (prevProps.symbol !== nextProps.symbol) return false;
+  if (prevProps.currentPrice !== nextProps.currentPrice) return false;
+  return true;
+}
+
+export default React.memo(TradingChart, areTradingChartPropsEqual);

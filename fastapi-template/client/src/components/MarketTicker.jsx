@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useMarket } from "../context/MarketContext";
 import { TrendingUp, TrendingDown, Shield, Activity } from "lucide-react";
 
-export default function MarketTicker({ symbol, initialData, isSelected, onSelect }) {
+function MarketTicker({ symbol, initialData, isSelected, onSelect }) {
   const { getQuote } = useMarket();
   const liveQuote = getQuote(symbol);
   const data = liveQuote || initialData || { price: 0, change: 0, change_pct: 0 };
@@ -112,3 +112,23 @@ export default function MarketTicker({ symbol, initialData, isSelected, onSelect
     </div>
   );
 }
+
+function areMarketTickerPropsEqual(prevProps, nextProps) {
+  if (prevProps.symbol !== nextProps.symbol) return false;
+  if (prevProps.isSelected !== nextProps.isSelected) return false;
+  if (prevProps.onSelect !== nextProps.onSelect) return false;
+
+  const prev = prevProps.initialData || {};
+  const next = nextProps.initialData || {};
+
+  if (prev.price !== next.price) return false;
+  if (prev.change !== next.change) return false;
+  if (prev.change_pct !== next.change_pct) return false;
+  if (prev.high !== next.high) return false;
+  if (prev.low !== next.low) return false;
+  if (prev.volume !== next.volume) return false;
+
+  return true;
+}
+
+export default React.memo(MarketTicker, areMarketTickerPropsEqual);
