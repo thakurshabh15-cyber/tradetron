@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Sidebar from "./components/Sidebar";
 import Dashboard from "./pages/Dashboard";
@@ -11,18 +11,61 @@ import Admin from "./pages/Admin";
 import KillSwitchModal from "./components/KillSwitchModal";
 import BrokerConnectModal from "./components/BrokerConnectModal";
 import LiveOptInModal from "./components/LiveOptInModal";
+import { authFetch } from "./services/apiClient";
 
-import { ShieldAlert, ShieldCheck, Power, Zap, Radio, Link as LinkIcon } from "lucide-react";
+import { ShieldAlert, ShieldCheck, Power, Zap, Radio, Link as LinkIcon, AlertCircle } from "lucide-react";
 
 export default function App() {
-  const [executionMode, setExecutionMode] = useState("PAPER"); // 'PAPER' is mandatory default
+  const [executionMode, setExecutionMode] = useState("PAPER"); // 'PAPER' is strictly enforced default
+  const [brokerAccounts, setBrokerAccounts] = useState([]);
   const [isKillSwitchOpen, setIsKillSwitchOpen] = useState(false);
   const [isBrokerModalOpen, setIsBrokerModalOpen] = useState(false);
   const [isLiveOptInOpen, setIsLiveOptInOpen] = useState(false);
+  const [brokerWarning, setBrokerWarning] = useState(null);
+
+  const fetchBrokers = useCallback(async () => {
+    try {
+      const res = await authFetch("/api/brokers/accounts");
+      if (res.ok) {
+        const data = await res.json();
+        const accounts = Array.isArray(data) ? data : [];
+        setBrokerAccounts(accounts);
+
+        // If in LIVE mode and no broker is connected/valid, auto-revert to PAPER
+        const validBrokers = accounts.filter(
+          (b) => b.status === "CONNECTED" && !b.is_token_expired
+        );
+        if (validBrokers.length === 0 && executionMode === "LIVE") {
+          setExecutionMode("PAPER");
+        }
+      }
+    } catch {
+      setBrokerAccounts([]);
+    }
+  }, [executionMode]);
+
+  useEffect(() => {
+    fetchBrokers();
+  }, [fetchBrokers]);
+
+  // Verified active brokers only
+  const connectedBrokers = brokerAccounts.filter(
+    (b) => b.status === "CONNECTED" && !b.is_token_expired
+  );
+
+  const isLiveActive = executionMode === "LIVE" && connectedBrokers.length > 0;
 
   const handleModeSwitch = (mode) => {
+    setBrokerWarning(null);
     if (mode === "LIVE") {
-      setIsLiveOptInOpen(true);
+      if (connectedBrokers.length === 0) {
+        setBrokerWarning(
+          "Cannot enable Live Execution: No verified broker account connected. Please connect Zerodha, Angel One, Upstox, or Binance first."
+        );
+        setIsBrokerModalOpen(true);
+      } else {
+        setIsLiveOptInOpen(true);
+      }
     } else {
       setExecutionMode("PAPER");
     }
@@ -39,19 +82,21 @@ export default function App() {
             <div className="flex items-center gap-3">
               <div
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all ${
-                  executionMode === "LIVE"
+                  isLiveActive
                     ? "bg-rose-500/15 border-rose-500/40 text-rose-400 shadow-sm shadow-rose-500/20 animate-pulse"
                     : "bg-emerald-500/15 border-emerald-500/40 text-emerald-300 shadow-sm shadow-emerald-500/10"
                 }`}
               >
-                {executionMode === "LIVE" ? <Radio size={14} className="text-rose-400" /> : <Zap size={14} className="text-emerald-400" />}
-                <span>{executionMode === "LIVE" ? "LIVE BROKER EXECUTION" : "PAPER TRADING (SIMULATION)"}</span>
+                {isLiveActive ? <Radio size={14} className="text-rose-400" /> : <Zap size={14} className="text-emerald-400" />}
+                <span>{isLiveActive ? "LIVE BROKER EXECUTION" : "PAPER TRADING (SIMULATION)"}</span>
               </div>
 
               <span className="hidden xl:inline-block text-[11px] text-slate-400">
-                {executionMode === "LIVE"
-                  ? "Real capital active across Zerodha / Angel One / Binance broker routes."
-                  : "Virtual paper balance ₹10,00,000 active. No real funds at risk."}
+                {isLiveActive
+                  ? `Real capital active across ${connectedBrokers.map((b) => b.broker_name).join(", ")}.`
+                  : connectedBrokers.length === 0
+                  ? "Virtual paper balance ₹10,00,000 active. No verified live broker connected (Simulation Mode Only)."
+                  : "Virtual paper balance ₹10,00,000 active. Real funds are protected."}
               </span>
             </div>
 
@@ -61,7 +106,7 @@ export default function App() {
                 <button
                   onClick={() => handleModeSwitch("PAPER")}
                   className={`px-2.5 py-1 rounded-md transition-all ${
-                    executionMode === "PAPER"
+                    !isLiveActive
                       ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
                       : "text-slate-400 hover:text-white"
                   }`}
@@ -71,7 +116,7 @@ export default function App() {
                 <button
                   onClick={() => handleModeSwitch("LIVE")}
                   className={`px-2.5 py-1 rounded-md transition-all ${
-                    executionMode === "LIVE"
+                    isLiveActive
                       ? "bg-rose-500/20 text-rose-300 border border-rose-500/30"
                       : "text-slate-400 hover:text-white"
                   }`}
@@ -81,11 +126,16 @@ export default function App() {
               </div>
 
               <button
-                onClick={() => setIsBrokerModalOpen(true)}
+                onClick={() => {
+                  setBrokerWarning(null);
+                  setIsBrokerModalOpen(true);
+                }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-750 border border-slate-700 text-white text-xs font-semibold transition-all"
               >
-                <LinkIcon size={13} className="text-cyan-400" />
-                <span className="hidden sm:inline">Connect Broker</span>
+                <LinkIcon size={13} className={connectedBrokers.length > 0 ? "text-emerald-400" : "text-cyan-400"} />
+                <span className="hidden sm:inline">
+                  {connectedBrokers.length > 0 ? `${connectedBrokers.length} Broker Linked` : "Connect Broker"}
+                </span>
               </button>
 
               <button
@@ -98,6 +148,13 @@ export default function App() {
               </button>
             </div>
           </div>
+
+          {brokerWarning && (
+            <div className="flex items-center gap-2 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs animate-fade-in">
+              <AlertCircle size={15} className="shrink-0 text-amber-400" />
+              <span>{brokerWarning}</span>
+            </div>
+          )}
 
           <Routes>
             <Route path="/" element={<Dashboard />} />
@@ -118,11 +175,22 @@ export default function App() {
         <BrokerConnectModal
           isOpen={isBrokerModalOpen}
           onClose={() => setIsBrokerModalOpen(false)}
+          onLinkedSuccess={() => {
+            fetchBrokers();
+            setBrokerWarning(null);
+          }}
         />
         <LiveOptInModal
           isOpen={isLiveOptInOpen}
           onClose={() => setIsLiveOptInOpen(false)}
-          onConfirm={() => setExecutionMode("LIVE")}
+          onConfirm={() => {
+            if (connectedBrokers.length > 0) {
+              setExecutionMode("LIVE");
+            } else {
+              setExecutionMode("PAPER");
+              setIsBrokerModalOpen(true);
+            }
+          }}
           onConnectBroker={() => setIsBrokerModalOpen(true)}
         />
       </div>
