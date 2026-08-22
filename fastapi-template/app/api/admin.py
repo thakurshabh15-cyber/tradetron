@@ -124,33 +124,53 @@ async def get_admin_overview(
     admin: UserRecord = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Consolidated KPI Command Center metrics for platform governance."""
-    # 1. Total users
+    """Consolidated KPI Command Center metrics computed strictly from active database records."""
+    now = datetime.now(timezone.utc)
+
+    # 1. Total registered traders & KYC breakdown from database
     users_count = (await db.execute(select(func.count(UserRecord.id)))).scalar() or 0
     verified_kyc = (await db.execute(select(func.count(UserRecord.id)).where(UserRecord.kyc_status == "VERIFIED"))).scalar() or 0
     pending_kyc = (await db.execute(select(func.count(UserRecord.id)).where(UserRecord.kyc_status == "PENDING"))).scalar() or 0
 
-    # 2. Broker connections
-    active_brokers = (await db.execute(select(func.count(BrokerAccountRecord.id)).where(BrokerAccountRecord.is_active == True))).scalar() or 0  # noqa: E712
-
-    # 3. Live strategy deployments
-    live_deploys = (await db.execute(select(func.count(StrategyDeploymentRecord.id)).where(StrategyDeploymentRecord.status == "RUNNING"))).scalar() or 0
-
-    # 4. Total Capital Allocated
-    capital_res = (await db.execute(select(func.sum(StrategyDeploymentRecord.capital_allocated)).where(StrategyDeploymentRecord.status == "RUNNING"))).scalar() or 0.0
-
-    # 5. Active Subscriptions
-    active_subs = (await db.execute(select(func.count(SubscriptionRecord.id)).where(SubscriptionRecord.status == "ACTIVE"))).scalar() or 0
-
-    # Compute real MRR from subscription plan prices
-    mrr_result = await db.execute(
-        select(func.sum(SubscriptionRecord.amount)).where(SubscriptionRecord.status == "ACTIVE")
+    # 2. Real Active Broker connections (must be CONNECTED, active, and not expired)
+    active_brokers_stmt = select(func.count(BrokerAccountRecord.id)).where(
+        BrokerAccountRecord.is_active == True,  # noqa: E712
+        BrokerAccountRecord.status == "CONNECTED",
+        (BrokerAccountRecord.token_expires_at.is_(None)) | (BrokerAccountRecord.token_expires_at > now),
     )
-    mrr = float(mrr_result.scalar() or 0.0)
+    active_brokers = (await db.execute(active_brokers_stmt)).scalar() or 0
 
-    # Compute real churn: (cancelled in last 30 days) / (active + cancelled in last 30 days)
+    # 3. Live strategy deployments (strictly LIVE execution mode, NOT paper/simulation)
+    live_deploys_stmt = select(func.count(StrategyDeploymentRecord.id)).where(
+        StrategyDeploymentRecord.status == "RUNNING",
+        StrategyDeploymentRecord.execution_mode == "LIVE",
+    )
+    live_deploys = (await db.execute(live_deploys_stmt)).scalar() or 0
+
+    # 4. Total Real Capital Managed (strictly LIVE execution mode, ₹0 if no live deployments)
+    capital_stmt = select(func.sum(StrategyDeploymentRecord.capital_allocated)).where(
+        StrategyDeploymentRecord.status == "RUNNING",
+        StrategyDeploymentRecord.execution_mode == "LIVE",
+    )
+    capital_res = (await db.execute(capital_stmt)).scalar() or 0.0
+
+    # 5. Paid Active Subscriptions (excluding free tier with amount 0)
+    active_subs_stmt = select(func.count(SubscriptionRecord.id)).where(
+        SubscriptionRecord.status == "ACTIVE",
+        SubscriptionRecord.amount > 0,
+    )
+    active_subs = (await db.execute(active_subs_stmt)).scalar() or 0
+
+    # 6. Real MRR from paid active subscriptions (₹0 until paid users exist)
+    mrr_stmt = select(func.sum(SubscriptionRecord.amount)).where(
+        SubscriptionRecord.status == "ACTIVE",
+        SubscriptionRecord.amount > 0,
+    )
+    mrr = float((await db.execute(mrr_stmt)).scalar() or 0.0)
+
+    # 7. Real churn rate: (cancelled in last 30 days) / (active + cancelled in last 30 days)
     from datetime import timedelta
-    thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
+    thirty_days_ago = now - timedelta(days=30)
     cancelled_recently = (await db.execute(
         select(func.count(SubscriptionRecord.id)).where(
             SubscriptionRecord.status == "CANCELLED",
@@ -168,7 +188,7 @@ async def get_admin_overview(
         },
         "brokers": {
             "active_connections": active_brokers,
-            "supported_brokers": ["ZERODHA", "ANGEL_ONE", "BINANCE"],
+            "supported_brokers": ["ZERODHA", "ANGEL_ONE", "BINANCE", "UPSTOX"],
         },
         "strategies": {
             "live_running": live_deploys,

@@ -345,7 +345,7 @@ export default function Admin() {
                 <Radio size={16} className="text-cyan-400" />
               </div>
               <div className="mt-2 text-2xl font-bold font-mono text-cyan-400">{overview.brokers.active_connections}</div>
-              <div className="mt-1 text-[11px] text-slate-400">Across Zerodha, Angel One, Binance</div>
+              <div className="mt-1 text-[11px] text-slate-400">Zerodha, Angel One, Upstox, Binance</div>
             </div>
 
             <div className="card p-5 bg-slate-900 border border-slate-800 rounded-2xl">
@@ -356,7 +356,7 @@ export default function Admin() {
               <div className="mt-2 text-2xl font-bold font-mono text-white">
                 ₹{overview.strategies.total_capital_managed.toLocaleString()}
               </div>
-              <div className="mt-1 text-[11px] text-amber-400">{overview.strategies.live_running} running strategies</div>
+              <div className="mt-1 text-[11px] text-amber-400">{overview.strategies.live_running} live running strategies</div>
             </div>
 
             <div className="card p-5 bg-slate-900 border border-slate-800 rounded-2xl">
@@ -367,7 +367,9 @@ export default function Admin() {
               <div className="mt-2 text-2xl font-bold font-mono text-emerald-400">
                 ₹{overview.revenue.mrr.toLocaleString()}
               </div>
-              <div className="mt-1 text-[11px] text-slate-400">{overview.revenue.active_subscribers} subscribers (Churn 2.1%)</div>
+              <div className="mt-1 text-[11px] text-slate-400">
+                {overview.revenue.active_subscribers} paid subscribers ({overview.revenue.churn_rate_pct}% churn)
+              </div>
             </div>
           </div>
         </div>
