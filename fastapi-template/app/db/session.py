@@ -282,6 +282,24 @@ async def init_db() -> None:
                 await session.commit()
                 logger.info("Default quantitative strategies seeded (Golden Cross, RSI Mean Reversion, BB Breakout)")
 
+            # Seed Default Admin User if not present
+            admin_stmt = select(UserRecord).where(UserRecord.email == "admin@tradetron.io")
+            admin_user = (await session.execute(admin_stmt)).scalar_one_or_none()
+            if not admin_user:
+                from app.core.security import hash_password
+                new_admin = UserRecord(
+                    email="admin@tradetron.io",
+                    hashed_password=hash_password("Admin@Tradetron2026!"),
+                    full_name="Tradetron Platform Admin",
+                    role="admin",
+                    kyc_status="VERIFIED",
+                    is_active=True,
+                    is_verified=True,
+                )
+                session.add(new_admin)
+                await session.commit()
+                logger.info("Default Admin User created: admin@tradetron.io (password: Admin@Tradetron2026!)")
+
             # Seed Watchlist if DB is empty
             existing_watchlist = (await session.execute(select(WatchlistRecord))).scalars().all()
             if not existing_watchlist:

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Header, Request, status
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.core.logging import get_logger
 from app.core.security import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
@@ -399,6 +400,13 @@ async def forgot_password(
     otp_code = generate_otp_for_identifier(user.email)
     reset_token = create_password_reset_token(user.id, user.email)
     dispatch_res = await dispatch_otp(user.email, otp_code, purpose="password_reset")
+    if not dispatch_res.get("dispatched") and settings.resend_api_key:
+        err_msg = dispatch_res.get("message") or "Failed to deliver password reset email."
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Email delivery failed: {err_msg}",
+        )
+
     logger.info(
         "Password reset OTP generated for %s (dispatched: %s via %s)",
         user.email,
@@ -499,6 +507,14 @@ async def request_otp(req: RequestOtpRequest, request: Request):
 
     otp_code = generate_otp_for_identifier(req.identifier)
     dispatch_res = await dispatch_otp(req.identifier, otp_code, purpose="login")
+    if not dispatch_res.get("dispatched") and "@" in req.identifier and settings.resend_api_key:
+        err_msg = dispatch_res.get("message") or "Failed to deliver OTP email via Resend."
+        logger.error("OTP email delivery failure for %s: %s", req.identifier, err_msg)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Email delivery failed: {err_msg}",
+        )
+
     logger.info(
         "OTP generated for %s (dispatched: %s via %s)",
         req.identifier,
