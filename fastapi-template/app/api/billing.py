@@ -415,17 +415,102 @@ async def razorpay_webhook(
         order_id = payment_entity.get("order_id")
         notes = payment_entity.get("notes", {})
         user_id = notes.get("user_id")
-        plan_name = notes.get("plan_name", "PRO")
+        plan_name = (notes.get("plan_name") or "PRO").upper().strip()
+        billing_cycle = (notes.get("billing_cycle") or "MONTHLY").upper().strip()
+        amount_paise = payment_entity.get("amount", 0)
+        amount = amount_paise / 100.0 if amount_paise else 1999.0
 
-        if user_id and order_id:
-            # Reconcile payment record
-            stmt = select(PaymentRecord).where(PaymentRecord.order_id == order_id)
-            res = await db.execute(stmt)
-            p_rec = res.scalar_one_or_none()
-            if p_rec:
+        if user_id:
+            now = datetime.now(timezone.utc)
+            duration_days = 365 if billing_cycle == "YEARLY" else 30
+            end_date = now + timedelta(days=duration_days)
+
+            # 1. Update / Create Subscription
+            sub_stmt = select(SubscriptionRecord).where(
+                SubscriptionRecord.user_id == user_id,
+                SubscriptionRecord.status == "ACTIVE",
+            )
+            sub_res = await db.execute(sub_stmt)
+            sub = sub_res.scalar_one_or_none()
+
+            if not sub:
+                sub = SubscriptionRecord(
+                    user_id=user_id,
+                    plan_name=plan_name,
+                    status="ACTIVE",
+                    billing_cycle=billing_cycle,
+                    amount=amount,
+                    currency="INR",
+                    start_date=now,
+                    end_date=end_date,
+                )
+                db.add(sub)
+            else:
+                sub.plan_name = plan_name
+                sub.status = "ACTIVE"
+                sub.billing_cycle = billing_cycle
+                sub.amount = amount
+                sub.start_date = now
+                sub.end_date = end_date
+
+            await db.flush()
+
+            # 2. Reconcile or create PaymentRecord safely
+            p_rec = None
+            if order_id:
+                p_stmt = select(PaymentRecord).where(PaymentRecord.order_id == order_id)
+                p_res = await db.execute(p_stmt)
+                p_rec = p_res.scalar_one_or_none()
+            if not p_rec and pay_id:
+                p_stmt = select(PaymentRecord).where(PaymentRecord.payment_ref == pay_id)
+                p_res = await db.execute(p_stmt)
+                p_rec = p_res.scalar_one_or_none()
+
+            if not p_rec:
+                p_rec = PaymentRecord(
+                    user_id=user_id,
+                    subscription_id=sub.id,
+                    gateway="RAZORPAY",
+                    payment_ref=pay_id or f"pay_{uuid.uuid4().hex[:14]}",
+                    order_id=order_id or f"ord_{uuid.uuid4().hex[:14]}",
+                    amount=amount,
+                    currency="INR",
+                    status="SUCCESS",
+                    method="RAZORPAY_WEBHOOK",
+                )
+                db.add(p_rec)
+            else:
                 p_rec.status = "SUCCESS"
-                p_rec.payment_ref = pay_id
-                await db.commit()
+                if pay_id and p_rec.payment_ref != pay_id:
+                    existing_ref = (await db.execute(select(PaymentRecord).where(PaymentRecord.payment_ref == pay_id, PaymentRecord.id != p_rec.id))).scalar_one_or_none()
+                    if not existing_ref:
+                        p_rec.payment_ref = pay_id
+                p_rec.subscription_id = sub.id
+                p_rec.method = "RAZORPAY_WEBHOOK"
+
+            await db.flush()
+
+            # 3. Create GST Tax Invoice Record
+            inv_num = f"INV-{now.year}-{uuid.uuid4().hex[:8].upper()}"
+            tax_gst = round(amount * 0.18 / 1.18, 2)
+            base_price = round(amount - tax_gst, 2)
+
+            invoice = InvoiceRecord(
+                user_id=user_id,
+                payment_id=p_rec.id,
+                invoice_number=inv_num,
+                plan_name=plan_name,
+                amount=base_price,
+                tax_gst=tax_gst,
+                total_amount=amount,
+                currency="INR",
+                status="PAID",
+                issued_at=now,
+            )
+            db.add(invoice)
+            await db.commit()
+
+            logger.info("Webhook reconciled: User %s upgraded to %s (Invoice: %s, PayID: %s)", user_id, plan_name, inv_num, pay_id)
 
     elif event_type == "payment.failed":
         payment_entity = payload.get("payment", {}).get("entity", {})
@@ -440,7 +525,7 @@ async def razorpay_webhook(
                 p_rec.error_reason = error_desc
                 await db.commit()
 
-    elif event_type == "subscription.cancelled":
+    elif event_type in ("subscription.cancelled", "payment.refunded"):
         sub_entity = payload.get("subscription", {}).get("entity", {})
         sub_id = sub_entity.get("id")
         if sub_id:

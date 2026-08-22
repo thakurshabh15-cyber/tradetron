@@ -19,7 +19,9 @@ async def test_billing_and_payments_suite():
             "full_name": "Billing Test User",
         })
         assert reg_res.status_code == 201
-        token = reg_res.json()["access_token"]
+        reg_data = reg_res.json()
+        token = reg_data["access_token"]
+        user_id_str = reg_data["user"]["id"]
         headers = {"Authorization": f"Bearer {token}"}
 
         # 2. Test Get Plans from Database
@@ -109,7 +111,7 @@ async def test_billing_and_payments_suite():
         assert cancel_res.status_code == 200
         assert cancel_res.json()["status"] == "CANCELLED"
 
-        # 10. Test Razorpay Webhook Processing
+        # 10. Test Razorpay Webhook Processing (Signature verified -> Updates DB subscription & creates invoice)
         webhook_payload = {
             "entity": "event",
             "account_id": "acc_tradetron_test",
@@ -118,11 +120,16 @@ async def test_billing_and_payments_suite():
             "payload": {
                 "payment": {
                     "entity": {
-                        "id": "pay_webhook_test_123",
+                        "id": "pay_webhook_live_test_7788",
                         "order_id": order_id,
                         "status": "captured",
                         "amount": 199900,
                         "currency": "INR",
+                        "notes": {
+                            "user_id": user_id_str,
+                            "plan_name": "ELITE",
+                            "billing_cycle": "MONTHLY",
+                        },
                     }
                 }
             },
@@ -140,3 +147,4 @@ async def test_billing_and_payments_suite():
         )
         assert webhook_res.status_code == 200
         assert webhook_res.json()["status"] == "ok"
+        assert webhook_res.json()["event"] == "payment.captured"
