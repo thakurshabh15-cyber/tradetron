@@ -19,10 +19,11 @@ import {
   Receipt,
 } from "lucide-react";
 import { useApi } from "../hooks/useApi";
-import { authFetch } from "../services/apiClient";
+import { authFetch, getStoredUser } from "../services/apiClient";
 import { API_BASE } from "../config";
 
 export default function Settings() {
+  const storedUser = getStoredUser();
   const [activeTab, setActiveTab] = useState("profile"); // "profile" | "billing"
   const { data: profileData, refetch: refetchProfile } = useApi("/api/user/profile");
   const { data: notifData, refetch: refetchNotifs } = useApi("/api/user/notifications");
@@ -31,7 +32,7 @@ export default function Settings() {
   const { data: invoicesData, refetch: refetchInvoices } = useApi("/api/billing/invoices");
 
   // Profile Form State
-  const [fullName, setFullName] = useState("");
+  const [fullName, setFullName] = useState(storedUser?.full_name || "");
   const [profilePhoto, setProfilePhoto] = useState(null);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [profileMsg, setProfileMsg] = useState(null);
@@ -47,7 +48,7 @@ export default function Settings() {
   // Notification Preferences State
   const [notifs, setNotifs] = useState({
     email_enabled: true,
-    email_address: "trader@tradetron.ai",
+    email_address: storedUser?.email || "",
     telegram_enabled: false,
     telegram_chat_id: "",
     push_enabled: true,
@@ -408,7 +409,7 @@ export default function Settings() {
                     value={fullName}
                     onChange={(e) => setFullName(e.target.value)}
                     className="input-field text-xs"
-                    placeholder="e.g. Satoshi Nakamoto"
+                    placeholder="Enter your full name"
                   />
                 </div>
 
@@ -419,7 +420,7 @@ export default function Settings() {
                   <input
                     type="email"
                     disabled
-                    value={profileData?.email || "trader@tradetron.ai"}
+                    value={profileData?.email || storedUser?.email || ""}
                     className="input-field text-xs opacity-60 cursor-not-allowed bg-slate-900"
                   />
                 </div>
@@ -430,7 +431,7 @@ export default function Settings() {
                   </label>
                   <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 text-xs font-medium uppercase font-mono">
                     <Shield size={12} />
-                    {profileData?.role || "trader"}
+                    {profileData?.role || storedUser?.role || "trader"}
                   </div>
                 </div>
               </div>

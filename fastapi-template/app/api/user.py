@@ -108,6 +108,7 @@ async def update_setup_status(req: UpdateSetupTaskRequest):
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import Depends
+from app.api.auth import get_current_user
 from app.db.session import get_db
 from app.models.user import UserRecord
 from app.models.notification import NotificationPreferenceRecord
@@ -131,27 +132,15 @@ class NotificationPreferencesSchema(BaseModel):
 
 
 @router.get("/profile")
-async def get_profile(db: AsyncSession = Depends(get_db)):
-    """Fetch user profile information."""
-    stmt = select(UserRecord).order_by(UserRecord.created_at.asc())
-    res = await db.execute(stmt)
-    user = res.scalars().first()
-
-    if not user:
-        # Default placeholder user profile if not yet created
-        return {
-            "id": "trader-default-001",
-            "email": "trader@tradetron.ai",
-            "full_name": "Algo Master Trader",
-            "role": "trader",
-            "profile_photo": None,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-
+async def get_profile(
+    user: UserRecord = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fetch authenticated user profile information directly from database."""
     return {
         "id": user.id,
         "email": user.email,
-        "full_name": user.full_name,
+        "full_name": user.full_name or user.email.split("@")[0].capitalize(),
         "role": user.role,
         "profile_photo": user.profile_photo,
         "created_at": user.created_at.isoformat() if user.created_at else None,
@@ -161,25 +150,14 @@ async def get_profile(db: AsyncSession = Depends(get_db)):
 @router.put("/profile")
 async def update_profile(
     req: UpdateProfileRequest,
+    user: UserRecord = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update profile attributes including full name and base64 profile photo."""
-    stmt = select(UserRecord).order_by(UserRecord.created_at.asc())
-    res = await db.execute(stmt)
-    user = res.scalars().first()
-
-    if not user:
-        user = UserRecord(
-            email="trader@tradetron.ai",
-            full_name=req.full_name or "Algo Master Trader",
-            profile_photo=req.profile_photo,
-        )
-        db.add(user)
-    else:
-        if req.full_name is not None:
-            user.full_name = req.full_name
-        if req.profile_photo is not None:
-            user.profile_photo = req.profile_photo
+    """Update authenticated user profile attributes including full name and base64 profile photo."""
+    if req.full_name is not None:
+        user.full_name = req.full_name
+    if req.profile_photo is not None:
+        user.profile_photo = req.profile_photo
 
     await db.commit()
     await db.refresh(user)
@@ -194,16 +172,22 @@ async def update_profile(
 
 
 @router.get("/notifications")
-async def get_notifications(db: AsyncSession = Depends(get_db)):
-    """Fetch user notification preferences (Telegram, email, push)."""
-    stmt = select(NotificationPreferenceRecord)
+async def get_notifications(
+    user: UserRecord = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fetch authenticated user notification preferences (Telegram, email, push)."""
+    stmt = select(NotificationPreferenceRecord).where(
+        NotificationPreferenceRecord.user_id == user.id
+    )
     res = await db.execute(stmt)
-    prefs = res.scalars().first()
+    prefs = res.scalar_one_or_none()
 
     if not prefs:
         prefs = NotificationPreferenceRecord(
+            user_id=user.id,
             email_enabled=True,
-            email_address="trader@tradetron.ai",
+            email_address=user.email,
             telegram_enabled=False,
             telegram_chat_id="",
             push_enabled=True,
@@ -215,7 +199,7 @@ async def get_notifications(db: AsyncSession = Depends(get_db)):
     return {
         "id": prefs.id,
         "email_enabled": prefs.email_enabled,
-        "email_address": prefs.email_address,
+        "email_address": prefs.email_address or user.email,
         "telegram_enabled": prefs.telegram_enabled,
         "telegram_chat_id": prefs.telegram_chat_id,
         "push_enabled": prefs.push_enabled,
@@ -229,15 +213,21 @@ async def get_notifications(db: AsyncSession = Depends(get_db)):
 @router.put("/notifications")
 async def update_notifications(
     req: NotificationPreferencesSchema,
+    user: UserRecord = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update notification preferences for Telegram, Email, and Web Push."""
-    stmt = select(NotificationPreferenceRecord)
+    """Update authenticated user notification preferences for Telegram, Email, and Web Push."""
+    stmt = select(NotificationPreferenceRecord).where(
+        NotificationPreferenceRecord.user_id == user.id
+    )
     res = await db.execute(stmt)
-    prefs = res.scalars().first()
+    prefs = res.scalar_one_or_none()
 
     if not prefs:
-        prefs = NotificationPreferenceRecord(**req.model_dump())
+        prefs = NotificationPreferenceRecord(
+            user_id=user.id,
+            **req.model_dump(),
+        )
         db.add(prefs)
     else:
         for k, v in req.model_dump().items():
