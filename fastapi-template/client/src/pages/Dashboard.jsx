@@ -9,6 +9,7 @@ import FastOrderPanel from "../components/FastOrderPanel";
 import ErrorBoundary from "../components/ErrorBoundary";
 import { SkeletonCard, ErrorState } from "../components/SkeletonLoaders";
 import { useApi } from "../hooks/useApi";
+import { useDebounce } from "../hooks/useDebounce";
 import { useMarket } from "../context/MarketContext";
 import { API_BASE } from "../config";
 import {
@@ -77,18 +78,20 @@ export default function Dashboard() {
   const { data: summaryData, loading: summaryLoading, error: summaryError, refetch: refetchSummary } = useApi("/api/dashboard/summary");
   const { data: positionsData, loading: positionsLoading, error: positionsError, refetch: refetchPositions } = useApi("/api/trades/positions");
 
+  const debouncedSearchQuery = useDebounce(searchQuery, 350);
+
   // Debounced Universal Instrument Search across NSE/BSE/NFO/MCX/Crypto/Forex
   useEffect(() => {
-    if (!searchQuery.trim()) {
+    if (!debouncedSearchQuery.trim()) {
       setSearchResults([]);
       setIsSearching(false);
       return;
     }
 
-    const timer = setTimeout(async () => {
+    const fetchInstruments = async () => {
       setIsSearching(true);
       try {
-        const res = await fetch(`${API_BASE}/api/market-data/instruments/search?q=${encodeURIComponent(searchQuery)}&limit=15`);
+        const res = await fetch(`${API_BASE}/api/market-data/instruments/search?q=${encodeURIComponent(debouncedSearchQuery)}&limit=15`);
         if (res.ok) {
           const data = await res.json();
           setSearchResults(data.instruments || []);
@@ -98,10 +101,10 @@ export default function Dashboard() {
       } finally {
         setIsSearching(false);
       }
-    }, 200);
+    };
 
-    return () => clearTimeout(timer);
-  }, [searchQuery]);
+    fetchInstruments();
+  }, [debouncedSearchQuery]);
 
   // Click outside to close search dropdown
   useEffect(() => {

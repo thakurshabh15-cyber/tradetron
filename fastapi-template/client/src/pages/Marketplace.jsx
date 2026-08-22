@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Search, Filter, Play, Star, TrendingUp, ShieldCheck, Users, RefreshCw, ChevronLeft, ChevronRight, Zap } from "lucide-react";
 import DeploymentModal from "../components/DeploymentModal";
+import { useDebounce } from "../hooks/useDebounce";
 import { API_BASE } from "../config";
 const CATEGORIES = ["All", "Momentum", "Mean Reversion", "Breakout", "Trend Following", "Options"];
 
@@ -16,11 +17,14 @@ export default function Marketplace() {
   const [sortBy, setSortBy] = useState("roi_desc");
   const [loading, setLoading] = useState(false);
 
+  const debouncedTextSearch = useDebounce(textSearch, 350);
+  const debouncedSymbolSearch = useDebounce(symbolSearch, 350);
+
   // Deployment modal state
   const [selectedStrategy, setSelectedStrategy] = useState(null);
   const [isDeployOpen, setIsDeployOpen] = useState(false);
 
-  const fetchMarketplace = async () => {
+  const fetchMarketplace = useCallback(async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams({
@@ -30,8 +34,8 @@ export default function Marketplace() {
         pricing_type: pricingType,
         sort_by: sortBy,
       });
-      if (symbolSearch.trim()) params.append("symbol", symbolSearch.trim());
-      if (textSearch.trim()) params.append("search", textSearch.trim());
+      if (debouncedSymbolSearch.trim()) params.append("symbol", debouncedSymbolSearch.trim());
+      if (debouncedTextSearch.trim()) params.append("search", debouncedTextSearch.trim());
 
       const res = await fetch(`${API_BASE}/api/strategies/marketplace?${params.toString()}`);
       if (res.ok) {
@@ -45,11 +49,11 @@ export default function Marketplace() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [page, category, pricingType, sortBy, debouncedSymbolSearch, debouncedTextSearch]);
 
   useEffect(() => {
     fetchMarketplace();
-  }, [page, category, pricingType, sortBy]);
+  }, [fetchMarketplace]);
 
   const handleSearchSubmit = (e) => {
     e.preventDefault();

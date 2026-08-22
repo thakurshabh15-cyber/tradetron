@@ -17,6 +17,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { useApi } from "../hooks/useApi";
+import { useDebounce } from "../hooks/useDebounce";
 import { useMarket } from "../context/MarketContext";
 import MarketTicker from "../components/MarketTicker";
 import FastOrderPanel from "../components/FastOrderPanel";
@@ -86,14 +87,16 @@ export default function Watchlist() {
     }
   }, [marketData]);
 
+  const debouncedSearchQuery = useDebounce(searchQuery, 350);
+
   // Debounced search query against backend instrument master
   useEffect(() => {
     let active = true;
-    const timer = setTimeout(async () => {
+    const fetchInstruments = async () => {
       setIsSearching(true);
       try {
         const params = new URLSearchParams();
-        if (searchQuery.trim()) params.append("q", searchQuery.trim());
+        if (debouncedSearchQuery.trim()) params.append("q", debouncedSearchQuery.trim());
         if (selectedSegment !== "ALL") params.append("segment", selectedSegment);
         params.append("limit", "15");
 
@@ -107,13 +110,14 @@ export default function Watchlist() {
       } finally {
         if (active) setIsSearching(false);
       }
-    }, 150);
+    };
+
+    fetchInstruments();
 
     return () => {
       active = false;
-      clearTimeout(timer);
     };
-  }, [searchQuery, selectedSegment]);
+  }, [debouncedSearchQuery, selectedSegment]);
 
   const handleAddSymbol = async (symbol, notes = "") => {
     if (!symbol) return;

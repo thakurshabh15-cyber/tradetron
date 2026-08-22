@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { useDebounce } from "../hooks/useDebounce";
 import {
   ShieldCheck,
   ShieldAlert,
@@ -42,6 +43,7 @@ export default function Admin() {
   const [loading, setLoading] = useState(false);
   const [actionMsg, setActionMsg] = useState(null);
   const [userSearchQuery, setUserSearchQuery] = useState("");
+  const debouncedUserSearchQuery = useDebounce(userSearchQuery, 350);
 
   const authHeaders = {
     Authorization: `Bearer ${adminToken}`,
@@ -83,7 +85,7 @@ export default function Admin() {
   };
 
   // Fetch overview & current tab data
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     if (!adminToken) return;
     setLoading(true);
     try {
@@ -91,8 +93,8 @@ export default function Admin() {
         const res = await fetch(`${API_BASE}/api/admin/overview`, { headers: authHeaders });
         if (res.ok) setOverview(await res.json());
       } else if (activeTab === "users") {
-        const url = userSearchQuery
-          ? `${API_BASE}/api/admin/users?query=${encodeURIComponent(userSearchQuery)}`
+        const url = debouncedUserSearchQuery
+          ? `${API_BASE}/api/admin/users?query=${encodeURIComponent(debouncedUserSearchQuery)}`
           : `${API_BASE}/api/admin/users`;
         const res = await fetch(url, { headers: authHeaders });
         if (res.ok) setUsers(await res.json());
@@ -116,15 +118,15 @@ export default function Admin() {
         if (res.ok) setSystemHealth(await res.json());
       }
     } catch (err) {
-      console.error(err);
+      console.error("Failed to fetch admin governance data:", err);
     } finally {
       setLoading(false);
     }
-  };
+  }, [adminToken, activeTab, debouncedUserSearchQuery]);
 
   useEffect(() => {
     fetchData();
-  }, [adminToken, activeTab, userSearchQuery]);
+  }, [fetchData]);
 
   // Admin Actions
   const handleToggleUserStatus = async (userId, currentActive) => {
