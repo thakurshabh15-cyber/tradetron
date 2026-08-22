@@ -1,12 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { API_BASE } from "../config";
-
-function getApiBase() {
-  return API_BASE;
-}
+import { authFetch } from "../services/apiClient";
 
 /**
- * Generic REST API hook with loading/error states.
+ * Generic REST API hook with loading/error states and automatic Authorization token injection.
  *
  * @param {string} path - API path (e.g., "/api/strategies")
  * @param {object} options
@@ -22,8 +18,7 @@ export function useApi(path, { immediate = true } = {}) {
     setLoading(true);
     setError(null);
     try {
-      const base = getApiBase();
-      const res = await fetch(`${base}${path}`);
+      const res = await authFetch(path);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       setData(json);
@@ -45,10 +40,8 @@ export function useApi(path, { immediate = true } = {}) {
       setLoading(true);
       setError(null);
       try {
-        const base = getApiBase();
-        const res = await fetch(`${base}${path}`, {
+        const res = await authFetch(path, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
         if (!res.ok) {
@@ -73,10 +66,8 @@ export function useApi(path, { immediate = true } = {}) {
       setLoading(true);
       setError(null);
       try {
-        const base = getApiBase();
-        const res = await fetch(`${base}${path}/${id}`, {
+        const res = await authFetch(`${path}/${id}`, {
           method: "PATCH",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -98,8 +89,7 @@ export function useApi(path, { immediate = true } = {}) {
       setLoading(true);
       setError(null);
       try {
-        const base = getApiBase();
-        const res = await fetch(`${base}${path}/${id}`, {
+        const res = await authFetch(`${path}/${id}`, {
           method: "DELETE",
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
