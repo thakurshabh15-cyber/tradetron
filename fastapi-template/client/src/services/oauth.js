@@ -5,6 +5,17 @@
 
 import { API_BASE, setTokens } from "./apiClient";
 
+export function isGoogleOAuthConfigured() {
+  return (
+    typeof window !== "undefined" &&
+    Boolean(window.google?.accounts?.id || import.meta.env.VITE_GOOGLE_CLIENT_ID)
+  );
+}
+
+export function isOAuthAvailable() {
+  return isGoogleOAuthConfigured();
+}
+
 export async function loginWithOAuth(provider, oauthToken, email = null, fullName = null) {
   try {
     const res = await fetch(`${API_BASE}/api/auth/oauth`, {
@@ -39,21 +50,21 @@ export async function loginWithOAuth(provider, oauthToken, email = null, fullNam
  */
 export async function triggerOAuthFlow(provider) {
   if (provider === "google") {
-    // If Google Identity Services script is loaded on window
-    if (window.google?.accounts?.id) {
+    if (typeof window !== "undefined" && window.google?.accounts?.id) {
       return new Promise((resolve, reject) => {
         window.google.accounts.id.prompt((notification) => {
           if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
-            reject(new Error("Google Sign-In prompt closed or not displayed. Please check configuration."));
+            reject(new Error("Google Sign-In prompt closed."));
           }
         });
       });
     }
-    throw new Error(
-      "Google Sign-In client is not configured. Set GOOGLE_OAUTH_CLIENT_ID in your environment."
-    );
+    // Silently log rather than throwing screen-blocking error
+    console.warn("Google Sign-In is not configured in this environment.");
+    return null;
   } else if (provider === "apple") {
-    throw new Error("Apple Sign-In is coming soon.");
+    console.warn("Apple Sign-In is not configured.");
+    return null;
   }
-  throw new Error(`Unsupported provider: ${provider}`);
+  return null;
 }

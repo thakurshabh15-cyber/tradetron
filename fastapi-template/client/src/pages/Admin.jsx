@@ -242,6 +242,24 @@ export default function Admin() {
               <Lock size={14} />
               {loginLoading ? "Authenticating Clearance..." : "Enter Governance Command Center"}
             </button>
+
+            <div className="mt-4 p-3 rounded-xl bg-violet-500/10 border border-violet-500/20 text-center">
+              <div className="text-[11px] text-violet-300 font-medium">Default Administrator Credentials:</div>
+              <div className="text-[11px] text-slate-300 font-mono mt-0.5">
+                <span className="text-violet-400">admin@tradetron.io</span> • <span className="text-slate-400">Admin@Tradetron2026!</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setLoginEmail("admin@tradetron.io");
+                  setLoginPassword("Admin@Tradetron2026!");
+                  setAdminPin("9988");
+                }}
+                className="mt-2 text-[10px] text-violet-400 hover:text-violet-300 underline font-semibold transition-colors"
+              >
+                Auto-fill Admin Credentials
+              </button>
+            </div>
           </form>
         </div>
       </div>

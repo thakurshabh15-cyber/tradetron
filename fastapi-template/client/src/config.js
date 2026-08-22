@@ -1,12 +1,15 @@
 /**
  * Global Application & API Configuration
- * Supports dynamic configuration via Vite environment variables:
- * - VITE_API_URL: Target Backend REST URL (e.g. "https://tradetron-backend.onrender.com")
- * - VITE_WS_URL: Target Backend WebSocket URL (e.g. "wss://tradetron-backend.onrender.com")
+ * Supports dynamic configuration via Vite environment variables with production fallback:
+ * - VITE_API_URL: Target Backend REST URL
+ * - VITE_WS_URL: Target Backend WebSocket URL
  */
 
 const rawApiUrl = import.meta.env.VITE_API_URL;
 const rawWsUrl = import.meta.env.VITE_WS_URL;
+
+const PROD_API_URL = "https://tradetron-8jkz.onrender.com";
+const PROD_WS_URL = "wss://tradetron-8jkz.onrender.com";
 
 export const API_BASE = (() => {
   if (rawApiUrl !== undefined && rawApiUrl !== "") {
@@ -19,16 +22,13 @@ export const API_BASE = (() => {
         return "http://127.0.0.1:8080";
       }
     }
-    // In production without VITE_API_URL, log warning to assist quick configuration
-    console.warn(
-      "⚠️ [Tradetron Notice] VITE_API_URL is not set. Ensure VITE_API_URL is configured in your Vercel Project Settings (e.g. https://your-backend.onrender.com) and redeployed."
-    );
-    return "";
+    // Production fallback for Vercel / Cloud deployments
+    return PROD_API_URL;
   }
-  return "http://127.0.0.1:8080";
+  return PROD_API_URL;
 })();
 
-export function getWsUrl(path) {
+export function getWsUrl(path = "") {
   const cleanPath = path.startsWith("/") ? path : `/${path}`;
 
   if (rawWsUrl !== undefined && rawWsUrl !== "") {
@@ -37,20 +37,19 @@ export function getWsUrl(path) {
   }
 
   // Derive WS URL from API_BASE if it's an absolute URL
-  if (rawApiUrl && rawApiUrl.startsWith("http")) {
-    const wsBase = rawApiUrl.replace(/^http/, "ws").replace(/\/$/, "");
+  if (API_BASE && API_BASE.startsWith("http")) {
+    const wsBase = API_BASE.replace(/^http/, "ws").replace(/\/$/, "");
     return `${wsBase}${cleanPath}`;
   }
 
   if (typeof window !== "undefined") {
     if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
-      if (window.location.port === "5173" || window.location.port === "3000") {
-        return `ws://127.0.0.1:8080${cleanPath}`;
-      }
+      return `ws://127.0.0.1:8080${cleanPath}`;
     }
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    return `${protocol}//${window.location.host}${cleanPath}`;
+    return `${PROD_WS_URL}${cleanPath}`;
   }
 
-  return `ws://127.0.0.1:8080${cleanPath}`;
+  return `${PROD_WS_URL}${cleanPath}`;
 }
+
+export const WS_BASE = getWsUrl("");

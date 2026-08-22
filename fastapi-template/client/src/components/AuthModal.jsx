@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { X, Lock, Mail, User, ShieldCheck, ArrowRight, CheckCircle2, AlertCircle, KeyRound, Smartphone } from "lucide-react";
-import { triggerOAuthFlow } from "../services/oauth";
+import { triggerOAuthFlow, isOAuthAvailable } from "../services/oauth";
 import { API_BASE, setTokens } from "../services/apiClient";
 
 export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
@@ -227,8 +227,10 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
     setError(null);
     try {
       const authResult = await triggerOAuthFlow(provider);
-      setSuccessMsg(`Signed in with ${provider.toUpperCase()}!`);
-      setTimeout(() => handleSaveTokens(authResult), 600);
+      if (authResult) {
+        setSuccessMsg(`Signed in with ${provider.toUpperCase()}!`);
+        setTimeout(() => handleSaveTokens(authResult), 600);
+      }
     } catch (err) {
       setError(err.message || `Failed to sign in with ${provider}`);
     } finally {
@@ -662,8 +664,8 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
           </div>
         )}
 
-        {/* 6. OAUTH DIVIDER & SOCIAL BUTTONS */}
-        {tab !== "forgot_password" && tab !== "register_verify" && (
+        {/* 6. OAUTH DIVIDER & SOCIAL BUTTONS (Rendered only when configured) */}
+        {isOAuthAvailable() && tab !== "forgot_password" && tab !== "register_verify" && (
           <>
             <div className="relative my-4">
               <div className="absolute inset-0 flex items-center">
