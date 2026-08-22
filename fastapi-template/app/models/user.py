@@ -36,7 +36,12 @@ class UserRecord(Base):
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=True)
     full_name: Mapped[str] = mapped_column(String(100), default="Trader")
     role: Mapped[str] = mapped_column(String(20), default="trader")  # admin, trader, creator
-    kyc_status: Mapped[str] = mapped_column(String(20), default="PENDING")  # PENDING, VERIFIED, REJECTED
+    kyc_status: Mapped[str] = mapped_column(String(20), default="NOT_SUBMITTED")  # NOT_SUBMITTED, PENDING, VERIFIED, REJECTED
+    pan_number: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    id_proof_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    id_proof_doc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    kyc_submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    kyc_rejection_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     profile_photo: Mapped[str | None] = mapped_column(Text, nullable=True)

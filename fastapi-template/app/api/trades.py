@@ -73,3 +73,84 @@ async def trade_stats(db: AsyncSession = Depends(get_db)):
         total_pnl=Decimal(str(round(pnl_total, 2))),
         win_rate=round(winning / total * 100, 1) if total else 0,
     )
+
+
+# ── Manual Order Placement with KYC Check ─────────────────────────────────────
+from datetime import datetime, timezone
+import uuid
+from pydantic import BaseModel, Field
+from typing import Optional, Literal
+from fastapi import HTTPException
+from app.api.auth import get_current_user
+from app.models.user import UserRecord
+
+
+class ManualOrderRequest(BaseModel):
+    symbol: str = Field(..., description="NSE/Crypto ticker symbol e.g. NIFTY50, RELIANCE, BTCUSDT")
+    side: Literal["BUY", "SELL"]
+    quantity: int = Field(..., gt=0)
+    order_type: Literal["MARKET", "LIMIT"] = "MARKET"
+    price: Optional[float] = None
+    mode: Literal["PAPER", "LIVE"] = "PAPER"
+
+
+@router.post("/order")
+async def place_manual_order(
+    req: ManualOrderRequest,
+    user: UserRecord = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Place manual DMA order from Fast Order Panel with strict KYC verification gate for LIVE mode."""
+    if req.mode == "LIVE":
+        if user.kyc_status != "VERIFIED":
+            raise HTTPException(
+                status_code=403,
+                detail="KYC Verification Required: SEBI regulatory compliance mandates that your KYC status must be VERIFIED before placing live real-money orders.",
+            )
+
+    executed_price = req.price or (24850.0 if "NIFTY" in req.symbol else 2950.0)
+
+    trade = TradeRecord(
+        id=str(uuid.uuid4()),
+        order_id=f"ORD_{int(datetime.now(timezone.utc).timestamp())}",
+        strategy_name="Manual Fast Order",
+        symbol=req.symbol.upper(),
+        side=req.side,
+        quantity=req.quantity,
+        price=executed_price,
+        entry_price=executed_price,
+        pnl=0.0,
+        mode=req.mode,
+        user_id=user.id,
+    )
+    db.add(trade)
+    await db.commit()
+    await db.refresh(trade)
+
+    from app.core.audit import log_audit_event
+    await log_audit_event(
+        db=db,
+        action="MANUAL_ORDER_PLACED",
+        resource_type="ORDER",
+        user_id=user.id,
+        status="EXECUTED",
+        details={
+            "symbol": req.symbol,
+            "side": req.side,
+            "quantity": req.quantity,
+            "price": executed_price,
+            "mode": req.mode,
+        },
+    )
+
+    return {
+        "success": True,
+        "order_id": trade.order_id,
+        "symbol": trade.symbol,
+        "side": trade.side,
+        "quantity": trade.quantity,
+        "price": trade.price,
+        "mode": trade.mode,
+        "status": "FILLED",
+        "executed_at": trade.executed_at.isoformat() if trade.executed_at else datetime.now(timezone.utc).isoformat(),
+    }

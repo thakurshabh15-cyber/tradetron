@@ -249,3 +249,82 @@ async def update_notifications(
         "price_alert_notify": prefs.price_alert_notify,
     }
 
+
+# ── KYC Compliance & Document Verification ───────────────────────────────────
+import re
+
+
+class KYCSubmissionRequest(BaseModel):
+    pan_number: str = Field(..., description="Indian Income Tax PAN (e.g. ABCDE1234F)")
+    id_proof_type: str = Field("PAN_CARD", description="PAN_CARD, AADHAAR, PASSPORT, VOTER_ID, DRIVING_LICENSE")
+    id_proof_doc: str = Field(..., description="Base64 encoded image or document URI")
+
+
+@router.get("/kyc")
+async def get_kyc_status(
+    user: UserRecord = Depends(get_current_user),
+):
+    """Retrieve the authenticated user's real KYC verification status and documents."""
+    return {
+        "user_id": user.id,
+        "email": user.email,
+        "full_name": user.full_name,
+        "kyc_status": user.kyc_status,
+        "pan_number": user.pan_number,
+        "id_proof_type": user.id_proof_type,
+        "has_id_proof_doc": bool(user.id_proof_doc),
+        "kyc_submitted_at": user.kyc_submitted_at.isoformat() if user.kyc_submitted_at else None,
+        "kyc_rejection_reason": user.kyc_rejection_reason,
+    }
+
+
+@router.post("/kyc/submit")
+async def submit_kyc(
+    req: KYCSubmissionRequest,
+    user: UserRecord = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Submit PAN and ID document proof for regulatory SEBI KYC compliance."""
+    pan_clean = req.pan_number.strip().upper()
+    pan_regex = r"^[A-Z]{5}[0-9]{4}[A-Z]{1}$"
+    if not re.match(pan_regex, pan_clean):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid PAN format. PAN must be exactly 10 alphanumeric characters (e.g. ABCDE1234F).",
+        )
+
+    if not req.id_proof_doc or len(req.id_proof_doc) < 20:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid ID document proof. Please upload a valid document or image.",
+        )
+
+    user.pan_number = pan_clean
+    user.id_proof_type = req.id_proof_type.strip().upper()
+    user.id_proof_doc = req.id_proof_doc
+    user.kyc_status = "PENDING"
+    user.kyc_submitted_at = datetime.now(timezone.utc)
+    user.kyc_rejection_reason = None
+
+    await db.commit()
+    await db.refresh(user)
+
+    from app.core.audit import log_audit_event
+    await log_audit_event(
+        db=db,
+        action="KYC_SUBMITTED",
+        resource_type="USER_KYC",
+        user_id=user.id,
+        status="PENDING",
+        details={"pan_number": f"{pan_clean[:2]}***{pan_clean[-2:]}", "id_proof_type": user.id_proof_type},
+    )
+
+    return {
+        "success": True,
+        "message": "KYC documents submitted successfully. Status is now PENDING review.",
+        "kyc_status": "PENDING",
+        "pan_number": pan_clean,
+        "id_proof_type": user.id_proof_type,
+        "kyc_submitted_at": user.kyc_submitted_at.isoformat(),
+    }
+

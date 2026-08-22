@@ -1,4 +1,4 @@
-"""Unit tests for Real Broker OAuth (Zerodha, Upstox, Angel One), Encrypted Tokens, Daily Expiry, and Live Holdings/Margins."""
+"""Unit tests for Real Broker OAuth (Zerodha, Upstox, Angel One), KYC Gating, Encrypted Tokens, Daily Expiry, and Live Holdings/Margins."""
 
 import time
 from datetime import datetime, timedelta, timezone
@@ -6,6 +6,7 @@ from httpx import ASGITransport, AsyncClient
 from app.main import app
 from app.db.session import init_db, SessionLocal
 from app.models.broker_account import BrokerAccountRecord
+from app.models.user import UserRecord
 from sqlalchemy import select
 
 
@@ -24,7 +25,29 @@ async def test_broker_oauth_and_live_balances_suite():
         token = reg_res.json()["access_token"]
         headers = {"Authorization": f"Bearer {token}"}
 
-        # 2. Test Get OAuth Authorize URLs for all major Indian brokers
+        # 2. Test KYC Gate: Broker connection must be BLOCKED when KYC is NOT_SUBMITTED
+        blocked_auth_res = await client.get("/api/brokers/oauth/authorize?broker=ZERODHA", headers=headers)
+        assert blocked_auth_res.status_code == 403
+        assert "KYC Verification Required" in blocked_auth_res.json()["detail"]
+
+        # 3. Submit Real KYC flow
+        kyc_submit_res = await client.post("/api/user/kyc/submit", json={
+            "pan_number": "ABCDE1234F",
+            "id_proof_type": "PAN_CARD",
+            "id_proof_doc": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+        }, headers=headers)
+        assert kyc_submit_res.status_code == 200
+        assert kyc_submit_res.json()["kyc_status"] == "PENDING"
+
+        # Verify KYC via Admin or direct approval
+        async with SessionLocal() as db:
+            user_stmt = select(UserRecord).where(UserRecord.email == f"oauth_trader_{uid}@tradetron.io")
+            u_res = await db.execute(user_stmt)
+            user_rec = u_res.scalar_one()
+            user_rec.kyc_status = "VERIFIED"
+            await db.commit()
+
+        # 4. Test Get OAuth Authorize URLs for all major Indian brokers (Now Allowed)
         kite_auth_res = await client.get("/api/brokers/oauth/authorize?broker=ZERODHA", headers=headers)
         assert kite_auth_res.status_code == 200
         assert "kite.zerodha.com/connect/login" in kite_auth_res.json()["authorize_url"]
@@ -37,7 +60,7 @@ async def test_broker_oauth_and_live_balances_suite():
         assert angel_auth_res.status_code == 200
         assert "smartapi.angelbroking.com" in angel_auth_res.json()["authorize_url"]
 
-        # 3. Test OAuth Callback & Token Encryption for Zerodha
+        # 5. Test OAuth Callback & Token Encryption for Zerodha
         kite_callback_res = await client.post("/api/brokers/oauth/callback", json={
             "broker_name": "ZERODHA",
             "request_token": "kite_req_token_test_12345",
@@ -48,7 +71,7 @@ async def test_broker_oauth_and_live_balances_suite():
         assert kite_callback_res.json()["status"] == "CONNECTED"
         assert "token_expires_at" in kite_callback_res.json()
 
-        # 4. Test OAuth Callback & Token Encryption for Upstox
+        # 6. Test OAuth Callback & Token Encryption for Upstox
         upstox_callback_res = await client.post("/api/brokers/oauth/callback", json={
             "broker_name": "UPSTOX",
             "request_token": "upstox_auth_code_98765",
@@ -58,7 +81,7 @@ async def test_broker_oauth_and_live_balances_suite():
         upstox_acc_id = upstox_callback_res.json()["account_id"]
         assert upstox_callback_res.json()["status"] == "CONNECTED"
 
-        # 5. Test List Accounts with Token Expiry & Masked Keys
+        # 7. Test List Accounts with Token Expiry & Masked Keys
         accounts_res = await client.get("/api/brokers/accounts", headers=headers)
         assert accounts_res.status_code == 200
         accounts = accounts_res.json()
@@ -69,11 +92,11 @@ async def test_broker_oauth_and_live_balances_suite():
         assert kite_acc["status"] == "CONNECTED"
         assert "api_key_masked" in kite_acc
 
-        # 6. Test Live Margins Query
+        # 8. Test Live Margins Query
         kite_margins_res = await client.get(f"/api/brokers/accounts/{kite_acc_id}/margins", headers=headers)
         assert kite_margins_res.status_code == 200
 
-        # 7. Test Simulated Paper Account Live Holdings
+        # 9. Test Simulated Paper Account Live Holdings
         sim_link_res = await client.post("/api/brokers/accounts/manual", json={
             "broker_name": "SIMULATED",
             "client_id": "SIM_PAPER_01",
@@ -88,7 +111,7 @@ async def test_broker_oauth_and_live_balances_suite():
         holdings = sim_holdings_res.json()
         assert isinstance(holdings, list)
 
-        # 8. Test Daily Token Expiry Rejection & Graceful Prompt
+        # 10. Test Daily Token Expiry Rejection & Graceful Prompt
         async with SessionLocal() as db:
             stmt = select(BrokerAccountRecord).where(BrokerAccountRecord.id == kite_acc_id)
             res = await db.execute(stmt)
@@ -105,7 +128,7 @@ async def test_broker_oauth_and_live_balances_suite():
         assert expired_holdings_res.status_code == 401
         assert "expired" in expired_holdings_res.json()["detail"]
 
-        # 9. Test Invalid Angel One Credentials Rejection (Must return 400 and NOT connect)
+        # 11. Test Invalid Angel One Credentials Rejection (Must return 400 and NOT connect)
         invalid_angel_res = await client.post("/api/brokers/accounts/manual", json={
             "broker_name": "ANGEL_ONE",
             "client_id": "INVALID_CLIENT",
@@ -114,4 +137,3 @@ async def test_broker_oauth_and_live_balances_suite():
         }, headers=headers)
         assert invalid_angel_res.status_code == 400
         assert "validation failed" in invalid_angel_res.json()["detail"].lower()
-

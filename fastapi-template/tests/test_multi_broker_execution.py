@@ -26,12 +26,28 @@ async def test_multi_broker_execution_suite():
         token = reg_res.json()["access_token"]
         headers = {"Authorization": f"Bearer {token}"}
 
-        # 2. Test Zerodha Kite Connect Adapter & OAuth URL
+        # 2. Test KYC Gate: Broker connection must be BLOCKED when KYC is NOT_SUBMITTED
+        blocked_res = await client.get("/api/brokers/oauth/authorize?broker=ZERODHA", headers=headers)
+        assert blocked_res.status_code == 403
+
+        # Submit & Approve KYC for test user
+        from app.db.session import SessionLocal
+        from sqlalchemy import select
+        from app.models.user import UserRecord
+
+        async with SessionLocal() as db:
+            user_stmt = select(UserRecord).where(UserRecord.email == f"broker_trader_{uid}@tradetron.io")
+            u_res = await db.execute(user_stmt)
+            user_rec = u_res.scalar_one()
+            user_rec.kyc_status = "VERIFIED"
+            await db.commit()
+
+        # 3. Test Zerodha Kite Connect Adapter & OAuth URL (Allowed after KYC)
         auth_url_res = await client.get("/api/brokers/oauth/authorize?broker=ZERODHA", headers=headers)
         assert auth_url_res.status_code == 200
         assert "kite.zerodha.com" in auth_url_res.json()["authorize_url"]
 
-        # 3. Test OAuth Callback & Account Encryption
+        # 4. Test OAuth Callback & Account Encryption
         callback_res = await client.post("/api/brokers/oauth/callback", json={
             "broker_name": "ZERODHA",
             "request_token": "valid_mock_request_token",

@@ -11,16 +11,19 @@ import Admin from "./pages/Admin";
 import KillSwitchModal from "./components/KillSwitchModal";
 import BrokerConnectModal from "./components/BrokerConnectModal";
 import LiveOptInModal from "./components/LiveOptInModal";
+import KYCModal from "./components/KYCModal";
 import { authFetch } from "./services/apiClient";
 
-import { ShieldAlert, ShieldCheck, Power, Zap, Radio, Link as LinkIcon, AlertCircle } from "lucide-react";
+import { ShieldAlert, ShieldCheck, Power, Zap, Radio, Link as LinkIcon, AlertCircle, FileCheck } from "lucide-react";
 
 export default function App() {
   const [executionMode, setExecutionMode] = useState("PAPER"); // 'PAPER' is strictly enforced default
   const [brokerAccounts, setBrokerAccounts] = useState([]);
+  const [kycStatus, setKycStatus] = useState("NOT_SUBMITTED");
   const [isKillSwitchOpen, setIsKillSwitchOpen] = useState(false);
   const [isBrokerModalOpen, setIsBrokerModalOpen] = useState(false);
   const [isLiveOptInOpen, setIsLiveOptInOpen] = useState(false);
+  const [isKYCModalOpen, setIsKYCModalOpen] = useState(false);
   const [brokerWarning, setBrokerWarning] = useState(null);
 
   const fetchBrokers = useCallback(async () => {
@@ -44,20 +47,40 @@ export default function App() {
     }
   }, [executionMode]);
 
+  const fetchKYCStatus = useCallback(async () => {
+    try {
+      const res = await authFetch("/api/user/kyc");
+      if (res.ok) {
+        const data = await res.json();
+        setKycStatus(data.kyc_status || "NOT_SUBMITTED");
+      }
+    } catch {
+      setKycStatus("NOT_SUBMITTED");
+    }
+  }, []);
+
   useEffect(() => {
     fetchBrokers();
-  }, [fetchBrokers]);
+    fetchKYCStatus();
+  }, [fetchBrokers, fetchKYCStatus]);
 
   // Verified active brokers only
   const connectedBrokers = brokerAccounts.filter(
     (b) => b.status === "CONNECTED" && !b.is_token_expired
   );
 
-  const isLiveActive = executionMode === "LIVE" && connectedBrokers.length > 0;
+  const isLiveActive = executionMode === "LIVE" && connectedBrokers.length > 0 && kycStatus === "VERIFIED";
 
   const handleModeSwitch = (mode) => {
     setBrokerWarning(null);
     if (mode === "LIVE") {
+      if (kycStatus !== "VERIFIED") {
+        setBrokerWarning(
+          "KYC Verification Required: SEBI regulatory compliance mandates that your KYC status must be VERIFIED before enabling Live Broker execution."
+        );
+        setIsKYCModalOpen(true);
+        return;
+      }
       if (connectedBrokers.length === 0) {
         setBrokerWarning(
           "Cannot enable Live Execution: No verified broker account connected. Please connect Zerodha, Angel One, Upstox, or Binance first."
@@ -71,10 +94,22 @@ export default function App() {
     }
   };
 
+  const handleOpenBrokerModal = () => {
+    setBrokerWarning(null);
+    if (kycStatus !== "VERIFIED") {
+      setBrokerWarning(
+        "KYC Verification Required: SEBI compliance mandates that your KYC status must be VERIFIED before connecting a live broker account."
+      );
+      setIsKYCModalOpen(true);
+    } else {
+      setIsBrokerModalOpen(true);
+    }
+  };
+
   return (
     <BrowserRouter>
       <div className="flex min-h-screen bg-surface-950 text-slate-300 selection:bg-accent-500/20 selection:text-accent-400">
-        <Sidebar />
+        <Sidebar onOpenKYC={() => setIsKYCModalOpen(true)} kycStatus={kycStatus} />
         <main className="flex-1 lg:ml-64 pt-16 pb-20 lg:pt-6 lg:pb-8 px-4 sm:px-6 lg:px-8 space-y-6 overflow-x-hidden">
           {/* Top Execution Control & Mode Banner */}
           <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 p-3 rounded-xl bg-slate-900/90 border border-slate-800/80 shadow-lg">
@@ -94,14 +129,37 @@ export default function App() {
               <span className="hidden xl:inline-block text-[11px] text-slate-400">
                 {isLiveActive
                   ? `Real capital active across ${connectedBrokers.map((b) => b.broker_name).join(", ")}.`
+                  : kycStatus !== "VERIFIED"
+                  ? "Paper Simulation Mode Active (KYC Required for Live Broker Execution)."
                   : connectedBrokers.length === 0
-                  ? "Virtual paper balance ₹10,00,000 active. No verified live broker connected (Simulation Mode Only)."
+                  ? "Virtual paper balance ₹10,00,000 active. No live broker connected (Simulation Mode Only)."
                   : "Virtual paper balance ₹10,00,000 active. Real funds are protected."}
               </span>
             </div>
 
-            {/* Mode Switcher, Broker Link, and Emergency Kill-Switch Panic Button */}
+            {/* Mode Switcher, KYC Gate, Broker Link, and Panic Button */}
             <div className="flex items-center gap-2">
+              <button
+                onClick={() => setIsKYCModalOpen(true)}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-all ${
+                  kycStatus === "VERIFIED"
+                    ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+                    : kycStatus === "PENDING"
+                    ? "bg-amber-500/10 border-amber-500/30 text-amber-400"
+                    : "bg-violet-600/20 border-violet-500/40 text-violet-300 hover:bg-violet-600/30"
+                }`}
+                title="SEBI KYC Status"
+              >
+                <ShieldCheck size={13} />
+                <span>
+                  {kycStatus === "VERIFIED"
+                    ? "KYC Verified"
+                    : kycStatus === "PENDING"
+                    ? "KYC Pending"
+                    : "Verify KYC"}
+                </span>
+              </button>
+
               <div className="bg-slate-950 p-1 rounded-lg border border-slate-800 flex text-[11px] font-semibold">
                 <button
                   onClick={() => handleModeSwitch("PAPER")}
@@ -126,10 +184,7 @@ export default function App() {
               </div>
 
               <button
-                onClick={() => {
-                  setBrokerWarning(null);
-                  setIsBrokerModalOpen(true);
-                }}
+                onClick={handleOpenBrokerModal}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-750 border border-slate-700 text-white text-xs font-semibold transition-all"
               >
                 <LinkIcon size={13} className={connectedBrokers.length > 0 ? "text-emerald-400" : "text-cyan-400"} />
@@ -180,18 +235,30 @@ export default function App() {
             setBrokerWarning(null);
           }}
         />
+        <KYCModal
+          isOpen={isKYCModalOpen}
+          onClose={() => setIsKYCModalOpen(false)}
+          onKYCUpdated={() => {
+            fetchKYCStatus();
+            setBrokerWarning(null);
+          }}
+        />
         <LiveOptInModal
           isOpen={isLiveOptInOpen}
           onClose={() => setIsLiveOptInOpen(false)}
           onConfirm={() => {
-            if (connectedBrokers.length > 0) {
+            if (connectedBrokers.length > 0 && kycStatus === "VERIFIED") {
               setExecutionMode("LIVE");
             } else {
               setExecutionMode("PAPER");
-              setIsBrokerModalOpen(true);
+              if (kycStatus !== "VERIFIED") setIsKYCModalOpen(true);
+              else setIsBrokerModalOpen(true);
             }
           }}
-          onConnectBroker={() => setIsBrokerModalOpen(true)}
+          onConnectBroker={() => {
+            if (kycStatus !== "VERIFIED") setIsKYCModalOpen(true);
+            else setIsBrokerModalOpen(true);
+          }}
         />
       </div>
     </BrowserRouter>

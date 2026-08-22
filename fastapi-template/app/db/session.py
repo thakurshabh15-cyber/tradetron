@@ -139,7 +139,12 @@ async def init_db() -> None:
     migrations = [
         ("users", "profile_photo TEXT"),
         ("users", "phone VARCHAR(30)"),
-        ("users", "kyc_status VARCHAR(20) DEFAULT 'PENDING'"),
+        ("users", "kyc_status VARCHAR(20) DEFAULT 'NOT_SUBMITTED'"),
+        ("users", "pan_number VARCHAR(20)"),
+        ("users", "id_proof_type VARCHAR(50)"),
+        ("users", "id_proof_doc TEXT"),
+        ("users", "kyc_submitted_at TIMESTAMP"),
+        ("users", "kyc_rejection_reason VARCHAR(255)"),
         ("users", f"two_factor_enabled BOOLEAN DEFAULT {bool_default_false}"),
         ("users", "failed_login_attempts INTEGER DEFAULT 0"),
         ("users", "locked_until TIMESTAMP"),

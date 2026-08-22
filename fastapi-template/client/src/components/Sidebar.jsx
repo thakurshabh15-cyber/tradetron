@@ -37,7 +37,7 @@ const mobileBottomLinks = [
   { to: "/admin", icon: ShieldCheck, label: "Admin" },
 ];
 
-export default function Sidebar() {
+export default function Sidebar({ onOpenKYC, kycStatus = "NOT_SUBMITTED" }) {
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState(getStoredUser());
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
@@ -200,28 +200,51 @@ export default function Sidebar() {
         </nav>
 
         {/* User Account / Auth Section */}
-        <div className="border-t border-slate-800/80 p-3">
+        <div className="border-t border-slate-800/80 p-3 space-y-2">
           {currentUser ? (
-            <div className="flex items-center justify-between p-2.5 rounded-xl bg-surface-800/80 border border-slate-700/60">
-              <div className="flex items-center gap-2.5 overflow-hidden">
-                <div className="w-8 h-8 rounded-full bg-brand-purple/20 text-brand-purple border border-brand-purple/30 flex items-center justify-center text-xs font-bold shrink-0">
-                  {currentUser.full_name ? currentUser.full_name[0].toUpperCase() : "T"}
+            <>
+              <div className="flex items-center justify-between p-2.5 rounded-xl bg-surface-800/80 border border-slate-700/60">
+                <div className="flex items-center gap-2.5 overflow-hidden">
+                  <div className="w-8 h-8 rounded-full bg-brand-purple/20 text-brand-purple border border-brand-purple/30 flex items-center justify-center text-xs font-bold shrink-0">
+                    {currentUser.full_name ? currentUser.full_name[0].toUpperCase() : "T"}
+                  </div>
+                  <div className="overflow-hidden">
+                    <p className="text-xs font-bold text-white truncate">
+                      {currentUser.full_name || "Trader"}
+                    </p>
+                    <p className="text-[10px] text-slate-400 truncate">{currentUser.email}</p>
+                  </div>
                 </div>
-                <div className="overflow-hidden">
-                  <p className="text-xs font-bold text-white truncate">
-                    {currentUser.full_name || "Trader"}
-                  </p>
-                  <p className="text-[10px] text-slate-400 truncate">{currentUser.email}</p>
-                </div>
+                <button
+                  onClick={handleLogout}
+                  title="Log Out"
+                  className="p-1.5 text-slate-400 hover:text-rose-400 transition-colors rounded-lg hover:bg-surface-700"
+                >
+                  <LogOut size={15} />
+                </button>
               </div>
-              <button
-                onClick={handleLogout}
-                title="Log Out"
-                className="p-1.5 text-slate-400 hover:text-rose-400 transition-colors rounded-lg hover:bg-surface-700"
-              >
-                <LogOut size={15} />
-              </button>
-            </div>
+
+              {onOpenKYC && (
+                <button
+                  onClick={onOpenKYC}
+                  className={`w-full py-1.5 px-2.5 rounded-lg border text-[11px] font-semibold flex items-center justify-between transition-all ${
+                    kycStatus === "VERIFIED"
+                      ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+                      : kycStatus === "PENDING"
+                      ? "bg-amber-500/10 border-amber-500/30 text-amber-400"
+                      : "bg-violet-600/15 border-violet-500/30 text-violet-300 hover:bg-violet-600/25"
+                  }`}
+                >
+                  <span className="flex items-center gap-1.5">
+                    <ShieldCheck size={13} />
+                    <span>SEBI KYC Compliance</span>
+                  </span>
+                  <span className="font-bold">
+                    {kycStatus === "VERIFIED" ? "✓ Verified" : kycStatus === "PENDING" ? "⏳ Pending" : "Submit →"}
+                  </span>
+                </button>
+              )}
+            </>
           ) : (
             <button
               onClick={() => setIsAuthOpen(true)}
