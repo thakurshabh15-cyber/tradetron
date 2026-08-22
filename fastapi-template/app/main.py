@@ -47,7 +47,12 @@ async def lifespan(application: FastAPI):  # noqa: ARG001
     # 1. Initialise database (create tables and seed data)
     from app.db.session import init_db
 
-    await init_db()
+    try:
+        await init_db()
+        logger.info("Database schema & seed initialization completed successfully.")
+    except Exception as exc:
+        logger.critical("Failed to initialize database schema: %s", exc, exc_info=True)
+        raise
 
     # 2. Create shared tick queue
     tick_queue: asyncio.Queue = asyncio.Queue(maxsize=10_000)

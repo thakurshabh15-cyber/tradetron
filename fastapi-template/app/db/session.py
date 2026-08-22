@@ -127,59 +127,64 @@ async def init_db() -> None:
 
     logger.info("Initializing database tables on %s...", "SQLite" if IS_SQLITE else "PostgreSQL")
 
-    # 1. Create all tables reliably before any queries are made
+    # 1. Create all tables reliably in an isolated transaction
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    logger.info("Database tables verified/created successfully.")
 
-        bool_default_false = "0" if IS_SQLITE else "FALSE"
-        bool_default_true = "1" if IS_SQLITE else "TRUE"
+    bool_default_false = "0" if IS_SQLITE else "FALSE"
+    bool_default_true = "1" if IS_SQLITE else "TRUE"
 
-        # Incremental migration safeguards for pre-existing tables
-        migrations = [
-            ("users", "profile_photo TEXT"),
-            ("users", "phone VARCHAR(30)"),
-            ("users", "kyc_status VARCHAR(20) DEFAULT 'PENDING'"),
-            ("users", f"two_factor_enabled BOOLEAN DEFAULT {bool_default_false}"),
-            ("users", "failed_login_attempts INTEGER DEFAULT 0"),
-            ("users", "locked_until TIMESTAMP"),
-            ("users", f"is_verified BOOLEAN DEFAULT {bool_default_true}"),
-            ("orders", "user_id VARCHAR(36)"),
-            ("orders", "broker_account_id VARCHAR(36)"),
-            ("orders", "price FLOAT"),
-            ("orders", "filled_price FLOAT"),
-            ("orders", "filled_quantity INTEGER DEFAULT 0"),
-            ("orders", "mode VARCHAR(20) DEFAULT 'PAPER'"),
-            ("orders", "error_message TEXT"),
-            ("trades", "user_id VARCHAR(36)"),
-            ("trades", "pnl_pct FLOAT"),
-            ("trades", "exit_reason VARCHAR(50)"),
-            ("trades", "entry_price FLOAT"),
-            ("trades", "exit_price FLOAT"),
-            ("trades", "mode VARCHAR(20) DEFAULT 'PAPER'"),
-            ("strategies", "user_id VARCHAR(36)"),
-            ("strategies", "execution_mode VARCHAR(20) DEFAULT 'PAPER'"),
-            ("strategies", "broker_account_id VARCHAR(36)"),
-            ("strategies", "capital_allocated FLOAT DEFAULT 10000.0"),
-            ("positions", "user_id VARCHAR(36)"),
-            ("positions", "strategy_id VARCHAR(36)"),
-            ("positions", "broker_account_id VARCHAR(36)"),
-            ("positions", "mode VARCHAR(20) DEFAULT 'PAPER'"),
-            ("broker_accounts", "token_expires_at TIMESTAMP"),
-            ("subscriptions", "razorpay_subscription_id VARCHAR(100)"),
-            ("subscriptions", "razorpay_customer_id VARCHAR(100)"),
-            ("payments", "order_id VARCHAR(100)"),
-            ("payments", "method VARCHAR(50)"),
-            ("payments", "error_reason VARCHAR(255)"),
-            ("invoices", "plan_name VARCHAR(50) DEFAULT 'PRO'"),
-            ("invoices", "gstin VARCHAR(50)"),
-            ("invoices", "billing_address TEXT"),
-        ]
+    # Incremental migration safeguards for pre-existing tables
+    migrations = [
+        ("users", "profile_photo TEXT"),
+        ("users", "phone VARCHAR(30)"),
+        ("users", "kyc_status VARCHAR(20) DEFAULT 'PENDING'"),
+        ("users", f"two_factor_enabled BOOLEAN DEFAULT {bool_default_false}"),
+        ("users", "failed_login_attempts INTEGER DEFAULT 0"),
+        ("users", "locked_until TIMESTAMP"),
+        ("users", f"is_verified BOOLEAN DEFAULT {bool_default_true}"),
+        ("orders", "user_id VARCHAR(36)"),
+        ("orders", "broker_account_id VARCHAR(36)"),
+        ("orders", "price FLOAT"),
+        ("orders", "filled_price FLOAT"),
+        ("orders", "filled_quantity INTEGER DEFAULT 0"),
+        ("orders", "mode VARCHAR(20) DEFAULT 'PAPER'"),
+        ("orders", "error_message TEXT"),
+        ("trades", "user_id VARCHAR(36)"),
+        ("trades", "pnl_pct FLOAT"),
+        ("trades", "exit_reason VARCHAR(50)"),
+        ("trades", "entry_price FLOAT"),
+        ("trades", "exit_price FLOAT"),
+        ("trades", "mode VARCHAR(20) DEFAULT 'PAPER'"),
+        ("strategies", "user_id VARCHAR(36)"),
+        ("strategies", "execution_mode VARCHAR(20) DEFAULT 'PAPER'"),
+        ("strategies", "broker_account_id VARCHAR(36)"),
+        ("strategies", "capital_allocated FLOAT DEFAULT 10000.0"),
+        ("positions", "user_id VARCHAR(36)"),
+        ("positions", "strategy_id VARCHAR(36)"),
+        ("positions", "broker_account_id VARCHAR(36)"),
+        ("positions", "mode VARCHAR(20) DEFAULT 'PAPER'"),
+        ("broker_accounts", "token_expires_at TIMESTAMP"),
+        ("subscriptions", "razorpay_subscription_id VARCHAR(100)"),
+        ("subscriptions", "razorpay_customer_id VARCHAR(100)"),
+        ("payments", "order_id VARCHAR(100)"),
+        ("payments", "method VARCHAR(50)"),
+        ("payments", "error_reason VARCHAR(255)"),
+        ("invoices", "plan_name VARCHAR(50) DEFAULT 'PRO'"),
+        ("invoices", "gstin VARCHAR(50)"),
+        ("invoices", "billing_address TEXT"),
+    ]
 
-        for table, col_def in migrations:
-            try:
-                await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col_def}"))
-            except Exception:
-                pass
+    for table, col_def in migrations:
+        try:
+            async with engine.begin() as conn:
+                if IS_SQLITE:
+                    await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col_def}"))
+                else:
+                    await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col_def}"))
+        except Exception:
+            pass
 
     # 2. Seed Default Plans, Strategies & Watchlist if not present
     async with SessionLocal() as session:
