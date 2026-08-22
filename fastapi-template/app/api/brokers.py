@@ -57,12 +57,6 @@ async def get_oauth_authorize_url(
     user: UserRecord = Depends(get_current_user),
 ):
     """Retrieve official broker OAuth login URL. User authorizes on broker site directly."""
-    if user.kyc_status != "VERIFIED":
-        raise HTTPException(
-            status_code=403,
-            detail="KYC Verification Required: SEBI compliance mandates that your KYC status must be VERIFIED before linking a broker account.",
-        )
-
     from app.config import settings
 
     broker_norm = broker.upper().strip()
@@ -104,12 +98,6 @@ async def oauth_callback(
     db: AsyncSession = Depends(get_db),
 ):
     """Handle OAuth token exchange, encrypt token at rest, and link broker account with daily expiry."""
-    if user.kyc_status != "VERIFIED":
-        raise HTTPException(
-            status_code=403,
-            detail="KYC Verification Required: SEBI compliance mandates that your KYC status must be VERIFIED before linking a broker account.",
-        )
-
     broker_norm = req.broker_name.upper().strip()
     token_expiry = _calculate_daily_token_expiry()
 
@@ -403,13 +391,6 @@ async def link_broker_manual(
 ):
     """Link broker credentials manually with AES-256 encryption at rest and strict pre-flight verification."""
     broker_name = req.broker_name.upper().strip()
-
-    # KYC Gate: Real broker connections require approved KYC
-    if broker_name != "SIMULATED" and user.kyc_status != "VERIFIED":
-        raise HTTPException(
-            status_code=403,
-            detail="KYC Verification Required: SEBI regulatory compliance mandates that your KYC status must be VERIFIED before linking a real broker account.",
-        )
 
     # Pre-flight credential verification based on broker
     if broker_name == "ANGEL_ONE":

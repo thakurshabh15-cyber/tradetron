@@ -25,12 +25,12 @@ async def test_broker_oauth_and_live_balances_suite():
         token = reg_res.json()["access_token"]
         headers = {"Authorization": f"Bearer {token}"}
 
-        # 2. Test KYC Gate: Broker connection must be BLOCKED when KYC is NOT_SUBMITTED
-        blocked_auth_res = await client.get("/api/brokers/oauth/authorize?broker=ZERODHA", headers=headers)
-        assert blocked_auth_res.status_code == 403
-        assert "KYC Verification Required" in blocked_auth_res.json()["detail"]
+        # 2. Test Get OAuth Authorize URLs for all major Indian brokers (Freely allowed)
+        kite_auth_res = await client.get("/api/brokers/oauth/authorize?broker=ZERODHA", headers=headers)
+        assert kite_auth_res.status_code == 200
+        assert "kite.zerodha.com/connect/login" in kite_auth_res.json()["authorize_url"]
 
-        # 3. Submit Real KYC flow
+        # 3. Optional KYC submission flow test
         kyc_submit_res = await client.post("/api/user/kyc/submit", json={
             "pan_number": "ABCDE1234F",
             "id_proof_type": "PAN_CARD",
@@ -38,19 +38,6 @@ async def test_broker_oauth_and_live_balances_suite():
         }, headers=headers)
         assert kyc_submit_res.status_code == 200
         assert kyc_submit_res.json()["kyc_status"] == "PENDING"
-
-        # Verify KYC via Admin or direct approval
-        async with SessionLocal() as db:
-            user_stmt = select(UserRecord).where(UserRecord.email == f"oauth_trader_{uid}@tradetron.io")
-            u_res = await db.execute(user_stmt)
-            user_rec = u_res.scalar_one()
-            user_rec.kyc_status = "VERIFIED"
-            await db.commit()
-
-        # 4. Test Get OAuth Authorize URLs for all major Indian brokers (Now Allowed)
-        kite_auth_res = await client.get("/api/brokers/oauth/authorize?broker=ZERODHA", headers=headers)
-        assert kite_auth_res.status_code == 200
-        assert "kite.zerodha.com/connect/login" in kite_auth_res.json()["authorize_url"]
 
         upstox_auth_res = await client.get("/api/brokers/oauth/authorize?broker=UPSTOX", headers=headers)
         assert upstox_auth_res.status_code == 200

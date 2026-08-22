@@ -69,21 +69,14 @@ export default function App() {
     (b) => b.status === "CONNECTED" && !b.is_token_expired
   );
 
-  const isLiveActive = executionMode === "LIVE" && connectedBrokers.length > 0 && kycStatus === "VERIFIED";
+  const isLiveActive = executionMode === "LIVE" && connectedBrokers.length > 0;
 
   const handleModeSwitch = (mode) => {
     setBrokerWarning(null);
     if (mode === "LIVE") {
-      if (kycStatus !== "VERIFIED") {
-        setBrokerWarning(
-          "KYC Verification Required: SEBI regulatory compliance mandates that your KYC status must be VERIFIED before enabling Live Broker execution."
-        );
-        setIsKYCModalOpen(true);
-        return;
-      }
       if (connectedBrokers.length === 0) {
         setBrokerWarning(
-          "Cannot enable Live Execution: No verified broker account connected. Please connect Zerodha, Angel One, Upstox, or Binance first."
+          "Cannot enable Live Execution: No active broker account connected. Please connect Zerodha, Angel One, Upstox, or Binance first."
         );
         setIsBrokerModalOpen(true);
       } else {
@@ -96,14 +89,7 @@ export default function App() {
 
   const handleOpenBrokerModal = () => {
     setBrokerWarning(null);
-    if (kycStatus !== "VERIFIED") {
-      setBrokerWarning(
-        "KYC Verification Required: SEBI compliance mandates that your KYC status must be VERIFIED before connecting a live broker account."
-      );
-      setIsKYCModalOpen(true);
-    } else {
-      setIsBrokerModalOpen(true);
-    }
+    setIsBrokerModalOpen(true);
   };
 
   return (
@@ -129,8 +115,6 @@ export default function App() {
               <span className="hidden xl:inline-block text-[11px] text-slate-400">
                 {isLiveActive
                   ? `Real capital active across ${connectedBrokers.map((b) => b.broker_name).join(", ")}.`
-                  : kycStatus !== "VERIFIED"
-                  ? "Paper Simulation Mode Active (KYC Required for Live Broker Execution)."
                   : connectedBrokers.length === 0
                   ? "Virtual paper balance ₹10,00,000 active. No live broker connected (Simulation Mode Only)."
                   : "Virtual paper balance ₹10,00,000 active. Real funds are protected."}

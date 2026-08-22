@@ -100,14 +100,7 @@ async def place_manual_order(
     user: UserRecord = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Place manual DMA order from Fast Order Panel with strict KYC verification gate for LIVE mode."""
-    if req.mode == "LIVE":
-        if user.kyc_status != "VERIFIED":
-            raise HTTPException(
-                status_code=403,
-                detail="KYC Verification Required: SEBI regulatory compliance mandates that your KYC status must be VERIFIED before placing live real-money orders.",
-            )
-
+    """Place manual DMA order from Fast Order Panel for PAPER or LIVE execution."""
     executed_price = req.price or (24850.0 if "NIFTY" in req.symbol else 2950.0)
 
     trade = TradeRecord(
