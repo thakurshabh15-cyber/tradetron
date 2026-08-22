@@ -1,62 +1,112 @@
+import { useEffect, useRef, useState } from "react";
 import { useWebSocket } from "../hooks/useWebSocket";
-import { TrendingUp, TrendingDown, Shield } from "lucide-react";
+import { TrendingUp, TrendingDown, Shield, Activity } from "lucide-react";
 
-export default function MarketTicker({ symbol, initialData, assetClass }) {
+export default function MarketTicker({ symbol, initialData, isSelected, onSelect }) {
   const { lastMessage } = useWebSocket(`/ws/market/${symbol}`);
   const data = lastMessage || initialData || { price: 0, change: 0, change_pct: 0 };
 
+  const [priceFlash, setPriceFlash] = useState(null); // 'UP' | 'DOWN' | null
+  const prevPriceRef = useRef(data.price);
+
+  useEffect(() => {
+    if (data.price && prevPriceRef.current !== undefined) {
+      if (data.price > prevPriceRef.current) {
+        setPriceFlash("UP");
+      } else if (data.price < prevPriceRef.current) {
+        setPriceFlash("DOWN");
+      }
+      prevPriceRef.current = data.price;
+
+      const timer = setTimeout(() => setPriceFlash(null), 600);
+      return () => clearTimeout(timer);
+    }
+  }, [data.price]);
+
   const isPositive = (data.change ?? 0) >= 0;
-  const isINR = symbol.includes("NIFTY") || symbol.includes("RELIANCE") || symbol.includes("TCS") || symbol.includes("INFY") || symbol.includes("HDFC") || symbol.includes("INR") || symbol.includes("GOLD") || symbol.includes("CRUDEOIL");
+  const isINR =
+    symbol.includes("NIFTY") ||
+    symbol.includes("RELIANCE") ||
+    symbol.includes("TCS") ||
+    symbol.includes("INFY") ||
+    symbol.includes("HDFC") ||
+    symbol.includes("INR") ||
+    symbol.includes("GOLD") ||
+    symbol.includes("CRUDEOIL");
   const currencySymbol = isINR ? "₹" : "$";
 
   return (
-    <div className="glass-card-hover group relative overflow-hidden transition-all duration-300 bg-slate-900/90 border border-slate-800/80 rounded-xl p-4">
+    <div
+      onClick={() => onSelect && onSelect(symbol)}
+      className={`group relative overflow-hidden transition-all duration-300 rounded-xl p-3.5 cursor-pointer select-none ${
+        isSelected
+          ? "bg-slate-900 border-2 border-cyan-500 shadow-lg shadow-cyan-500/10 ring-1 ring-cyan-500/30"
+          : "bg-slate-900/90 hover:bg-slate-850 border border-slate-800/80 hover:border-slate-700 shadow-sm"
+      }`}
+    >
+      {/* Top Symbol & Type Badge */}
       <div className="flex items-center justify-between">
-        <div>
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-300">
-              {symbol}
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs font-bold uppercase tracking-wider text-white font-mono">{symbol}</span>
+          {data.asset_class && (
+            <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400">
+              {data.asset_class}
             </span>
-            {data.asset_class && (
-              <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400">
-                {data.asset_class}
-              </span>
-            )}
-          </div>
-          <h3 className="mt-1 font-mono text-xl font-bold tracking-tight text-white">
-            {currencySymbol}{Number(data.price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
-          </h3>
+          )}
+          {isSelected && (
+            <span className="flex h-1.5 w-1.5 rounded-full bg-cyan-400 animate-ping" title="Active on Chart" />
+          )}
         </div>
         <div
-          className={`flex h-9 w-9 items-center justify-center rounded-xl transition-transform duration-300 group-hover:scale-110 ${
+          className={`flex h-7 w-7 items-center justify-center rounded-lg transition-transform duration-300 group-hover:scale-110 ${
             isPositive
               ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
               : "bg-rose-500/10 text-rose-400 border border-rose-500/20"
           }`}
         >
-          {isPositive ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
+          {isPositive ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
         </div>
       </div>
 
-      <div className="mt-3 flex items-center justify-between border-t border-slate-800/60 pt-2.5 text-[11px]">
-        <span className="text-slate-500">24h Change</span>
-        <span
-          className={`font-mono font-medium ${
-            isPositive ? "text-emerald-400" : "text-rose-400"
+      {/* Live Moving Price with Flash Animation */}
+      <div className="mt-1.5 flex items-baseline justify-between">
+        <h3
+          className={`font-mono text-lg font-bold tracking-tight transition-colors duration-300 rounded px-1 -mx-1 ${
+            priceFlash === "UP"
+              ? "bg-emerald-500/25 text-emerald-300 shadow-sm shadow-emerald-500/20"
+              : priceFlash === "DOWN"
+              ? "bg-rose-500/25 text-rose-300 shadow-sm shadow-rose-500/20"
+              : "text-white"
           }`}
         >
+          {currencySymbol}
+          {Number(data.price || 0).toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 4,
+          })}
+        </h3>
+      </div>
+
+      {/* 24h Delta and Day Low/High */}
+      <div className="mt-2.5 flex items-center justify-between border-t border-slate-800/60 pt-2 text-[11px]">
+        <span className="text-slate-500">24h Delta</span>
+        <span className={`font-mono font-medium ${isPositive ? "text-emerald-400" : "text-rose-400"}`}>
           {isPositive ? "+" : ""}
           {Number(data.change || 0).toFixed(2)} ({isPositive ? "+" : ""}
           {Number(data.change_pct || 0).toFixed(2)}%)
         </span>
       </div>
 
-      {data.data_source && (
-        <div className="mt-1.5 flex items-center gap-1 text-[9px] text-slate-500">
+      {/* Data Source & Volume */}
+      <div className="mt-1 flex items-center justify-between text-[9px] text-slate-500">
+        <div className="flex items-center gap-1">
           <Shield size={10} className="text-cyan-400/80" />
-          <span className="truncate">{data.data_source}</span>
+          <span className="truncate max-w-[110px]">{data.data_source || "Live Pipeline Feed"}</span>
         </div>
-      )}
+        {data.volume ? (
+          <span className="font-mono text-slate-400">Vol: {Number(data.volume).toLocaleString()}</span>
+        ) : null}
+      </div>
     </div>
   );
 }

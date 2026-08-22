@@ -49,6 +49,23 @@ async def trade_feed(websocket: WebSocket):
         logger.debug("WS trade feed closed")
 
 
+@router.websocket("/ws/market/stream")
+@router.websocket("/ws/stream")
+@router.websocket("/ws/dashboard")
+async def global_market_stream(websocket: WebSocket):
+    """Global multiplexed ticker & event stream powering all live terminal widgets."""
+    channel = "market:stream"
+    await ws_manager.connect(channel, websocket)
+    logger.debug("WS global market stream opened")
+
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        await ws_manager.disconnect(channel, websocket)
+        logger.debug("WS global market stream closed")
+
+
 @router.websocket("/ws/events")
 async def events_feed(websocket: WebSocket):
     """Lifecycle event feed emitting order_executed, trade_closed, and engine state updates."""
