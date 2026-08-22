@@ -181,7 +181,7 @@ async def init_db() -> None:
             except Exception:
                 pass
 
-    # 2. Seed Default Plans if not present
+    # 2. Seed Default Plans, Strategies & Watchlist if not present
     async with SessionLocal() as session:
         try:
             existing_plans = (await session.execute(select(PlanRecord))).scalars().all()
@@ -239,8 +239,60 @@ async def init_db() -> None:
                 session.add_all(default_plans)
                 await session.commit()
                 logger.info("Default subscription plans seeded (FREE, PRO, ELITE)")
+
+            # Seed Default Trading Strategies if DB is empty
+            existing_strats = (await session.execute(select(StrategyRecord))).scalars().all()
+            if not existing_strats:
+                default_strategies = [
+                    StrategyRecord(
+                        name="Golden Cross SMA Trend 50/200",
+                        symbols_json=json.dumps(["AAPL", "NVDA", "MSFT"]),
+                        conditions_json=json.dumps([
+                            {"indicator": "sma_fast", "operator": "gt", "threshold": 0.0}
+                        ]),
+                        action_json=json.dumps({"side": "BUY", "quantity": 10}),
+                        enabled=True,
+                        execution_mode="PAPER",
+                        capital_allocated=15000.0,
+                    ),
+                    StrategyRecord(
+                        name="RSI 14 Oversold Mean Reversion",
+                        symbols_json=json.dumps(["GOOGL", "AMZN", "AAPL"]),
+                        conditions_json=json.dumps([
+                            {"indicator": "rsi", "operator": "lt", "threshold": 30.0}
+                        ]),
+                        action_json=json.dumps({"side": "BUY", "quantity": 5}),
+                        enabled=True,
+                        execution_mode="PAPER",
+                        capital_allocated=10000.0,
+                    ),
+                    StrategyRecord(
+                        name="Bollinger Band Volatility Breakout",
+                        symbols_json=json.dumps(["NVDA", "MSFT"]),
+                        conditions_json=json.dumps([
+                            {"indicator": "price", "operator": "gt", "threshold": 100.0}
+                        ]),
+                        action_json=json.dumps({"side": "BUY", "quantity": 15}),
+                        enabled=True,
+                        execution_mode="PAPER",
+                        capital_allocated=20000.0,
+                    ),
+                ]
+                session.add_all(default_strategies)
+                await session.commit()
+                logger.info("Default quantitative strategies seeded (Golden Cross, RSI Mean Reversion, BB Breakout)")
+
+            # Seed Watchlist if DB is empty
+            existing_watchlist = (await session.execute(select(WatchlistRecord))).scalars().all()
+            if not existing_watchlist:
+                default_symbols = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN"]
+                for sym in default_symbols:
+                    session.add(WatchlistRecord(symbol=sym, notes="Core equity index constituent"))
+                await session.commit()
+                logger.info("Default watchlist seeded (AAPL, MSFT, NVDA, GOOGL, AMZN)")
+
         except Exception as exc:
-            logger.warning("Notice on plan seeding: %s", exc)
+            logger.warning("Notice on default data seeding: %s", exc)
 
     logger.info("Database initialized successfully on %s", "SQLite" if IS_SQLITE else "PostgreSQL")
 
