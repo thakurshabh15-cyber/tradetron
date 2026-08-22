@@ -75,7 +75,7 @@ async def trade_stats(db: AsyncSession = Depends(get_db)):
     )
 
 
-# ── Manual Order Placement with KYC Check ─────────────────────────────────────
+# ── Manual Order Placement with Real Market Price & Open Positions ──────────────
 from datetime import datetime, timezone
 import uuid
 from pydantic import BaseModel, Field
@@ -83,6 +83,10 @@ from typing import Optional, Literal
 from fastapi import HTTPException
 from app.api.auth import get_current_user
 from app.models.user import UserRecord
+from app.models.trading import OrderRecord, PositionRecord
+from app.models.broker_account import BrokerAccountRecord
+from app.market_data.unified_manager import unified_market_manager
+from app.market_data.instruments import instrument_master
 
 
 class ManualOrderRequest(BaseModel):
@@ -94,20 +98,164 @@ class ManualOrderRequest(BaseModel):
     mode: Literal["PAPER", "LIVE"] = "PAPER"
 
 
+@router.get("/positions")
+@router.get("/api/positions")
+async def list_open_positions(
+    db: AsyncSession = Depends(get_db),
+    user: Optional[UserRecord] = Depends(get_current_user),
+):
+    """Retrieve active open positions with live market valuation."""
+    stmt = select(PositionRecord).where(PositionRecord.status == "OPEN").order_by(desc(PositionRecord.opened_at))
+    if user:
+        stmt = stmt.where(PositionRecord.user_id == user.id)
+
+    res = await db.execute(stmt)
+    positions = res.scalars().all()
+
+    output = []
+    for p in positions:
+        quote = unified_market_manager.get_quote(p.symbol)
+        inst = instrument_master.get_instrument(p.symbol)
+        live_p = quote.price if quote else (inst.base_price if inst else p.entry_price)
+
+        is_long = p.side in ("LONG", "BUY")
+        delta = (live_p - p.entry_price) if is_long else (p.entry_price - live_p)
+        unrealized_pnl = round(delta * p.quantity, 2)
+        unrealized_pnl_pct = round((delta / p.entry_price) * 100, 2) if p.entry_price else 0.0
+
+        output.append({
+            "id": p.id,
+            "symbol": p.symbol,
+            "side": p.side,
+            "quantity": p.quantity,
+            "entry_price": p.entry_price,
+            "current_price": live_p,
+            "unrealized_pnl": unrealized_pnl,
+            "unrealized_pnl_pct": unrealized_pnl_pct,
+            "mode": p.mode,
+            "status": p.status,
+            "opened_at": p.opened_at.isoformat() if p.opened_at else datetime.now(timezone.utc).isoformat(),
+        })
+    return output
+
+
+@router.post("/positions/{position_id}/close")
+async def close_position(
+    position_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: Optional[UserRecord] = Depends(get_current_user),
+):
+    """Close an open position at the real live market price and book realized PnL."""
+    pos = await db.get(PositionRecord, position_id)
+    if not pos or pos.status != "OPEN":
+        raise HTTPException(status_code=404, detail="Open position not found or already closed")
+
+    quote = unified_market_manager.get_quote(pos.symbol)
+    inst = instrument_master.get_instrument(pos.symbol)
+    exit_price = quote.price if quote else (inst.base_price if inst else pos.entry_price)
+
+    is_long = pos.side in ("LONG", "BUY")
+    delta = (exit_price - pos.entry_price) if is_long else (pos.entry_price - exit_price)
+    realized_pnl = round(delta * pos.quantity, 2)
+    pnl_pct = round((delta / pos.entry_price) * 100, 2) if pos.entry_price else 0.0
+
+    pos.status = "CLOSED"
+    pos.closed_at = datetime.now(timezone.utc)
+    pos.current_price = exit_price
+    pos.realized_pnl = realized_pnl
+    pos.unrealized_pnl = 0.0
+
+    # Record offsetting closing trade
+    closing_side = "SELL" if is_long else "BUY"
+    trade = TradeRecord(
+        id=str(uuid.uuid4()),
+        order_id=f"EXIT_{int(datetime.now(timezone.utc).timestamp())}",
+        strategy_name="Manual Position Exit",
+        symbol=pos.symbol,
+        side=closing_side,
+        quantity=pos.quantity,
+        price=exit_price,
+        entry_price=pos.entry_price,
+        exit_price=exit_price,
+        pnl=realized_pnl,
+        pnl_pct=pnl_pct,
+        exit_reason="MANUAL_CLOSE",
+        mode=pos.mode,
+        user_id=pos.user_id,
+    )
+    db.add(trade)
+    await db.commit()
+
+    return {
+        "success": True,
+        "position_id": pos.id,
+        "symbol": pos.symbol,
+        "quantity": pos.quantity,
+        "entry_price": pos.entry_price,
+        "exit_price": exit_price,
+        "realized_pnl": realized_pnl,
+        "pnl_pct": pnl_pct,
+        "status": "CLOSED",
+    }
+
+
 @router.post("/order")
 async def place_manual_order(
     req: ManualOrderRequest,
     user: UserRecord = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Place manual DMA order from Fast Order Panel for PAPER or LIVE execution."""
-    executed_price = req.price or (24850.0 if "NIFTY" in req.symbol else 2950.0)
+    """Place manual DMA order for PAPER or LIVE execution with real fill price and open position tracking."""
+    clean_sym = req.symbol.upper().strip()
 
+    # 1. Resolve real live market execution price from market provider / master
+    quote = unified_market_manager.get_quote(clean_sym)
+    inst = instrument_master.get_instrument(clean_sym)
+    live_p = quote.price if quote else (inst.base_price if inst else (req.price or 1000.0))
+    executed_price = round(req.price if req.order_type == "LIMIT" and req.price else live_p, 2)
+
+    # 2. If LIVE mode, ensure a real connected broker exists
+    broker_account_id = None
+    if req.mode == "LIVE":
+        broker_stmt = select(BrokerAccountRecord).where(
+            BrokerAccountRecord.user_id == user.id,
+            BrokerAccountRecord.status == "CONNECTED",
+            BrokerAccountRecord.is_active.is_(True),
+        )
+        broker_res = await db.execute(broker_stmt)
+        broker_acc = broker_res.scalars().first()
+        if not broker_acc:
+            raise HTTPException(
+                status_code=400,
+                detail="No active connected broker account found. Please link your broker before switching to Live Execution.",
+            )
+        broker_account_id = broker_acc.id
+
+    # 3. Create persistent OrderRecord
+    order_id = f"ORD_{int(datetime.now(timezone.utc).timestamp())}_{str(uuid.uuid4())[:8]}"
+    order = OrderRecord(
+        id=str(uuid.uuid4()),
+        user_id=user.id,
+        broker_account_id=broker_account_id,
+        broker_order_id=order_id,
+        symbol=clean_sym,
+        side=req.side,
+        quantity=req.quantity,
+        order_type=req.order_type,
+        price=executed_price,
+        filled_price=executed_price,
+        filled_quantity=req.quantity,
+        status="FILLED",
+        mode=req.mode,
+    )
+    db.add(order)
+
+    # 4. Create persistent TradeRecord
     trade = TradeRecord(
         id=str(uuid.uuid4()),
-        order_id=f"ORD_{int(datetime.now(timezone.utc).timestamp())}",
-        strategy_name="Manual Fast Order",
-        symbol=req.symbol.upper(),
+        order_id=order_id,
+        strategy_name="DMA Fast Order",
+        symbol=clean_sym,
         side=req.side,
         quantity=req.quantity,
         price=executed_price,
@@ -117,8 +265,29 @@ async def place_manual_order(
         user_id=user.id,
     )
     db.add(trade)
+
+    # 5. Create new Open PositionRecord
+    pos_side = "LONG" if req.side == "BUY" else "SHORT"
+    position = PositionRecord(
+        id=str(uuid.uuid4()),
+        user_id=user.id,
+        broker_account_id=broker_account_id,
+        symbol=clean_sym,
+        side=pos_side,
+        quantity=req.quantity,
+        entry_price=executed_price,
+        current_price=executed_price,
+        unrealized_pnl=0.0,
+        realized_pnl=0.0,
+        mode=req.mode,
+        status="OPEN",
+        opened_at=datetime.now(timezone.utc),
+    )
+    db.add(position)
+
     await db.commit()
     await db.refresh(trade)
+    await db.refresh(position)
 
     from app.core.audit import log_audit_event
     await log_audit_event(
@@ -128,22 +297,24 @@ async def place_manual_order(
         user_id=user.id,
         status="EXECUTED",
         details={
-            "symbol": req.symbol,
+            "symbol": clean_sym,
             "side": req.side,
             "quantity": req.quantity,
             "price": executed_price,
             "mode": req.mode,
+            "position_id": position.id,
         },
     )
 
     return {
         "success": True,
-        "order_id": trade.order_id,
+        "order_id": order_id,
         "symbol": trade.symbol,
         "side": trade.side,
         "quantity": trade.quantity,
         "price": trade.price,
         "mode": trade.mode,
         "status": "FILLED",
+        "position_id": position.id,
         "executed_at": trade.executed_at.isoformat() if trade.executed_at else datetime.now(timezone.utc).isoformat(),
     }

@@ -4,6 +4,7 @@ import TradeLog from "../components/TradeLog";
 import RiskGauge from "../components/RiskGauge";
 import TopStrategiesCard from "../components/TopStrategiesCard";
 import TradingChart from "../components/TradingChart";
+import OpenPositionsPanel from "../components/OpenPositionsPanel";
 import FastOrderPanel from "../components/FastOrderPanel";
 import ErrorBoundary from "../components/ErrorBoundary";
 import { SkeletonCard } from "../components/SkeletonLoaders";
@@ -74,6 +75,7 @@ export default function Dashboard() {
   const { data: riskData, loading: riskLoading, refetch: refetchRisk } = useApi("/api/risk-status");
   const { data: initialTrades, refetch: refetchTrades } = useApi("/api/trades?limit=20");
   const { data: summaryData, loading: summaryLoading, refetch: refetchSummary } = useApi("/api/dashboard/summary");
+  const { data: positionsData, loading: positionsLoading, refetch: refetchPositions } = useApi("/api/trades/positions");
 
   // Debounced Universal Instrument Search across NSE/BSE/NFO/MCX/Crypto/Forex
   useEffect(() => {
@@ -154,6 +156,7 @@ export default function Dashboard() {
     refetchRisk();
     refetchSummary();
     refetchTrades();
+    refetchPositions();
   };
 
   const displayedSymbols = useMemo(() => {
@@ -571,6 +574,15 @@ export default function Dashboard() {
             </ErrorBoundary>
           </div>
 
+          {/* Real-time Open Positions Panel */}
+          <ErrorBoundary>
+            <OpenPositionsPanel
+              positions={positionsData || []}
+              loading={positionsLoading}
+              onPositionClosed={refreshAll}
+            />
+          </ErrorBoundary>
+
           {/* Live Trade Log & Execution Stream */}
           <ErrorBoundary>
             <TradeLog initialTrades={initialTrades} />
@@ -584,11 +596,7 @@ export default function Dashboard() {
             <FastOrderPanel
               symbol={selectedSymbol}
               currentPrice={currentSelectedData.price || 24850.0}
-              onOrderPlaced={() => {
-                refetchTrades();
-                refetchSummary();
-                refetchRisk();
-              }}
+              onOrderPlaced={refreshAll}
             />
           </ErrorBoundary>
 

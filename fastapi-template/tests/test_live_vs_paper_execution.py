@@ -225,3 +225,71 @@ async def test_emergency_kill_switch_immediate_block():
         engine = get_engine()
         if engine and hasattr(engine, "risk_manager"):
             engine.risk_manager.reset_kill_switch()
+
+
+@pytest.mark.asyncio
+async def test_manual_order_and_open_positions_lifecycle():
+    """Test manual order entry (Paper Mode), real price fill, open position listing, and exit position."""
+    import time
+    await init_db()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Register a test user for auth
+        uid = int(time.time() * 1000) % 1000000
+        reg_res = await client.post("/api/auth/register", json={
+            "email": f"trader_{uid}@tradetron.io",
+            "password": "SecurePassword123!",
+            "full_name": "Rishabh Trader",
+        })
+        assert reg_res.status_code == 201
+        token = reg_res.json()["access_token"]
+        headers = {"Authorization": f"Bearer {token}"}
+
+        # 1. Place a manual BUY order in PAPER mode
+        order_res = await client.post(
+            "/api/trades/order",
+            json={
+                "symbol": "RELIANCE",
+                "side": "BUY",
+                "quantity": 25,
+                "order_type": "MARKET",
+                "mode": "PAPER",
+            },
+            headers=headers,
+        )
+        assert order_res.status_code == 200
+        order_data = order_res.json()
+        assert order_data["success"] is True
+        assert order_data["symbol"] == "RELIANCE"
+        assert order_data["side"] == "BUY"
+        assert order_data["quantity"] == 25
+        assert order_data["status"] == "FILLED"
+        assert order_data["price"] > 0
+        pos_id = order_data.get("position_id")
+        assert pos_id is not None
+
+        # 2. Query open positions list
+        pos_res = await client.get("/api/trades/positions", headers=headers)
+        assert pos_res.status_code == 200
+        positions = pos_res.json()
+        assert len(positions) >= 1
+        pos = next(p for p in positions if p["id"] == pos_id)
+        assert pos["symbol"] == "RELIANCE"
+        assert pos["side"] == "LONG"
+        assert pos["quantity"] == 25
+        assert pos["entry_price"] > 0
+        assert pos["status"] == "OPEN"
+
+        # 3. Close the open position
+        close_res = await client.post(f"/api/trades/positions/{pos_id}/close", headers=headers)
+        assert close_res.status_code == 200
+        close_data = close_res.json()
+        assert close_data["success"] is True
+        assert close_data["status"] == "CLOSED"
+        assert close_data["position_id"] == pos_id
+
+        # 4. Verify position is no longer in open positions list
+        pos_res_after = await client.get("/api/trades/positions", headers=headers)
+        assert pos_res_after.status_code == 200
+        positions_after = pos_res_after.json()
+        assert not any(p["id"] == pos_id for p in positions_after)
