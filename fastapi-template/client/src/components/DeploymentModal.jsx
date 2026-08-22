@@ -43,8 +43,8 @@ export default function DeploymentModal({ isOpen, onClose, strategy, onDeployed 
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
-      <div className="card w-full max-w-md bg-slate-900 border border-slate-700 shadow-2xl p-6 relative">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-3.5 sm:p-4 animate-fade-in">
+      <div className="card w-full max-w-md bg-slate-900 border border-slate-700 shadow-2xl p-4 sm:p-6 relative overflow-y-auto max-h-[90vh]">
         <button
           onClick={onClose}
           className="absolute right-4 top-4 text-slate-400 hover:text-white transition-colors"

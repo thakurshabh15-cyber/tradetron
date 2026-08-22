@@ -123,65 +123,63 @@ export default function App() {
       <BrowserRouter>
         <div className="flex min-h-screen bg-surface-950 text-slate-300 selection:bg-accent-500/20 selection:text-accent-400">
           <Sidebar onOpenKYC={() => setIsKYCModalOpen(true)} kycStatus={kycStatus} />
-          <main className="flex-1 lg:ml-64 pt-16 pb-20 lg:pt-6 lg:pb-8 px-4 sm:px-6 lg:px-8 space-y-6 overflow-x-hidden">
+          <main className="flex-1 lg:ml-64 pt-16 pb-20 lg:pt-6 lg:pb-8 px-3.5 sm:px-6 lg:px-8 space-y-6 overflow-x-hidden w-full max-w-full">
             {/* Top Execution Control & Mode Banner */}
-            <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 p-3 rounded-xl bg-slate-900/90 border border-slate-800/80 shadow-lg">
+            <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 p-3 sm:p-3.5 rounded-xl bg-slate-900/90 border border-slate-800/80 shadow-lg">
               {/* Mode Indicator & Regulatory Disclaimer */}
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center justify-between sm:justify-start gap-2.5">
                 <div
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all ${
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-bold transition-all ${
                     isLiveActive
                       ? "bg-rose-500/15 border-rose-500/40 text-rose-400 shadow-sm shadow-rose-500/20 animate-pulse"
                       : "bg-emerald-500/15 border-emerald-500/40 text-emerald-300 shadow-sm shadow-emerald-500/10"
                   }`}
                 >
-                  {isLiveActive ? <Radio size={14} className="text-rose-400" /> : <Zap size={14} className="text-emerald-400" />}
-                  <span>{isLiveActive ? "LIVE BROKER EXECUTION" : "PAPER TRADING (SIMULATION)"}</span>
+                  {isLiveActive ? <Radio size={13} className="text-rose-400" /> : <Zap size={13} className="text-emerald-400" />}
+                  <span>{isLiveActive ? "LIVE EXECUTION" : "PAPER SIMULATION"}</span>
                 </div>
 
-                <span className="hidden xl:inline-block text-[11px] text-slate-400">
+                <div className="text-[11px] text-slate-400">
                   {isLiveActive ? (
                     balances.live_balance?.connected && balances.live_balance?.available_cash !== null ? (
-                      <span className="flex items-center gap-1.5">
-                        <span className="text-rose-400 font-bold font-mono">
-                          Live {balances.live_balance.broker_name} Margin: ₹
+                      <span className="flex items-center gap-1 font-mono">
+                        <span className="text-rose-400 font-bold">
+                          Margin: ₹
                           {Number(balances.live_balance.available_cash || 0).toLocaleString("en-IN", {
                             minimumFractionDigits: 2,
                           })}
                         </span>
-                        <span className="text-slate-500 font-mono">(Real Demat Funds)</span>
                       </span>
                     ) : (
-                      <span className="flex items-center gap-1.5 text-amber-400 font-semibold">
-                        <span>Connect broker to view live balance.</span>
+                      <span className="text-amber-400 font-medium flex items-center gap-1">
+                        <span>No broker</span>
                         <button
                           onClick={handleOpenBrokerModal}
-                          className="underline hover:text-white ml-1 text-xs"
+                          className="underline hover:text-white text-[11px]"
                         >
-                          Connect Now
+                          Connect
                         </button>
                       </span>
                     )
                   ) : (
                     <span>
-                      Virtual paper balance{" "}
-                      <strong className="text-emerald-400 font-mono">
+                      Bal: <strong className="text-emerald-400 font-mono">
                         ₹
                         {Number(balances.paper_balance || 1000000).toLocaleString("en-IN", {
-                          minimumFractionDigits: 2,
+                          minimumFractionDigits: 0,
+                          maximumFractionDigits: 2,
                         })}
-                      </strong>{" "}
-                      active. Real funds are protected.
+                      </strong>
                     </span>
                   )}
-                </span>
+                </div>
               </div>
 
               {/* Mode Switcher, KYC Gate, Broker Link, and Panic Button */}
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
                 <button
                   onClick={() => setIsKYCModalOpen(true)}
-                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-all ${
+                  className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-all ${
                     kycStatus === "VERIFIED"
                       ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
                       : kycStatus === "PENDING"
@@ -191,52 +189,52 @@ export default function App() {
                 >
                   <FileCheck size={13} />
                   <span>
-                    {kycStatus === "VERIFIED" ? "KYC Verified" : kycStatus === "PENDING" ? "KYC Under Review" : "Verify KYC"}
+                    {kycStatus === "VERIFIED" ? "KYC Verified" : kycStatus === "PENDING" ? "Pending" : "KYC"}
                   </span>
                 </button>
 
                 <div className="flex rounded-lg bg-surface-950 p-0.5 border border-white/[0.06]">
                   <button
                     onClick={() => handleModeSwitch("PAPER")}
-                    className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
+                    className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
                       !isLiveActive
                         ? "bg-emerald-500 text-slate-950 shadow-sm"
                         : "text-slate-400 hover:text-white"
                     }`}
                   >
-                    Paper Mode
+                    Paper
                   </button>
                   <button
                     onClick={() => handleModeSwitch("LIVE")}
-                    className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
+                    className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
                       isLiveActive
                         ? "bg-rose-500 text-white shadow-sm shadow-rose-500/30"
                         : "text-slate-400 hover:text-white"
                     }`}
                   >
-                    Live Mode
+                    Live
                   </button>
                 </div>
 
                 <button
                   onClick={handleOpenBrokerModal}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-700 bg-surface-800 hover:bg-surface-750 text-white text-xs font-medium transition-all"
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-700 bg-surface-800 hover:bg-surface-750 text-white text-xs font-medium transition-all"
                 >
-                  <LinkIcon size={13} className="text-cyan-400" />
+                  <LinkIcon size={12} className="text-cyan-400" />
                   <span>
                     {connectedBrokers.length > 0
-                      ? `${connectedBrokers.length} Broker Linked`
-                      : "Link Broker"}
+                      ? `${connectedBrokers.length} Linked`
+                      : "Broker"}
                   </span>
                 </button>
 
                 <button
                   onClick={() => setIsKillSwitchOpen(true)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white text-xs font-bold transition-all shadow-md shadow-red-600/30"
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white text-xs font-bold transition-all shadow-md shadow-red-600/30 ml-auto sm:ml-0"
                   title="Emergency Pause All Strategies"
                 >
-                  <Power size={13} />
-                  <span>KILL SWITCH</span>
+                  <Power size={12} />
+                  <span>KILL</span>
                 </button>
               </div>
             </div>

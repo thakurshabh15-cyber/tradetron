@@ -27,7 +27,7 @@ export default function TradeHistory() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-white">
             Audit & Trade History
@@ -39,7 +39,7 @@ export default function TradeHistory() {
         <button
           onClick={handleExport}
           disabled={isExporting}
-          className="btn-primary text-xs py-2 px-3 flex items-center gap-1.5"
+          className="btn-primary text-xs py-2 px-3 flex items-center gap-1.5 self-start sm:self-auto"
         >
           <Download size={14} />
           {isExporting ? "Exporting..." : "Export CSV Report"}
@@ -47,37 +47,37 @@ export default function TradeHistory() {
       </div>
 
       {/* Aggregate Stats Cards */}
-      <div className="grid gap-4 sm:grid-cols-4">
-        <div className="glass-card">
-          <div className="text-xs text-slate-500 uppercase tracking-wider font-semibold">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+        <div className="glass-card p-3.5 sm:p-5">
+          <div className="text-[11px] sm:text-xs text-slate-500 uppercase tracking-wider font-semibold">
             Total Trades
           </div>
-          <div className="font-mono text-2xl font-bold text-white mt-1">
+          <div className="font-mono text-xl sm:text-2xl font-bold text-white mt-1">
             {stats?.total_trades || 0}
           </div>
         </div>
-        <div className="glass-card">
-          <div className="text-xs text-slate-500 uppercase tracking-wider font-semibold">
+        <div className="glass-card p-3.5 sm:p-5">
+          <div className="text-[11px] sm:text-xs text-slate-500 uppercase tracking-wider font-semibold">
             Winning Fills
           </div>
-          <div className="font-mono text-2xl font-bold text-profit-400 mt-1">
+          <div className="font-mono text-xl sm:text-2xl font-bold text-profit-400 mt-1">
             {stats?.winning_trades || 0}
           </div>
         </div>
-        <div className="glass-card">
-          <div className="text-xs text-slate-500 uppercase tracking-wider font-semibold">
+        <div className="glass-card p-3.5 sm:p-5">
+          <div className="text-[11px] sm:text-xs text-slate-500 uppercase tracking-wider font-semibold">
             Losing Fills
           </div>
-          <div className="font-mono text-2xl font-bold text-loss-400 mt-1">
+          <div className="font-mono text-xl sm:text-2xl font-bold text-loss-400 mt-1">
             {stats?.losing_trades || 0}
           </div>
         </div>
-        <div className="glass-card">
-          <div className="text-xs text-slate-500 uppercase tracking-wider font-semibold">
+        <div className="glass-card p-3.5 sm:p-5">
+          <div className="text-[11px] sm:text-xs text-slate-500 uppercase tracking-wider font-semibold">
             Net Realized PnL
           </div>
           <div
-            className={`font-mono text-2xl font-bold mt-1 ${
+            className={`font-mono text-xl sm:text-2xl font-bold mt-1 ${
               (stats?.total_pnl || 0) >= 0 ? "text-profit-400" : "text-loss-400"
             }`}
           >
@@ -87,8 +87,8 @@ export default function TradeHistory() {
       </div>
 
       {/* Filter and Table */}
-      <div className="glass-card space-y-4">
-        <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
+      <div className="glass-card space-y-4 overflow-hidden">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/[0.06] pb-3">
           <div className="flex items-center gap-2">
             <Filter size={16} className="text-accent-400" />
             <span className="text-xs font-semibold uppercase text-slate-300">
@@ -98,7 +98,7 @@ export default function TradeHistory() {
           <select
             value={selectedSymbol}
             onChange={(e) => setSelectedSymbol(e.target.value)}
-            className="select-field text-xs w-48"
+            className="select-field text-xs w-full sm:w-48"
           >
             <option value="">All Instruments</option>
             <option value="AAPL">AAPL</option>
@@ -110,7 +110,7 @@ export default function TradeHistory() {
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
+          <table className="w-full text-left text-xs min-w-[580px]">
             <thead className="border-b border-white/[0.06] text-slate-400 uppercase tracking-wider">
               <tr>
                 <th className="pb-3 font-medium">Timestamp</th>

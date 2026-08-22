@@ -21,7 +21,7 @@ export default function TradeLog({ initialTrades = [], loading = false, error = 
   }, [initialTrades]);
 
   return (
-    <div className="glass-card flex flex-col h-[420px]">
+    <div className="glass-card p-3.5 sm:p-5 flex flex-col h-[380px] sm:h-[420px]">
       <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
         <div className="flex items-center gap-2">
           <Activity size={16} className="text-accent-400" />

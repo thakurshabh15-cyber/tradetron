@@ -90,11 +90,11 @@ export default function OpenPositionsPanel({
   };
 
   return (
-    <div className="glass-card p-5 space-y-4">
+    <div className="glass-card p-3.5 sm:p-5 space-y-4 overflow-hidden">
       {/* Header & Unrealized PnL Badge */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/[0.06] pb-3">
         <div className="flex items-center gap-2.5">
-          <div className="p-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+          <div className="p-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 shrink-0">
             <Layers size={16} />
           </div>
           <div>
@@ -112,7 +112,7 @@ export default function OpenPositionsPanel({
 
         {positions.length > 0 && (
           <div className="flex items-center gap-3 self-start sm:self-auto">
-            <div className="text-right">
+            <div className="text-left sm:text-right">
               <span className="text-[10px] text-slate-500 block">Total Unrealized P&L</span>
               <span
                 className={`font-mono text-sm font-bold ${
@@ -147,7 +147,7 @@ export default function OpenPositionsPanel({
           ))}
         </div>
       ) : positions.length === 0 ? (
-        <div className="p-8 text-center rounded-xl bg-surface-900/40 border border-dashed border-slate-800 space-y-2">
+        <div className="p-6 sm:p-8 text-center rounded-xl bg-surface-900/40 border border-dashed border-slate-800 space-y-2">
           <Layers size={28} className="mx-auto text-slate-600" />
           <p className="text-xs font-semibold text-slate-400">No Open Positions</p>
           <p className="text-[11px] text-slate-500 max-w-sm mx-auto">
@@ -155,8 +155,8 @@ export default function OpenPositionsPanel({
           </p>
         </div>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
+        <div className="overflow-x-auto -mx-3.5 sm:mx-0 px-3.5 sm:px-0">
+          <table className="w-full text-left text-xs min-w-[550px]">
             <thead className="bg-surface-800/40 text-slate-400 font-medium border-b border-white/[0.04]">
               <tr>
                 <th className="py-2.5 px-3">Instrument</th>

@@ -390,7 +390,7 @@ export default function Admin() {
           </div>
 
           <div className="overflow-x-auto bg-slate-900 rounded-2xl border border-slate-800">
-            <table className="w-full text-left text-xs text-slate-300">
+            <table className="w-full text-left text-xs text-slate-300 min-w-[640px]">
               <thead className="border-b border-slate-800 text-[11px] uppercase tracking-wider text-slate-400 bg-slate-950/60">
                 <tr>
                   <th className="p-3.5">Trader</th>
@@ -501,7 +501,7 @@ export default function Admin() {
       {/* TAB CONTENT: 4. BROKER MONITOR */}
       {activeTab === "brokers" && (
         <div className="overflow-x-auto bg-slate-900 rounded-2xl border border-slate-800">
-          <table className="w-full text-left text-xs text-slate-300">
+          <table className="w-full text-left text-xs text-slate-300 min-w-[600px]">
             <thead className="border-b border-slate-800 text-[11px] uppercase tracking-wider text-slate-400 bg-slate-950/60">
               <tr>
                 <th className="p-3.5">Trader</th>
@@ -538,7 +538,7 @@ export default function Admin() {
       {/* TAB CONTENT: 5. STRATEGY RISK OVERSIGHT */}
       {activeTab === "strategies" && (
         <div className="overflow-x-auto bg-slate-900 rounded-2xl border border-slate-800">
-          <table className="w-full text-left text-xs text-slate-300">
+          <table className="w-full text-left text-xs text-slate-300 min-w-[600px]">
             <thead className="border-b border-slate-800 text-[11px] uppercase tracking-wider text-slate-400 bg-slate-950/60">
               <tr>
                 <th className="p-3.5">Strategy Name</th>
@@ -598,7 +598,7 @@ export default function Admin() {
       {/* TAB CONTENT: 7. AUDIT TRAIL STREAM */}
       {activeTab === "audit" && (
         <div className="overflow-x-auto bg-slate-900 rounded-2xl border border-slate-800">
-          <table className="w-full text-left text-xs text-slate-300">
+          <table className="w-full text-left text-xs text-slate-300 min-w-[550px]">
             <thead className="border-b border-slate-800 text-[11px] uppercase tracking-wider text-slate-400 bg-slate-950/60">
               <tr>
                 <th className="p-3.5">Action Event</th>

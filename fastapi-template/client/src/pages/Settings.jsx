@@ -320,7 +320,7 @@ export default function Settings() {
       {activeTab === "profile" ? (
         <div className="grid gap-6 lg:grid-cols-2">
           {/* Profile Card */}
-          <div className="glass-card p-6 space-y-6">
+          <div className="glass-card p-4 sm:p-6 space-y-6">
             <div className="flex items-center gap-2 border-b border-white/[0.06] pb-3">
               <User size={18} className="text-cyan-400" />
               <h2 className="text-sm font-semibold text-white">Trader Profile</h2>
@@ -448,7 +448,7 @@ export default function Settings() {
           </div>
 
           {/* Notifications & Channels Card */}
-          <div className="glass-card p-6 space-y-6">
+          <div className="glass-card p-4 sm:p-6 space-y-6">
             <div className="flex items-center gap-2 border-b border-white/[0.06] pb-3">
               <Bell size={18} className="text-amber-400" />
               <h2 className="text-sm font-semibold text-white">Notification Preferences</h2>

@@ -275,19 +275,19 @@ export default function TradingChart({ symbol = "NIFTY50", currentPrice = 24850.
   };
 
   return (
-    <div className="glass-panel rounded-2xl p-5 border border-slate-800/80 shadow-glass-md flex flex-col justify-between space-y-4">
+    <div className="glass-panel rounded-2xl p-3.5 sm:p-5 border border-slate-800/80 shadow-glass-md flex flex-col justify-between space-y-4">
       {/* Header & Controls */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800/60 pb-3">
-        <div className="flex items-center gap-3">
-          <div className="p-2 rounded-xl bg-brand-purple/10 text-brand-purple border border-brand-purple/25">
+        <div className="flex items-center gap-2.5 sm:gap-3">
+          <div className="p-1.5 sm:p-2 rounded-xl bg-brand-purple/10 text-brand-purple border border-brand-purple/25 shrink-0">
             <BarChart2 size={18} />
           </div>
           <div>
-            <div className="flex items-center gap-2">
-              <h3 className="font-display font-bold text-base text-white">{symbol} TradingView Chart</h3>
-              <span className="badge-purple">LIVE DMA ({timeframe})</span>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3 className="font-display font-bold text-sm sm:text-base text-white">{symbol} Chart</h3>
+              <span className="badge-purple text-[10px]">LIVE DMA ({timeframe})</span>
             </div>
-            <div className="flex items-center gap-3 text-xs font-mono tabular-nums text-slate-400 mt-0.5 flex-wrap">
+            <div className="flex items-center gap-2 sm:gap-3 text-[11px] sm:text-xs font-mono tabular-nums text-slate-400 mt-0.5 flex-wrap">
               <span>O: <strong className="text-white">{currencySymbol}{fmtPrice(displayData.open)}</strong></span>
               <span>H: <strong className="text-emerald-400">{currencySymbol}{fmtPrice(displayData.high)}</strong></span>
               <span>L: <strong className="text-rose-400">{currencySymbol}{fmtPrice(displayData.low)}</strong></span>

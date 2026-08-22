@@ -33,7 +33,7 @@ export default function TopStrategiesCard({ strategies = [], loading = false, er
   if (!strategies || strategies.length === 0) return null;
 
   return (
-    <div className="card p-5 bg-slate-900 border border-slate-800 rounded-xl shadow-lg">
+    <div className="card p-4 sm:p-5 bg-slate-900 border border-slate-800 rounded-xl shadow-lg">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2.5">
           <div className="p-2 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20">

@@ -173,11 +173,11 @@ export default function Marketplace() {
           </button>
         </div>
       ) : (
-        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-4 sm:gap-5 sm:grid-cols-2 lg:grid-cols-3">
           {items.map((strat) => (
             <div
               key={strat.id}
-              className="glass-card p-5 flex flex-col justify-between hover:border-accent-500/40 transition-all group"
+              className="glass-card p-4 sm:p-5 flex flex-col justify-between hover:border-accent-500/40 transition-all group"
             >
               <div>
                 {/* Header info */}

@@ -239,13 +239,13 @@ export default function Watchlist() {
       {/* Universal Search & Alert Creation Row */}
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Universal Instrument Search Box (Spans 2 cols on lg) */}
-        <div className="lg:col-span-2 glass-card p-5 space-y-4 relative">
-          <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
+        <div className="lg:col-span-2 glass-card p-3.5 sm:p-5 space-y-4 relative">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/[0.06] pb-3">
             <div className="flex items-center gap-2">
               <Search size={16} className="text-cyan-400" />
               <h2 className="text-sm font-semibold text-white">Search & Add Market Instruments</h2>
             </div>
-            <span className="text-[11px] font-mono text-cyan-400/80 bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/20">
+            <span className="text-[10px] sm:text-[11px] font-mono text-cyan-400/80 bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/20 self-start sm:self-auto">
               10,000+ Real Scrips Active
             </span>
           </div>
@@ -473,7 +473,7 @@ export default function Watchlist() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+            <table className="w-full text-left text-xs min-w-[640px]">
               <thead className="bg-surface-800/40 text-slate-400 font-medium border-b border-white/[0.04]">
                 <tr>
                   <th className="py-3 px-4">Instrument</th>

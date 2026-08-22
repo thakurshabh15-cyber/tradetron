@@ -10,8 +10,8 @@ export default function LiveOptInModal({ isOpen, onClose, onConfirm, onConnectBr
   const canActivate = hasAgreedTerms && hasAgreedRisk;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fade-in">
-      <div className="relative w-full max-w-lg rounded-2xl bg-surface-900 border border-rose-500/40 p-6 shadow-2xl shadow-rose-950/50 space-y-5">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3.5 sm:p-4 bg-black/80 backdrop-blur-md animate-fade-in">
+      <div className="relative w-full max-w-lg rounded-2xl bg-surface-900 border border-rose-500/40 p-4 sm:p-6 shadow-2xl shadow-rose-950/50 space-y-5 overflow-y-auto max-h-[90vh]">
         {/* Header */}
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-3">
