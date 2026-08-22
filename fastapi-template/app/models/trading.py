@@ -28,7 +28,7 @@ class StrategyRecord(Base):
         String(36), primary_key=True, default=_new_id
     )
     user_id: Mapped[str | None] = mapped_column(
-        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     symbols_json: Mapped[str] = mapped_column(
@@ -43,7 +43,7 @@ class StrategyRecord(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     execution_mode: Mapped[str] = mapped_column(String(20), default="PAPER")  # "PAPER" | "LIVE"
     broker_account_id: Mapped[str | None] = mapped_column(
-        String(36), ForeignKey("broker_accounts.id", ondelete="SET NULL"), nullable=True, index=True
+        String(36), ForeignKey("broker_accounts.id", ondelete="SET NULL"), nullable=True
     )
     capital_allocated: Mapped[float] = mapped_column(Float, default=10000.0)
     created_at: Mapped[datetime] = mapped_column(
@@ -56,6 +56,7 @@ class StrategyRecord(Base):
     __table_args__ = (
         Index("ix_strategies_user_id", "user_id"),
         Index("ix_strategies_mode", "execution_mode"),
+        Index("ix_strategies_broker_account", "broker_account_id"),
     )
 
 
