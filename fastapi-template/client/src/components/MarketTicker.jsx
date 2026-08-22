@@ -24,15 +24,16 @@ export default function MarketTicker({ symbol, initialData, isSelected, onSelect
   }, [data.price]);
 
   const isPositive = (data.change ?? 0) >= 0;
+  const sym = symbol || "";
   const isINR =
-    symbol.includes("NIFTY") ||
-    symbol.includes("RELIANCE") ||
-    symbol.includes("TCS") ||
-    symbol.includes("INFY") ||
-    symbol.includes("HDFC") ||
-    symbol.includes("INR") ||
-    symbol.includes("GOLD") ||
-    symbol.includes("CRUDEOIL");
+    sym.includes("NIFTY") ||
+    sym.includes("RELIANCE") ||
+    sym.includes("TCS") ||
+    sym.includes("INFY") ||
+    sym.includes("HDFC") ||
+    sym.includes("INR") ||
+    sym.includes("GOLD") ||
+    sym.includes("CRUDEOIL");
   const currencySymbol = isINR ? "₹" : "$";
 
   return (

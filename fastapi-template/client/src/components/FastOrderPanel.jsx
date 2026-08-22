@@ -15,7 +15,8 @@ export default function FastOrderPanel({ symbol = "NIFTY50", currentPrice = 2485
   const totalValue = quantity * price;
   const marginRequired = totalValue * 0.2; // 5x leverage approx 20% margin for intraday
 
-  const isINR = symbol.includes("NIFTY") || symbol.includes("RELIANCE") || symbol.includes("INR") || symbol.includes("TCS");
+  const sym = symbol || "";
+  const isINR = sym.includes("NIFTY") || sym.includes("RELIANCE") || sym.includes("INR") || sym.includes("TCS");
   const currencySymbol = isINR ? "₹" : "$";
 
   const handlePlaceOrder = async () => {

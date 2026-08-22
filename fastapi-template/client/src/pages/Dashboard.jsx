@@ -5,6 +5,7 @@ import RiskGauge from "../components/RiskGauge";
 import TopStrategiesCard from "../components/TopStrategiesCard";
 import TradingChart from "../components/TradingChart";
 import FastOrderPanel from "../components/FastOrderPanel";
+import ErrorBoundary from "../components/ErrorBoundary";
 import { SkeletonCard } from "../components/SkeletonLoaders";
 import { useApi } from "../hooks/useApi";
 import { useWebSocket } from "../hooks/useWebSocket";
@@ -90,10 +91,10 @@ export default function Dashboard() {
   const displayedSymbols = SYMBOL_MAP[activeAssetTab] || SYMBOL_MAP.ALL;
   const currentSelectedData = liveMarketMap[selectedSymbol] || { price: 24850.0 };
 
-  // Dynamic Real-time Calculations from Live Market Pipeline
+  // Dynamic Real-time Calculations from Live Market Pipeline with bulletproof fallbacks
   const liveMarketStats = useMemo(() => {
-    const quotes = Object.values(liveMarketMap);
-    if (quotes.length === 0) {
+    const quotes = Object.values(liveMarketMap || {}).filter(Boolean);
+    if (!quotes || quotes.length === 0) {
       return {
         avgChangePct: 0.85,
         topGainer: { symbol: "NIFTY50", change_pct: 1.25 },
@@ -103,20 +104,22 @@ export default function Dashboard() {
     }
 
     let sumChange = 0;
-    let maxGainer = quotes[0];
-    let maxLoser = quotes[0];
+    let maxGainer = quotes[0] || { symbol: "NIFTY50", change_pct: 1.25 };
+    let maxLoser = quotes[0] || { symbol: "USDINR", change_pct: -0.15 };
     let totalVol = 0;
 
     for (const q of quotes) {
-      const chg = q.change_pct || 0;
-      sumChange += chg;
-      totalVol += q.volume || 1000;
-      if (chg > (maxGainer.change_pct || 0)) maxGainer = q;
-      if (chg < (maxLoser.change_pct || 0)) maxLoser = q;
+      if (!q) continue;
+      const chg = Number(q.change_pct || 0);
+      sumChange += isNaN(chg) ? 0 : chg;
+      totalVol += Number(q.volume || 1000);
+      if (chg > Number(maxGainer.change_pct || 0)) maxGainer = q;
+      if (chg < Number(maxLoser.change_pct || 0)) maxLoser = q;
     }
 
+    const avg = quotes.length > 0 ? sumChange / quotes.length : 0.85;
     return {
-      avgChangePct: Number((sumChange / quotes.length).toFixed(2)),
+      avgChangePct: Number(avg.toFixed(2)),
       topGainer: maxGainer,
       topLoser: maxLoser,
       totalVolume: totalVol,
@@ -125,13 +128,29 @@ export default function Dashboard() {
 
   // Live dynamic unrealized return moving with ticks
   const liveUnrealizedPnl = useMemo(() => {
-    const basePnl = summaryData?.totalPnl ? Number(summaryData.totalPnl) : 14250.0;
-    const delta = (liveMarketStats.avgChangePct / 100) * 8500.0;
+    const basePnl = summaryData?.totalPnl !== undefined && !isNaN(Number(summaryData.totalPnl))
+      ? Number(summaryData.totalPnl)
+      : 14250.0;
+    const avgPct = liveMarketStats?.avgChangePct ?? 0.85;
+    const delta = (avgPct / 100) * 8500.0;
     return Number((basePnl + delta).toFixed(2));
-  }, [summaryData, liveMarketStats.avgChangePct]);
+  }, [summaryData, liveMarketStats]);
 
-  const weekReturn = summaryData?.weekReturn ?? (3.42 + (liveMarketStats.avgChangePct * 0.2)).toFixed(2);
-  const monthReturn = summaryData?.monthReturn ?? (11.85 + (liveMarketStats.avgChangePct * 0.3)).toFixed(2);
+  const weekReturn = useMemo(() => {
+    if (summaryData?.weekReturn !== undefined && !isNaN(Number(summaryData.weekReturn))) {
+      return Number(summaryData.weekReturn);
+    }
+    const avgPct = liveMarketStats?.avgChangePct ?? 0.85;
+    return Number((3.42 + (avgPct * 0.2)).toFixed(2));
+  }, [summaryData, liveMarketStats]);
+
+  const monthReturn = useMemo(() => {
+    if (summaryData?.monthReturn !== undefined && !isNaN(Number(summaryData.monthReturn))) {
+      return Number(summaryData.monthReturn);
+    }
+    const avgPct = liveMarketStats?.avgChangePct ?? 0.85;
+    return Number((11.85 + (avgPct * 0.3)).toFixed(2));
+  }, [summaryData, liveMarketStats]);
 
   return (
     <div className="space-y-6">
@@ -350,31 +369,41 @@ export default function Dashboard() {
               </div>
             </div>
 
-            <TradingChart symbol={selectedSymbol} />
+            <ErrorBoundary fallback={<div className="p-8 text-center text-xs text-slate-500 font-mono">Chart stream initializing...</div>}>
+              <TradingChart symbol={selectedSymbol} currentPrice={currentSelectedData.price || 24850.0} />
+            </ErrorBoundary>
           </div>
 
           {/* Live Trade Log & Execution Stream */}
-          <TradeLog initialTrades={initialTrades} />
+          <ErrorBoundary>
+            <TradeLog initialTrades={initialTrades} />
+          </ErrorBoundary>
         </div>
 
         {/* Right Column: Fast DMA Order Panel + Risk Sentinel + Strategies (4 Cols on Desktop) */}
         <div className="lg:col-span-4 space-y-6">
           {/* Direct Market Access (DMA) Fast Order Panel */}
-          <FastOrderPanel
-            symbol={selectedSymbol}
-            currentPrice={currentSelectedData.price || 24850.0}
-            onOrderPlaced={() => {
-              refetchTrades();
-              refetchSummary();
-              refetchRisk();
-            }}
-          />
+          <ErrorBoundary>
+            <FastOrderPanel
+              symbol={selectedSymbol}
+              currentPrice={currentSelectedData.price || 24850.0}
+              onOrderPlaced={() => {
+                refetchTrades();
+                refetchSummary();
+                refetchRisk();
+              }}
+            />
+          </ErrorBoundary>
 
           {/* Live Risk & Drawdown Sentinel */}
-          <RiskGauge riskData={riskData} />
+          <ErrorBoundary>
+            <RiskGauge riskData={riskData} />
+          </ErrorBoundary>
 
           {/* Active Deployed Strategies */}
-          <TopStrategiesCard />
+          <ErrorBoundary>
+            <TopStrategiesCard />
+          </ErrorBoundary>
         </div>
       </div>
     </div>

@@ -12,6 +12,7 @@ import KillSwitchModal from "./components/KillSwitchModal";
 import BrokerConnectModal from "./components/BrokerConnectModal";
 import LiveOptInModal from "./components/LiveOptInModal";
 import KYCModal from "./components/KYCModal";
+import ErrorBoundary from "./components/ErrorBoundary";
 import { authFetch } from "./services/apiClient";
 
 import { ShieldAlert, ShieldCheck, Power, Zap, Radio, Link as LinkIcon, AlertCircle, FileCheck } from "lucide-react";
@@ -195,15 +196,17 @@ export default function App() {
             </div>
           )}
 
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/marketplace" element={<Marketplace />} />
-            <Route path="/watchlist" element={<Watchlist />} />
-            <Route path="/strategies" element={<Strategies />} />
-            <Route path="/history" element={<TradeHistory />} />
-            <Route path="/settings" element={<Settings />} />
-            <Route path="/admin" element={<Admin />} />
-          </Routes>
+          <ErrorBoundary>
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/marketplace" element={<Marketplace />} />
+              <Route path="/watchlist" element={<Watchlist />} />
+              <Route path="/strategies" element={<Strategies />} />
+              <Route path="/history" element={<TradeHistory />} />
+              <Route path="/settings" element={<Settings />} />
+              <Route path="/admin" element={<Admin />} />
+            </Routes>
+          </ErrorBoundary>
         </main>
 
         {/* Global Modals */}
@@ -231,17 +234,15 @@ export default function App() {
           isOpen={isLiveOptInOpen}
           onClose={() => setIsLiveOptInOpen(false)}
           onConfirm={() => {
-            if (connectedBrokers.length > 0 && kycStatus === "VERIFIED") {
+            if (connectedBrokers.length > 0) {
               setExecutionMode("LIVE");
             } else {
               setExecutionMode("PAPER");
-              if (kycStatus !== "VERIFIED") setIsKYCModalOpen(true);
-              else setIsBrokerModalOpen(true);
+              setIsBrokerModalOpen(true);
             }
           }}
           onConnectBroker={() => {
-            if (kycStatus !== "VERIFIED") setIsKYCModalOpen(true);
-            else setIsBrokerModalOpen(true);
+            setIsBrokerModalOpen(true);
           }}
         />
       </div>

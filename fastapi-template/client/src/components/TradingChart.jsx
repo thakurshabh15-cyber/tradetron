@@ -255,8 +255,9 @@ export default function TradingChart({ symbol = "NIFTY50", currentPrice = 24850.
     close: livePrice,
   };
 
-  const isPositive = displayData.close >= displayData.open;
-  const isINR = symbol.includes("NIFTY") || symbol.includes("RELIANCE") || symbol.includes("INR") || symbol.includes("TCS");
+  const isPositive = (displayData?.close ?? 0) >= (displayData?.open ?? 0);
+  const sym = symbol || "";
+  const isINR = sym.includes("NIFTY") || sym.includes("RELIANCE") || sym.includes("INR") || sym.includes("TCS");
   const currencySymbol = isINR ? "₹" : "$";
 
   return (
