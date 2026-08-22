@@ -1,6 +1,35 @@
 import { ShieldAlert, Activity } from "lucide-react";
+import { ErrorState } from "./SkeletonLoaders";
 
-export default function RiskGauge({ riskData }) {
+export default function RiskGauge({ riskData, loading = false, error = null, onRetry = null }) {
+  if (error) {
+    return (
+      <div className="glass-card p-4">
+        <ErrorState
+          title="Risk Sentinel Unavailable"
+          error={error}
+          onRetry={onRetry}
+        />
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="glass-card p-5 space-y-4">
+        <div className="flex justify-between items-center">
+          <div className="h-4 w-32 skeleton-box rounded" />
+          <div className="h-5 w-20 skeleton-box rounded-full" />
+        </div>
+        <div className="space-y-3">
+          <div className="h-6 w-full skeleton-box rounded" />
+          <div className="h-6 w-full skeleton-box rounded" />
+        </div>
+        <div className="h-10 w-full skeleton-box rounded-lg" />
+      </div>
+    );
+  }
+
   const data = riskData || {
     daily_pnl: 0,
     max_daily_loss: 10000,

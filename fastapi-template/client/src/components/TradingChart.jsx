@@ -27,20 +27,26 @@ export default function TradingChart({ symbol = "NIFTY50", currentPrice = 24850.
   const [activeLegend, setActiveLegend] = useState(null);
   const [chartData, setChartData] = useState({ candles: [], volumes: [], smaData: [] });
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   const { getQuote } = useMarket();
   const liveQuote = getQuote(symbol);
   const livePrice = liveQuote?.price ?? currentPrice;
 
   // Fetch authentic historical candles from backend API
-  useEffect(() => {
-    let isMounted = true;
+  const fetchCandles = () => {
     setLoading(true);
+    setError(null);
 
     fetch(`${API_BASE}/api/market/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=120`)
-      .then((res) => (res.ok ? res.json() : null))
+      .then(async (res) => {
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.detail || `Server returned HTTP ${res.status}`);
+        }
+        return res.json();
+      })
       .then((data) => {
-        if (!isMounted) return;
         const rawCandles = data?.candles || [];
         if (rawCandles.length > 0) {
           const candles = [];
@@ -89,12 +95,13 @@ export default function TradingChart({ symbol = "NIFTY50", currentPrice = 24850.
       })
       .catch((err) => {
         console.error("Error fetching historical candles:", err);
-        if (isMounted) setLoading(false);
+        setError(err.message || "Failed to load historical candlestick feed");
+        setLoading(false);
       });
+  };
 
-    return () => {
-      isMounted = false;
-    };
+  useEffect(() => {
+    fetchCandles();
   }, [symbol, timeframe]);
 
   // Initialize TradingView Lightweight Chart
@@ -332,6 +339,24 @@ export default function TradingChart({ symbol = "NIFTY50", currentPrice = 24850.
 
       {/* TradingView Lightweight Chart Canvas Container */}
       <div className="relative w-full rounded-xl bg-surface-950/70 border border-slate-850 p-2 overflow-hidden">
+        {error && (
+          <div className="absolute inset-0 bg-surface-950/90 backdrop-blur-sm z-20 flex flex-col items-center justify-center p-4 text-center space-y-3">
+            <div className="p-2.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-400">
+              <BarChart2 size={24} />
+            </div>
+            <div className="max-w-xs space-y-1">
+              <h4 className="text-xs font-bold text-white">Candle Feed Error ({symbol})</h4>
+              <p className="text-[11px] text-rose-300/80">{error}</p>
+            </div>
+            <button
+              onClick={fetchCandles}
+              className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 hover:text-white transition-all flex items-center gap-1.5"
+            >
+              <span>Retry Fetching Candles</span>
+            </button>
+          </div>
+        )}
+
         {loading && (
           <div className="absolute inset-0 bg-surface-950/60 backdrop-blur-[2px] z-10 flex items-center justify-center pointer-events-none">
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-900 border border-slate-800 text-xs font-mono text-cyan-400 shadow-lg">

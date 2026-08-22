@@ -1,6 +1,35 @@
 import { Award, TrendingUp, Zap } from "lucide-react";
+import { ErrorState } from "./SkeletonLoaders";
 
-export default function TopStrategiesCard({ strategies = [] }) {
+export default function TopStrategiesCard({ strategies = [], loading = false, error = null, onRetry = null }) {
+  if (error) {
+    return (
+      <div className="card p-5 bg-slate-900 border border-slate-800 rounded-xl shadow-lg">
+        <ErrorState
+          title="Strategies Feed Error"
+          error={error}
+          onRetry={onRetry}
+        />
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="card p-5 bg-slate-900 border border-slate-800 rounded-xl shadow-lg space-y-3">
+        <div className="flex justify-between items-center">
+          <div className="h-4 w-36 skeleton-box rounded" />
+          <div className="h-5 w-20 skeleton-box rounded-full" />
+        </div>
+        <div className="space-y-2">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="h-12 w-full skeleton-box rounded-lg" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   if (!strategies || strategies.length === 0) return null;
 
   return (

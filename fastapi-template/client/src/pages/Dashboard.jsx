@@ -7,7 +7,7 @@ import TradingChart from "../components/TradingChart";
 import OpenPositionsPanel from "../components/OpenPositionsPanel";
 import FastOrderPanel from "../components/FastOrderPanel";
 import ErrorBoundary from "../components/ErrorBoundary";
-import { SkeletonCard } from "../components/SkeletonLoaders";
+import { SkeletonCard, ErrorState } from "../components/SkeletonLoaders";
 import { useApi } from "../hooks/useApi";
 import { useMarket } from "../context/MarketContext";
 import { API_BASE } from "../config";
@@ -71,11 +71,11 @@ export default function Dashboard() {
   const { quotes: liveMarketMap, isConnected: isWsConnected, tickCount: liveTicksCount, lastUpdated: lastTickTime } = useMarket();
 
   // Base API Data Fetchers
-  const { data: initialMarketData, loading: marketLoading, refetch: refetchMarket } = useApi("/api/market-data");
-  const { data: riskData, loading: riskLoading, refetch: refetchRisk } = useApi("/api/risk-status");
-  const { data: initialTrades, refetch: refetchTrades } = useApi("/api/trades?limit=20");
-  const { data: summaryData, loading: summaryLoading, refetch: refetchSummary } = useApi("/api/dashboard/summary");
-  const { data: positionsData, loading: positionsLoading, refetch: refetchPositions } = useApi("/api/trades/positions");
+  const { data: initialMarketData, loading: marketLoading, error: marketError, refetch: refetchMarket } = useApi("/api/market-data");
+  const { data: riskData, loading: riskLoading, error: riskError, refetch: refetchRisk } = useApi("/api/risk-status");
+  const { data: initialTrades, loading: tradesLoading, error: tradesError, refetch: refetchTrades } = useApi("/api/trades?limit=20");
+  const { data: summaryData, loading: summaryLoading, error: summaryError, refetch: refetchSummary } = useApi("/api/dashboard/summary");
+  const { data: positionsData, loading: positionsLoading, error: positionsError, refetch: refetchPositions } = useApi("/api/trades/positions");
 
   // Debounced Universal Instrument Search across NSE/BSE/NFO/MCX/Crypto/Forex
   useEffect(() => {
@@ -292,7 +292,13 @@ export default function Dashboard() {
       </div>
 
       {/* Summary KPI Cards Moving Live with Market Data Pipeline */}
-      {summaryLoading ? (
+      {summaryError ? (
+        <ErrorState
+          title="Portfolio Summary Unavailable"
+          error={summaryError}
+          onRetry={refetchSummary}
+        />
+      ) : summaryLoading ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <SkeletonCard />
           <SkeletonCard />
@@ -516,30 +522,44 @@ export default function Dashboard() {
       </div>
 
       {/* Live Market Ticker Grid Powered by Real-time Pipeline */}
-      <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-        {displayedSymbols.map((sym) => {
-          const isCustom = userCustomSymbols.includes(sym);
-          return (
-            <div key={sym} className="relative group">
-              <MarketTicker
-                symbol={sym}
-                initialData={liveMarketMap[sym]}
-                isSelected={selectedSymbol === sym}
-                onSelect={(s) => setSelectedSymbol(s)}
-              />
-              {isCustom && (
-                <button
-                  onClick={(e) => handleRemoveCustomSymbol(sym, e)}
-                  className="absolute top-2 right-2 p-1 rounded-md bg-slate-800/80 hover:bg-rose-500/20 text-slate-500 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity z-10"
-                  title="Remove from Dashboard"
-                >
-                  <X size={12} />
-                </button>
-              )}
-            </div>
-          );
-        })}
-      </div>
+      {marketError ? (
+        <ErrorState
+          title="Market Data Pipeline Offline"
+          error={marketError}
+          onRetry={refetchMarket}
+        />
+      ) : marketLoading && displayedSymbols.length === 0 ? (
+        <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="h-24 skeleton-box rounded-xl p-3 space-y-2" />
+          ))}
+        </div>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+          {displayedSymbols.map((sym) => {
+            const isCustom = userCustomSymbols.includes(sym);
+            return (
+              <div key={sym} className="relative group">
+                <MarketTicker
+                  symbol={sym}
+                  initialData={liveMarketMap[sym]}
+                  isSelected={selectedSymbol === sym}
+                  onSelect={(s) => setSelectedSymbol(s)}
+                />
+                {isCustom && (
+                  <button
+                    onClick={(e) => handleRemoveCustomSymbol(sym, e)}
+                    className="absolute top-2 right-2 p-1 rounded-md bg-slate-800/80 hover:bg-rose-500/20 text-slate-500 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                    title="Remove from Dashboard"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* ── 3-COLUMN INSTITUTIONAL TRADING TERMINAL ────────── */}
       <div className="grid gap-6 lg:grid-cols-12 items-start">
@@ -579,13 +599,20 @@ export default function Dashboard() {
             <OpenPositionsPanel
               positions={positionsData || []}
               loading={positionsLoading}
+              error={positionsError}
+              onRetry={refetchPositions}
               onPositionClosed={refreshAll}
             />
           </ErrorBoundary>
 
           {/* Live Trade Log & Execution Stream */}
           <ErrorBoundary>
-            <TradeLog initialTrades={initialTrades} />
+            <TradeLog
+              initialTrades={initialTrades || []}
+              loading={tradesLoading}
+              error={tradesError}
+              onRetry={refetchTrades}
+            />
           </ErrorBoundary>
         </div>
 
@@ -602,12 +629,22 @@ export default function Dashboard() {
 
           {/* Live Risk & Drawdown Sentinel */}
           <ErrorBoundary>
-            <RiskGauge riskData={riskData} />
+            <RiskGauge
+              riskData={riskData}
+              loading={riskLoading}
+              error={riskError}
+              onRetry={refetchRisk}
+            />
           </ErrorBoundary>
 
           {/* Active Deployed Strategies */}
           <ErrorBoundary>
-            <TopStrategiesCard />
+            <TopStrategiesCard
+              strategies={summaryData?.topStrategies || []}
+              loading={summaryLoading}
+              error={summaryError}
+              onRetry={refetchSummary}
+            />
           </ErrorBoundary>
         </div>
       </div>

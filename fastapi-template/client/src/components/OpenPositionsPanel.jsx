@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMarket } from "../context/MarketContext";
 import { API_BASE } from "../config";
 import { authFetch } from "../services/apiClient";
+import { ErrorState } from "./SkeletonLoaders";
 import {
   TrendingUp,
   TrendingDown,
@@ -14,14 +15,20 @@ import {
   Zap,
 } from "lucide-react";
 
-export default function OpenPositionsPanel({ positions = [], loading = false, onPositionClosed }) {
+export default function OpenPositionsPanel({
+  positions = [],
+  loading = false,
+  error = null,
+  onRetry = null,
+  onPositionClosed,
+}) {
   const { quotes, getQuote } = useMarket();
   const [closingId, setClosingId] = useState(null);
-  const [error, setError] = useState(null);
+  const [actionError, setActionError] = useState(null);
 
   const handleClosePosition = async (posId, symbol) => {
     setClosingId(posId);
-    setError(null);
+    setActionError(null);
     try {
       const res = await authFetch(`${API_BASE}/api/trades/positions/${posId}/close`, {
         method: "POST",
@@ -35,7 +42,7 @@ export default function OpenPositionsPanel({ positions = [], loading = false, on
       }
     } catch (err) {
       console.error("Close position error:", err);
-      setError(err.message || "Failed to close position");
+      setActionError(err.message || "Failed to close position");
     } finally {
       setClosingId(null);
     }
@@ -120,17 +127,24 @@ export default function OpenPositionsPanel({ positions = [], loading = false, on
         )}
       </div>
 
-      {error && (
+      {actionError && (
         <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs">
-          {error}
+          {actionError}
         </div>
       )}
 
-      {/* Positions Table / Empty State */}
-      {loading ? (
-        <div className="p-8 text-center text-xs text-slate-500 flex items-center justify-center gap-2 font-mono">
-          <RefreshCw size={14} className="animate-spin text-cyan-400" />
-          <span>Synchronizing open portfolio positions...</span>
+      {/* Positions Table / Empty / Loading / Error State */}
+      {error ? (
+        <ErrorState
+          title="Positions Synchronization Error"
+          error={error}
+          onRetry={onRetry}
+        />
+      ) : loading ? (
+        <div className="space-y-2 p-2">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="h-11 w-full skeleton-box rounded-xl" />
+          ))}
         </div>
       ) : positions.length === 0 ? (
         <div className="p-8 text-center rounded-xl bg-surface-900/40 border border-dashed border-slate-800 space-y-2">

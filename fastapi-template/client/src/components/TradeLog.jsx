@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import { useWebSocket } from "../hooks/useWebSocket";
 import StatusBadge from "./StatusBadge";
 import { Activity } from "lucide-react";
+import { ErrorState } from "./SkeletonLoaders";
 
-export default function TradeLog({ initialTrades = [] }) {
+export default function TradeLog({ initialTrades = [], loading = false, error = null, onRetry = null }) {
   const [trades, setTrades] = useState(initialTrades);
 
   // Connect to live trades WebSocket feed
@@ -14,7 +15,7 @@ export default function TradeLog({ initialTrades = [] }) {
   });
 
   useEffect(() => {
-    if (initialTrades?.length && trades.length === 0) {
+    if (initialTrades?.length) {
       setTrades(initialTrades);
     }
   }, [initialTrades]);
@@ -35,7 +36,19 @@ export default function TradeLog({ initialTrades = [] }) {
       </div>
 
       <div className="flex-1 overflow-y-auto pt-2">
-        {trades.length === 0 ? (
+        {error ? (
+          <ErrorState
+            title="Trade Stream Error"
+            error={error}
+            onRetry={onRetry}
+          />
+        ) : loading ? (
+          <div className="space-y-2 p-2">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="h-12 w-full skeleton-box rounded-xl" />
+            ))}
+          </div>
+        ) : trades.length === 0 ? (
           <div className="flex h-full items-center justify-center text-xs text-slate-500">
             Waiting for strategy signals & executions...
           </div>
