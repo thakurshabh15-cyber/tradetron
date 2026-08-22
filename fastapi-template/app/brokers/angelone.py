@@ -1,7 +1,7 @@
 """Angel One broker adapter.
 
 Wraps the ``smartapi-python`` SDK behind the abstract ``BrokerClient``
-interface.  Uses synchronous SDK calls wrapped in ``asyncio.to_thread``
+interface. Uses synchronous SDK calls wrapped in ``asyncio.to_thread``
 so they don't block the event loop.
 """
 
@@ -23,29 +23,103 @@ logger = get_logger("broker.angelone")
 class AngelOneBroker(BrokerClient):
     """Production broker adapter for Angel One (SmartAPI)."""
 
-    def __init__(self) -> None:
-        # Lazy import — ``smartapi-python`` is only required in live mode
-        from SmartApi import SmartConnect
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        client_code: Optional[str] = None,
+        password: Optional[str] = None,
+        totp_secret: Optional[str] = None,
+        jwt_token: Optional[str] = None,
+    ) -> None:
+        self.api_key = api_key or settings.angel_api_key or ""
+        self.client_code = client_code or settings.angel_client_code or ""
+        self.password = password or settings.angel_password or ""
+        self.totp_secret = totp_secret or settings.angel_totp_secret or ""
+        self.jwt_token = jwt_token
 
-        self._client = SmartConnect(api_key=settings.angel_api_key)
+        self._client = None
         self._session: dict | None = None
+
+        if self.api_key:
+            try:
+                from SmartApi import SmartConnect
+                self._client = SmartConnect(api_key=self.api_key)
+            except Exception as exc:
+                logger.warning("SmartApi package import notice: %s", exc)
+
+    async def validate_credentials(self) -> tuple[bool, str]:
+        """Verify the validity of Angel One API Key & credentials against Angel One server."""
+        if not self.api_key or len(self.api_key.strip()) < 8 or self.api_key.strip().lower() in ("test", "mock", "placeholder", "123", "angel_api_key"):
+            return False, "Invalid API Key: Angel One requires a valid SmartAPI Key registered on smartapi.angelbroking.com"
+
+        if not self.client_code or len(self.client_code.strip()) < 3:
+            return False, "Invalid Client Code: Please enter your valid Angel One Client Code (e.g. S123456)"
+
+        try:
+            from SmartApi import SmartConnect
+
+            client = SmartConnect(api_key=self.api_key.strip())
+
+            # If JWT token provided
+            if self.jwt_token:
+                client.setAccessToken(self.jwt_token)
+                res = await asyncio.to_thread(client.getProfile, self.jwt_token)
+                if res and isinstance(res, dict) and res.get("status"):
+                    return True, "Angel One SmartAPI session validated successfully."
+                err_msg = res.get("message") if isinstance(res, dict) else "Session expired or invalid token"
+                return False, f"Angel One authentication failed: {err_msg}"
+
+            # If password and TOTP secret provided
+            if self.password and self.totp_secret:
+                try:
+                    totp = pyotp.TOTP(self.totp_secret.strip()).now()
+                except Exception:
+                    return False, "Invalid TOTP Secret Key: Please provide a valid Base32 TOTP secret from Angel One"
+
+                session = await asyncio.to_thread(
+                    client.generateSession,
+                    self.client_code.strip(),
+                    self.password.strip(),
+                    totp,
+                )
+
+                if session and isinstance(session, dict) and session.get("status"):
+                    self._session = session
+                    self._client = client
+                    return True, "Angel One SmartAPI authenticated successfully."
+
+                err_msg = session.get("message") if isinstance(session, dict) else "Invalid credentials"
+                return False, f"Angel One rejected login: {err_msg}"
+
+            # If only API Key and Client Code were provided
+            return False, "Angel One requires API Key, Client ID, and Password or TOTP to authenticate live sessions."
+
+        except Exception as exc:
+            return False, f"Angel One connection error: {str(exc)}"
 
     async def connect(self) -> None:
         """Authenticate with Angel One using TOTP."""
         if self._session:
             return
 
-        totp = pyotp.TOTP(settings.angel_totp_secret).now()
+        if not self._client:
+            from SmartApi import SmartConnect
+            self._client = SmartConnect(api_key=self.api_key)
+
+        if not self.totp_secret:
+            raise RuntimeError("Angel One TOTP secret is not configured.")
+
+        totp = pyotp.TOTP(self.totp_secret).now()
 
         self._session = await asyncio.to_thread(
             self._client.generateSession,
-            settings.angel_client_code,
-            settings.angel_password,
+            self.client_code,
+            self.password,
             totp,
         )
 
-        if not self._session.get("status"):
-            msg = self._session.get("message", "Angel One login failed")
+        if not self._session or not self._session.get("status"):
+            msg = self._session.get("message", "Angel One login failed") if self._session else "No response from Angel One"
             logger.error("Angel One auth failed: %s", msg)
             raise RuntimeError(msg)
 
@@ -102,7 +176,6 @@ class AngelOneBroker(BrokerClient):
                         token = scrip.get("symboltoken", "")
                         logger.debug("Resolved %s -> token %s", symbol, token)
                         return token
-                # Fallback to first result
                 token = result["data"][0].get("symboltoken", "")
                 logger.debug("Resolved %s -> token %s (first match)", symbol, token)
                 return token
@@ -178,27 +251,14 @@ class AngelOneBroker(BrokerClient):
         except Exception as exc:
             logger.warning("Angel One RMS limit fetch failed: %s", exc)
 
+        return {"available_cash": None, "utilized_margin": None, "currency": "INR"}
+
     async def get_holdings(self) -> list[dict[str, Any]]:
-        """Retrieve user equity holdings from Angel One."""
         await self.connect()
         try:
             res = await asyncio.to_thread(self._client.holding)
             if res and res.get("data"):
-                return [
-                    {
-                        "tradingsymbol": h.get("tradingsymbol", ""),
-                        "exchange": h.get("exchange", "NSE"),
-                        "isin": h.get("isin", ""),
-                        "quantity": int(h.get("quantity", 0)),
-                        "t1_quantity": int(h.get("t1quantity", 0)),
-                        "average_price": float(h.get("avgprice", 0.0)),
-                        "last_price": float(h.get("ltp", 0.0)),
-                        "pnl": float(h.get("pnl", 0.0)),
-                    }
-                    for h in res["data"]
-                ]
+                return res["data"]
         except Exception as exc:
-            logger.warning("Angel One holding fetch failed: %s", exc)
-
+            logger.warning("Angel One holdings fetch failed: %s", exc)
         return []
-

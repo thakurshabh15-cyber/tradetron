@@ -389,22 +389,67 @@ async def link_broker_manual(
     user: UserRecord = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Link broker credentials manually with AES-256 encryption at rest."""
-    acc = BrokerAccountRecord(
-        user_id=user.id,
-        broker_name=req.broker_name.upper().strip(),
-        account_name=req.account_name,
-        client_id=req.client_id,
-        api_key_encrypted="",
-        token_expires_at=_calculate_daily_token_expiry() if req.access_token else None,
+    """Link broker credentials manually with AES-256 encryption at rest and strict pre-flight verification."""
+    broker_name = req.broker_name.upper().strip()
+
+    # Pre-flight credential verification based on broker
+    if broker_name == "ANGEL_ONE":
+        angel = AngelOneBroker(
+            api_key=req.api_key,
+            client_code=req.client_id,
+            password=req.api_secret,
+            jwt_token=req.access_token,
+        )
+        is_valid, msg = await angel.validate_credentials()
+        if not is_valid:
+            logger.warning("Angel One manual connection failed for user %s: %s", user.id, msg)
+            raise HTTPException(status_code=400, detail=f"Angel One SmartAPI validation failed: {msg}")
+
+    elif broker_name == "BINANCE":
+        if not req.api_key or len(req.api_key.strip()) < 10 or not req.api_secret or len(req.api_secret.strip()) < 10:
+            raise HTTPException(status_code=400, detail="Invalid Binance API Key or Secret. Both must be configured.")
+
+    elif broker_name == "ZERODHA":
+        if not req.api_key or not req.access_token:
+            raise HTTPException(
+                status_code=400,
+                detail="Zerodha Kite Connect requires a valid Daily Access Token. Please use the official Kite Connect OAuth flow to authorize."
+            )
+
+    elif broker_name == "UPSTOX":
+        if not req.access_token:
+            raise HTTPException(
+                status_code=400,
+                detail="Upstox Pro requires a valid OAuth Access Token. Please authorize via Upstox Developer OAuth flow."
+            )
+
+    # If verified, upsert record in DB
+    stmt = select(BrokerAccountRecord).where(
+        BrokerAccountRecord.user_id == user.id,
+        BrokerAccountRecord.broker_name == broker_name,
     )
+    res = await db.execute(stmt)
+    acc = res.scalar_one_or_none()
+
+    if not acc:
+        acc = BrokerAccountRecord(
+            user_id=user.id,
+            broker_name=broker_name,
+            account_name=req.account_name,
+            client_id=req.client_id,
+            api_key_encrypted="",
+            token_expires_at=_calculate_daily_token_expiry() if req.access_token else None,
+        )
+        db.add(acc)
+
     acc.set_api_key(req.api_key)
     if req.api_secret:
         acc.set_api_secret(req.api_secret)
     if req.access_token:
         acc.set_access_token(req.access_token)
+    acc.status = "CONNECTED"
+    acc.last_synced_at = datetime.now(timezone.utc)
 
-    db.add(acc)
     await db.commit()
     await db.refresh(acc)
 

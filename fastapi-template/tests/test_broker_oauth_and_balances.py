@@ -104,3 +104,14 @@ async def test_broker_oauth_and_live_balances_suite():
         expired_holdings_res = await client.get(f"/api/brokers/accounts/{kite_acc_id}/holdings", headers=headers)
         assert expired_holdings_res.status_code == 401
         assert "expired" in expired_holdings_res.json()["detail"]
+
+        # 9. Test Invalid Angel One Credentials Rejection (Must return 400 and NOT connect)
+        invalid_angel_res = await client.post("/api/brokers/accounts/manual", json={
+            "broker_name": "ANGEL_ONE",
+            "client_id": "INVALID_CLIENT",
+            "api_key": "invalid_key_123",
+            "api_secret": "wrong_password",
+        }, headers=headers)
+        assert invalid_angel_res.status_code == 400
+        assert "validation failed" in invalid_angel_res.json()["detail"].lower()
+
