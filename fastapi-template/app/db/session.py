@@ -139,6 +139,7 @@ async def init_db() -> None:
     migrations = [
         ("users", "profile_photo TEXT"),
         ("users", "phone VARCHAR(30)"),
+        ("users", "paper_balance FLOAT DEFAULT 1000000.0"),
         ("users", "kyc_status VARCHAR(20) DEFAULT 'NOT_SUBMITTED'"),
         ("users", "pan_number VARCHAR(20)"),
         ("users", "id_proof_type VARCHAR(50)"),

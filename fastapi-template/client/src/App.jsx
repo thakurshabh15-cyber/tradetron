@@ -27,6 +27,15 @@ export default function App() {
   const [isLiveOptInOpen, setIsLiveOptInOpen] = useState(false);
   const [isKYCModalOpen, setIsKYCModalOpen] = useState(false);
   const [brokerWarning, setBrokerWarning] = useState(null);
+  const [balances, setBalances] = useState({
+    paper_balance: 1000000.0,
+    live_balance: {
+      connected: false,
+      broker_name: null,
+      available_cash: null,
+      message: "Connect broker to view live balance.",
+    },
+  });
 
   const fetchBrokers = useCallback(async () => {
     try {
@@ -61,10 +70,25 @@ export default function App() {
     }
   }, []);
 
+  const fetchBalances = useCallback(async () => {
+    try {
+      const res = await authFetch("/api/brokers/balance");
+      if (res.ok) {
+        const data = await res.json();
+        setBalances(data);
+      }
+    } catch {
+      // keep fallback
+    }
+  }, []);
+
   useEffect(() => {
     fetchBrokers();
     fetchKYCStatus();
-  }, [fetchBrokers, fetchKYCStatus]);
+    fetchBalances();
+    const interval = setInterval(fetchBalances, 8000);
+    return () => clearInterval(interval);
+  }, [fetchBrokers, fetchKYCStatus, fetchBalances]);
 
   // Verified active brokers only
   const connectedBrokers = brokerAccounts.filter(
@@ -116,11 +140,40 @@ export default function App() {
                 </div>
 
                 <span className="hidden xl:inline-block text-[11px] text-slate-400">
-                  {isLiveActive
-                    ? `Real capital active across ${connectedBrokers.map((b) => b.broker_name).join(", ")}.`
-                    : connectedBrokers.length === 0
-                    ? "Virtual paper balance ₹10,00,000 active. No live broker connected (Simulation Mode Only)."
-                    : "Virtual paper balance ₹10,00,000 active. Real funds are protected."}
+                  {isLiveActive ? (
+                    balances.live_balance?.connected && balances.live_balance?.available_cash !== null ? (
+                      <span className="flex items-center gap-1.5">
+                        <span className="text-rose-400 font-bold font-mono">
+                          Live {balances.live_balance.broker_name} Margin: ₹
+                          {Number(balances.live_balance.available_cash || 0).toLocaleString("en-IN", {
+                            minimumFractionDigits: 2,
+                          })}
+                        </span>
+                        <span className="text-slate-500 font-mono">(Real Demat Funds)</span>
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1.5 text-amber-400 font-semibold">
+                        <span>Connect broker to view live balance.</span>
+                        <button
+                          onClick={handleOpenBrokerModal}
+                          className="underline hover:text-white ml-1 text-xs"
+                        >
+                          Connect Now
+                        </button>
+                      </span>
+                    )
+                  ) : (
+                    <span>
+                      Virtual paper balance{" "}
+                      <strong className="text-emerald-400 font-mono">
+                        ₹
+                        {Number(balances.paper_balance || 1000000).toLocaleString("en-IN", {
+                          minimumFractionDigits: 2,
+                        })}
+                      </strong>{" "}
+                      active. Real funds are protected.
+                    </span>
+                  )}
                 </span>
               </div>
 

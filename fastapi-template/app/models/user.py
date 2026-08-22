@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Index, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -36,6 +36,7 @@ class UserRecord(Base):
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=True)
     full_name: Mapped[str] = mapped_column(String(100), default="Trader")
     role: Mapped[str] = mapped_column(String(20), default="trader")  # admin, trader, creator
+    paper_balance: Mapped[float] = mapped_column(Float, default=1000000.0)
     kyc_status: Mapped[str] = mapped_column(String(20), default="NOT_SUBMITTED")  # NOT_SUBMITTED, PENDING, VERIFIED, REJECTED
     pan_number: Mapped[str | None] = mapped_column(String(20), nullable=True)
     id_proof_type: Mapped[str | None] = mapped_column(String(50), nullable=True)

@@ -505,6 +505,85 @@ async def unlink_broker_account(
     return {"success": True, "message": f"{broker_name} unlinked successfully"}
 
 
+@router.get("/balance")
+@router.get("/margins")
+async def get_broker_and_paper_balance(
+    user: Optional[UserRecord] = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fetch live demat account margins from the connected broker, and real mutable Paper balance."""
+    paper_balance = getattr(user, "paper_balance", 1000000.0) if user else 1000000.0
+
+    live_margin = {
+        "connected": False,
+        "broker_name": None,
+        "client_id": None,
+        "available_cash": None,
+        "utilized_margin": None,
+        "total_collateral": None,
+        "currency": "INR",
+        "message": "Connect broker to view live balance.",
+        "last_refreshed": datetime.now(timezone.utc).isoformat(),
+    }
+
+    if user:
+        stmt = select(BrokerAccountRecord).where(
+            BrokerAccountRecord.user_id == user.id,
+            BrokerAccountRecord.status == "CONNECTED",
+            BrokerAccountRecord.is_active.is_(True),
+        )
+        res = await db.execute(stmt)
+        broker_acc = res.scalars().first()
+
+        if broker_acc:
+            live_margin["connected"] = True
+            live_margin["broker_name"] = broker_acc.broker_name
+            live_margin["client_id"] = broker_acc.client_id
+            live_margin["account_name"] = broker_acc.account_name
+
+            # Fetch real margins via official broker SDK / REST API
+            try:
+                if broker_acc.broker_name == "ZERODHA":
+                    api_key = broker_acc.get_api_key()
+                    api_secret = broker_acc.get_api_secret() if broker_acc.api_secret_encrypted else ""
+                    access_token = broker_acc.get_access_token() if broker_acc.access_token_encrypted else ""
+                    broker = ZerodhaKiteBroker(api_key=api_key, api_secret=api_secret, access_token=access_token)
+                    margins = await broker.get_margins()
+                    live_margin.update(margins)
+                elif broker_acc.broker_name == "UPSTOX":
+                    access_token = broker_acc.get_access_token() if broker_acc.access_token_encrypted else ""
+                    broker = UpstoxBroker(access_token=access_token)
+                    margins = await broker.get_margins()
+                    live_margin.update(margins)
+                elif broker_acc.broker_name == "ANGEL_ONE":
+                    api_key = broker_acc.get_api_key()
+                    password = broker_acc.get_api_secret() if broker_acc.api_secret_encrypted else ""
+                    jwt_token = broker_acc.get_access_token() if broker_acc.access_token_encrypted else ""
+                    broker = AngelOneBroker(
+                        api_key=api_key,
+                        client_code=broker_acc.client_id or "",
+                        password=password,
+                        jwt_token=jwt_token,
+                    )
+                    margins = await broker.get_margins()
+                    live_margin.update(margins)
+                elif broker_acc.broker_name == "BINANCE":
+                    api_key = broker_acc.get_api_key()
+                    api_secret = broker_acc.get_api_secret() if broker_acc.api_secret_encrypted else ""
+                    broker = BinanceBroker(api_key=api_key, api_secret=api_secret)
+                    margins = await broker.get_account_balance()
+                    live_margin.update(margins)
+            except Exception as exc:
+                logger.warning("Error fetching live margin for %s: %s", broker_acc.broker_name, exc)
+                live_margin["error"] = str(exc)
+                live_margin["available_cash"] = 0.0
+
+    return {
+        "paper_balance": round(paper_balance, 2),
+        "live_balance": live_margin,
+    }
+
+
 @router.post("/webhooks/zerodha")
 @router.post("/webhooks/{broker_name}")
 @router.post("/postback/{broker_name}")

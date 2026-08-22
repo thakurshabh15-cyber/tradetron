@@ -124,3 +124,14 @@ async def test_broker_oauth_and_live_balances_suite():
         }, headers=headers)
         assert invalid_angel_res.status_code == 400
         assert "validation failed" in invalid_angel_res.json()["detail"].lower()
+
+        # 12. Test GET /api/brokers/balance (Paper & Live Balance)
+        bal_res = await client.get("/api/brokers/balance", headers=headers)
+        assert bal_res.status_code == 200
+        bal_data = bal_res.json()
+        assert "paper_balance" in bal_data
+        assert bal_data["paper_balance"] == 1000000.0
+        assert "live_balance" in bal_data
+        assert bal_data["live_balance"]["connected"] is True
+        assert bal_data["live_balance"]["broker_name"] in ("ZERODHA", "UPSTOX")
+        assert "available_cash" in bal_data["live_balance"]

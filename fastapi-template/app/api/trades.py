@@ -184,6 +184,12 @@ async def close_position(
         user_id=pos.user_id,
     )
     db.add(trade)
+
+    if pos.mode == "PAPER" and user:
+        current_bal = getattr(user, "paper_balance", 1000000.0)
+        user.paper_balance = round(current_bal + realized_pnl, 2)
+        db.add(user)
+
     await db.commit()
 
     return {
@@ -196,6 +202,7 @@ async def close_position(
         "realized_pnl": realized_pnl,
         "pnl_pct": pnl_pct,
         "status": "CLOSED",
+        "paper_balance": getattr(user, "paper_balance", 1000000.0) if user else 1000000.0,
     }
 
 
