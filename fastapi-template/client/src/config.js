@@ -19,7 +19,10 @@ export const API_BASE = (() => {
         return "http://127.0.0.1:8080";
       }
     }
-    // In production SPA without explicit API URL, use same-origin relative API
+    // In production without VITE_API_URL, log warning to assist quick configuration
+    console.warn(
+      "⚠️ [Tradetron Notice] VITE_API_URL is not set. Ensure VITE_API_URL is configured in your Vercel Project Settings (e.g. https://your-backend.onrender.com) and redeployed."
+    );
     return "";
   }
   return "http://127.0.0.1:8080";
