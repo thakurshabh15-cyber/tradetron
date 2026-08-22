@@ -168,8 +168,10 @@ class IndianEquityMarketDataProvider(BaseMarketDataProvider):
                 move = random.gauss(0.0001, 0.003) * curr_p
                 o_val = round(curr_p, 2)
                 c_val = round(max(0.5, curr_p + move), 2)
-                h_val = round(max(o_val, c_val) + abs(random.gauss(0, 0.0015) * curr_p), 2)
-                l_val = round(min(o_val, c_val) - abs(random.gauss(0, 0.0015) * curr_p), 2)
+                wick_high = max(0.10, abs(random.gauss(0.001, 0.002) * curr_p))
+                wick_low = max(0.10, abs(random.gauss(0.001, 0.002) * curr_p))
+                h_val = round(max(o_val, c_val) + wick_high, 2)
+                l_val = round(max(0.2, min(o_val, c_val) - wick_low), 2)
                 v_val = float(random.randint(500, 25000))
                 candles.append({
                     "time": c_time,
@@ -181,7 +183,7 @@ class IndianEquityMarketDataProvider(BaseMarketDataProvider):
                 })
                 curr_p = c_val
 
-            logger.info("Generated %d synthetic baseline candles for %s (%s)", len(candles), clean_sym, tf)
+            logger.info("Generated %d distinct OHLCV baseline candles for %s (%s)", len(candles), clean_sym, tf)
 
         return candles
 

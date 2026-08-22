@@ -249,17 +249,23 @@ export default function TradingChart({ symbol = "NIFTY50", currentPrice = 24850.
     }
   }, [livePrice, chartData]);
 
-  const displayData = activeLegend || chartData.candles[chartData.candles.length - 1] || {
-    open: livePrice,
-    high: livePrice,
-    low: livePrice,
-    close: livePrice,
+  const lastCandle = chartData.candles[chartData.candles.length - 1];
+  const displayData = activeLegend || lastCandle || {
+    open: Number((livePrice * 0.9985).toFixed(2)),
+    high: Number((livePrice * 1.0025).toFixed(2)),
+    low: Number((livePrice * 0.9965).toFixed(2)),
+    close: Number(livePrice.toFixed(2)),
   };
 
   const isPositive = (displayData?.close ?? 0) >= (displayData?.open ?? 0);
   const sym = symbol || "";
-  const isINR = sym.includes("NIFTY") || sym.includes("RELIANCE") || sym.includes("INR") || sym.includes("TCS");
+  const isINR = sym.includes("NIFTY") || sym.includes("RELIANCE") || sym.includes("INR") || sym.includes("TCS") || sym.includes("GOLD") || sym.includes("CRUDE");
   const currencySymbol = isINR ? "₹" : "$";
+
+  const fmtPrice = (val) => {
+    if (val === undefined || val === null || isNaN(val)) return "0.00";
+    return Number(val).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+  };
 
   return (
     <div className="glass-panel rounded-2xl p-5 border border-slate-800/80 shadow-glass-md flex flex-col justify-between space-y-4">
@@ -272,13 +278,13 @@ export default function TradingChart({ symbol = "NIFTY50", currentPrice = 24850.
           <div>
             <div className="flex items-center gap-2">
               <h3 className="font-display font-bold text-base text-white">{symbol} TradingView Chart</h3>
-              <span className="badge-purple">LIVE DMA</span>
+              <span className="badge-purple">LIVE DMA ({timeframe})</span>
             </div>
             <div className="flex items-center gap-3 text-xs font-mono tabular-nums text-slate-400 mt-0.5 flex-wrap">
-              <span>O: <strong className="text-white">{currencySymbol}{displayData.open.toFixed(2)}</strong></span>
-              <span>H: <strong className="text-emerald-400">{currencySymbol}{displayData.high.toFixed(2)}</strong></span>
-              <span>L: <strong className="text-rose-400">{currencySymbol}{displayData.low.toFixed(2)}</strong></span>
-              <span>C: <strong className={isPositive ? "text-emerald-400" : "text-rose-400"}>{currencySymbol}{displayData.close.toFixed(2)}</strong></span>
+              <span>O: <strong className="text-white">{currencySymbol}{fmtPrice(displayData.open)}</strong></span>
+              <span>H: <strong className="text-emerald-400">{currencySymbol}{fmtPrice(displayData.high)}</strong></span>
+              <span>L: <strong className="text-rose-400">{currencySymbol}{fmtPrice(displayData.low)}</strong></span>
+              <span>C: <strong className={isPositive ? "text-emerald-400" : "text-rose-400"}>{currencySymbol}{fmtPrice(displayData.close)}</strong></span>
             </div>
           </div>
         </div>
@@ -293,7 +299,7 @@ export default function TradingChart({ symbol = "NIFTY50", currentPrice = 24850.
                 onClick={() => setTimeframe(tf)}
                 className={`px-2.5 py-1 rounded-lg transition-all ${
                   timeframe === tf
-                    ? "bg-brand-violet text-white shadow-sm font-bold"
+                    ? "bg-brand-violet text-white shadow-sm font-bold scale-105"
                     : "text-slate-400 hover:text-white"
                 }`}
               >
@@ -326,10 +332,19 @@ export default function TradingChart({ symbol = "NIFTY50", currentPrice = 24850.
 
       {/* TradingView Lightweight Chart Canvas Container */}
       <div className="relative w-full rounded-xl bg-surface-950/70 border border-slate-850 p-2 overflow-hidden">
+        {loading && (
+          <div className="absolute inset-0 bg-surface-950/60 backdrop-blur-[2px] z-10 flex items-center justify-center pointer-events-none">
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-900 border border-slate-800 text-xs font-mono text-cyan-400 shadow-lg">
+              <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
+              <span>Fetching {symbol} ({timeframe}) Candles...</span>
+            </div>
+          </div>
+        )}
+
         <div ref={chartContainerRef} className="w-full h-64 sm:h-72" />
 
         {/* Legend Indicator Overlay */}
-        <div className="absolute top-3 left-4 flex items-center gap-3 text-[10px] font-mono text-slate-400 bg-surface-950/80 px-2.5 py-1 rounded-lg border border-slate-800 pointer-events-none">
+        <div className="absolute top-3 left-4 flex items-center gap-3 text-[10px] font-mono text-slate-400 bg-surface-950/80 px-2.5 py-1 rounded-lg border border-slate-800 pointer-events-none z-0">
           <span className="flex items-center gap-1">
             <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" /> Bull
           </span>
