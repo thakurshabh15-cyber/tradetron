@@ -17,6 +17,7 @@ from typing import Any, Optional
 from app.brokers.base import BrokerClient
 from app.core.logging import get_logger
 from app.schemas.trading import OrderRequest
+import httpx
 
 logger = get_logger("broker.zerodha")
 
@@ -93,6 +94,47 @@ class ZerodhaKiteBroker(BrokerClient):
         except Exception as exc:
             logger.error("Zerodha session generation failed: %s", exc)
             raise RuntimeError(f"Zerodha OAuth session generation failed: {exc}")
+
+    async def generate_session_http(self, request_token: str) -> dict[str, Any]:
+        """Exchange OAuth request_token for access_token directly using Zerodha REST API & SHA-256 Checksum."""
+        if not self._has_credentials:
+            return {
+                "access_token": f"kite_access_{request_token[:16]}",
+                "user_id": "ZR9988",
+                "public_token": f"pub_{request_token[:8]}",
+                "status": "success",
+            }
+
+        checksum_str = f"{self.api_key}{request_token}{self.api_secret}"
+        checksum = hashlib.sha256(checksum_str.encode("utf-8")).hexdigest()
+
+        url = "https://api.kite.trade/session/token"
+        headers = {
+            "X-Kite-Version": "3",
+            "User-Agent": "tradetron-client/1.0",
+        }
+        data = {
+            "api_key": self.api_key,
+            "request_token": request_token,
+            "checksum": checksum,
+        }
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(url, headers=headers, data=data)
+            if resp.status_code != 200:
+                logger.error("Zerodha token exchange failed [%d]: %s", resp.status_code, resp.text)
+                raise RuntimeError(f"Zerodha OAuth token exchange failed: {resp.text}")
+
+            result = resp.json().get("data", {})
+            self.access_token = result.get("access_token")
+            self._is_connected = True
+            logger.info("Zerodha session generated successfully (user: %s)", result.get("user_id"))
+            return {
+                "access_token": self.access_token,
+                "user_id": result.get("user_id", ""),
+                "user_name": result.get("user_name", ""),
+                "status": "success",
+            }
 
     async def connect(self) -> None:
         """Validate KiteConnect session is active."""
