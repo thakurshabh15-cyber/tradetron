@@ -167,7 +167,8 @@ export async function initializeSession() {
   const token = getAccessToken();
   if (!token) {
     if (getRefreshToken()) {
-      return await refreshAccessToken();
+      const refreshedToken = await refreshAccessToken();
+      return refreshedToken ? getStoredUser() : null;
     }
     return null;
   }
@@ -182,5 +183,6 @@ export async function initializeSession() {
   } catch (err) {
     console.warn("[Auth] Session initialization failed:", err);
   }
+  clearTokens();
   return null;
 }

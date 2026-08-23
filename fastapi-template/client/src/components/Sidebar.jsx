@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { NavLink } from "react-router-dom";
+import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
   Store,
@@ -21,7 +21,7 @@ import {
   Workflow,
 } from "lucide-react";
 import AuthModal from "./AuthModal";
-import { getStoredUser, logoutUser, initializeSession } from "../services/apiClient";
+import { useAuthStore } from "../stores/useAuthStore";
 
 const links = [
   { to: "/", icon: LayoutDashboard, label: "Dashboard" },
@@ -38,27 +38,23 @@ const links = [
 ];
 
 export default function Sidebar({ onOpenKYC, kycStatus = "NOT_SUBMITTED" }) {
+  const navigate = useNavigate();
   const [isAuthOpen, setIsAuthOpen] = useState(false);
-  const [currentUser, setCurrentUser] = useState(getStoredUser());
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+  const authUser = useAuthStore((state) => state.user);
+  const currentUser = authUser || { full_name: "Trader", email: "" };
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const initializeAuth = useAuthStore((state) => state.initialize);
+  const logout = useAuthStore((state) => state.logout);
 
   useEffect(() => {
-    // 1. Initial verify / refresh against backend server
-    initializeSession().then((user) => {
-      if (user) setCurrentUser(user);
-    });
-
-    // 2. Event listener for live auth changes across tabs/modals
-    const handleAuthChange = (e) => {
-      setCurrentUser(e.detail);
-    };
-    window.addEventListener("tradetron_auth_change", handleAuthChange);
-    return () => window.removeEventListener("tradetron_auth_change", handleAuthChange);
+    initializeAuth();
   }, []);
 
   const handleLogout = async () => {
-    await logoutUser();
-    setCurrentUser(null);
+    await logout();
+    setMobileDrawerOpen(false);
+    navigate("/login", { state: { notice: "You have been logged out." } });
   };
 
   return (
@@ -73,7 +69,7 @@ export default function Sidebar({ onOpenKYC, kycStatus = "NOT_SUBMITTED" }) {
         </div>
 
         <div className="flex items-center gap-2">
-          {currentUser ? (
+          {isAuthenticated ? (
             <button
               onClick={() => setMobileDrawerOpen(true)}
               aria-label="Open user profile and navigation"
@@ -151,7 +147,7 @@ export default function Sidebar({ onOpenKYC, kycStatus = "NOT_SUBMITTED" }) {
 
             {/* User Auth Section */}
             <div className="pt-3 border-t border-slate-800">
-              {currentUser ? (
+              {isAuthenticated ? (
                 <div className="flex items-center justify-between p-2.5 rounded-xl bg-surface-800 border border-slate-700/60">
                   <div className="flex items-center gap-2 truncate">
                     <div className="w-7 h-7 rounded-full bg-brand-purple/20 text-brand-purple flex items-center justify-center text-xs font-bold shrink-0">
@@ -222,7 +218,7 @@ export default function Sidebar({ onOpenKYC, kycStatus = "NOT_SUBMITTED" }) {
 
         {/* User Account / Auth Section */}
         <div className="border-t border-slate-800/80 p-3 space-y-2">
-          {currentUser ? (
+          {isAuthenticated ? (
             <>
               <div className="flex items-center justify-between p-2.5 rounded-xl bg-surface-800/80 border border-slate-700/60">
                 <div className="flex items-center gap-2.5 overflow-hidden">
@@ -290,7 +286,7 @@ export default function Sidebar({ onOpenKYC, kycStatus = "NOT_SUBMITTED" }) {
       <AuthModal
         isOpen={isAuthOpen}
         onClose={() => setIsAuthOpen(false)}
-        onAuthSuccess={(user) => setCurrentUser(user)}
+        onAuthSuccess={() => initializeAuth()}
       />
     </>
   );

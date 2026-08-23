@@ -3,7 +3,7 @@ import { X, Lock, Mail, User, ShieldCheck, ArrowRight, CheckCircle2, AlertCircle
 import { triggerOAuthFlow, isOAuthAvailable } from "../services/oauth";
 import { API_BASE, setTokens } from "../services/apiClient";
 
-export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
+export default function AuthModal({ isOpen, onClose, onAuthSuccess, notice = null }) {
   const [tab, setTab] = useState("login"); // 'login' | 'register' | 'register_verify' | 'otp' | 'forgot_password'
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
@@ -21,7 +21,7 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
 
   const handleSaveTokens = (data) => {
     setTokens(data);
-    if (onAuthSuccess) onAuthSuccess(data.user);
+    if (onAuthSuccess) onAuthSuccess(data.user, data);
     onClose();
   };
 
@@ -323,6 +323,11 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
             <span>{successMsg}</span>
           </div>
         )}
+        {notice && !successMsg && (
+          <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-amber-300">
+            {notice}
+          </div>
+        )}
 
         {/* 1. PASSWORD LOGIN */}
         {tab === "login" && (
@@ -386,6 +391,19 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
             >
               {loading ? "Authenticating..." : "Sign In with Password"}
               <ArrowRight size={14} />
+            </button>
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => {
+                setEmail("admin@tradetron.com");
+                setPassword("Admin@Tradetron2026!");
+                setSuccessMsg("Demo credentials loaded. Click Sign In with Password to continue.");
+                setError(null);
+              }}
+              className="w-full rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-2 text-[11px] font-semibold text-slate-300 hover:border-cyan-500/50 hover:text-white"
+            >
+              Use demo credentials: admin@tradetron.com
             </button>
           </form>
         )}

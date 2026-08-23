@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import Sidebar from "./components/Sidebar";
 import BottomNav from "./components/BottomNav";
 import Dashboard from "./pages/Dashboard";
@@ -18,10 +18,47 @@ import BrokerConnectModal from "./components/BrokerConnectModal";
 import LiveOptInModal from "./components/LiveOptInModal";
 import KYCModal from "./components/KYCModal";
 import ErrorBoundary from "./components/ErrorBoundary";
+import AuthModal from "./components/AuthModal";
 import { MarketProvider } from "./context/MarketContext";
 import { authFetch } from "./services/apiClient";
+import { useAuthStore } from "./stores/useAuthStore";
 
 import { ShieldAlert, ShieldCheck, Power, Zap, Radio, Link as LinkIcon, AlertCircle, FileCheck } from "lucide-react";
+
+function ProtectedRoute({ children }) {
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const isLoading = useAuthStore((state) => state.isLoading);
+  const location = useLocation();
+  const setAuthData = useAuthStore((state) => state.setAuthData);
+
+  if (isLoading) return <div className="p-8 text-sm text-slate-400">Checking your session...</div>;
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace state={{ notice: "Please sign in to continue." , from: location.pathname }} />;
+  }
+  return children;
+}
+
+function LoginScreen() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+
+  if (isAuthenticated) {
+    return <Navigate to={location.state?.from || "/dashboard"} replace />;
+  }
+
+  return (
+    <AuthModal
+      isOpen
+      onClose={() => navigate("/dashboard", { replace: true })}
+      onAuthSuccess={(_, data) => {
+        setAuthData(data);
+        navigate(location.state?.from || "/dashboard", { replace: true });
+      }}
+      notice={location.state?.notice}
+    />
+  );
+}
 
 export default function App() {
   const [executionMode, setExecutionMode] = useState("PAPER"); // 'PAPER' is strictly enforced default
@@ -255,16 +292,17 @@ export default function App() {
               <Routes>
                 <Route path="/" element={<Dashboard />} />
                 <Route path="/dashboard" element={<Dashboard />} />
-                <Route path="/copy-trading" element={<CopyTrading />} />
+                <Route path="/login" element={<LoginScreen />} />
+                <Route path="/copy-trading" element={<ProtectedRoute><CopyTrading /></ProtectedRoute>} />
                 <Route path="/marketplace" element={<Marketplace />} />
                 <Route path="/watchlist" element={<Watchlist />} />
                 <Route path="/strategies" element={<Strategies />} />
                 <Route path="/history" element={<TradeHistory />} />
-                <Route path="/settings" element={<Settings />} />
+                <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
                 <Route path="/admin" element={<Admin />} />
                 <Route path="/broker-sessions" element={<BrokerSessions />} />
                 <Route path="/pricing" element={<Pricing />} />
-                <Route path="/visual-builder" element={<VisualBuilder />} />
+                <Route path="/visual-builder" element={<ProtectedRoute><VisualBuilder /></ProtectedRoute>} />
               </Routes>
             </ErrorBoundary>
           </main>

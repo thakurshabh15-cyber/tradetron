@@ -13,7 +13,7 @@ export function isGoogleOAuthConfigured() {
 }
 
 export function isOAuthAvailable() {
-  return isGoogleOAuthConfigured();
+  return true;
 }
 
 export async function loginWithOAuth(provider, oauthToken, email = null, fullName = null) {
@@ -61,7 +61,7 @@ export async function triggerOAuthFlow(provider) {
     }
     // Silently log rather than throwing screen-blocking error
     console.warn("Google Sign-In is not configured in this environment.");
-    return null;
+    throw new Error("Google Login is unavailable here. Use Email/OTP or the demo credentials below.");
   } else if (provider === "apple") {
     console.warn("Apple Sign-In is not configured.");
     return null;
