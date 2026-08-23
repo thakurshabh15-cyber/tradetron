@@ -1,13 +1,12 @@
 import { NavLink } from "react-router-dom";
-import { CreditCard, Eye, Settings, Users, Terminal, Workflow } from "lucide-react";
+import { CreditCard, Settings, Users, Terminal, Workflow } from "lucide-react";
 
 const items = [
   { to: "/dashboard", label: "Terminal", icon: Terminal },
+  { to: "/visual-builder", label: "Builder", icon: Workflow },
   { to: "/copy-trading", label: "Copy Trade", icon: Users },
-  { to: "/watchlist", label: "Watchlist", icon: Eye },
   { to: "/pricing", label: "Pricing", icon: CreditCard },
   { to: "/settings", label: "Settings", icon: Settings },
-  { to: "/visual-builder", label: "Builder", icon: Workflow },
 ];
 
 export default function BottomNav() {

@@ -72,13 +72,34 @@ export default function Sidebar({ onOpenKYC, kycStatus = "NOT_SUBMITTED" }) {
           <span className="font-display font-bold text-sm text-white tracking-tight">Tradetron</span>
         </div>
 
-        <button
-          onClick={() => setMobileDrawerOpen(!mobileDrawerOpen)}
-          aria-label="Toggle navigation menu"
-          className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl bg-surface-800 border border-slate-700 text-slate-300 hover:text-white"
-        >
-          {mobileDrawerOpen ? <X size={20} /> : <Menu size={20} />}
-        </button>
+        <div className="flex items-center gap-2">
+          {currentUser ? (
+            <button
+              onClick={() => setMobileDrawerOpen(true)}
+              aria-label="Open user profile and navigation"
+              className="flex min-h-[44px] items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-2.5 text-emerald-300"
+            >
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-400 text-xs font-bold text-slate-950">
+                {currentUser.full_name ? currentUser.full_name[0].toUpperCase() : "T"}
+              </span>
+              <span className="max-w-20 truncate text-xs font-semibold">{currentUser.full_name || "Profile"}</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => setIsAuthOpen(true)}
+              className="min-h-[44px] rounded-xl border border-emerald-500/40 bg-emerald-500 px-3 text-xs font-bold text-slate-950"
+            >
+              Sign In / Register
+            </button>
+          )}
+          <button
+            onClick={() => setMobileDrawerOpen(!mobileDrawerOpen)}
+            aria-label="Toggle navigation menu"
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl bg-surface-800 border border-slate-700 text-slate-300 hover:text-white"
+          >
+            {mobileDrawerOpen ? <X size={20} /> : <Menu size={20} />}
+          </button>
+        </div>
       </header>
 
       {/* ── MOBILE SLIDE-OVER DRAWER (Visible when opened on mobile) ── */}
