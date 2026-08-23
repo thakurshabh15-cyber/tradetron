@@ -145,6 +145,22 @@ export default function Admin() {
     }
   };
 
+  const handleDeleteUser = async (user) => {
+    if (!window.confirm("Are you sure you want to permanently delete this user?")) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/users/${user.id}`, {
+        method: "DELETE",
+        headers: authHeaders,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Failed to delete user");
+      setUsers((current) => current.filter((item) => item.id !== user.id));
+      setActionMsg(`${user.email} was permanently deleted.`);
+    } catch (err) {
+      setActionMsg(`Delete failed: ${err.message}`);
+    }
+  };
+
   const handleReviewKYC = async (userId, decision) => {
     try {
       const res = await fetch(`${API_BASE}/api/admin/kyc/${userId}/review`, {
@@ -438,6 +454,12 @@ export default function Admin() {
                         }`}
                       >
                         {u.is_active ? "Suspend" : "Reactivate"}
+                      </button>
+                      <button
+                        onClick={() => handleDeleteUser(u)}
+                        className="ml-2 rounded-lg border border-red-500/40 bg-red-500/10 px-2.5 py-1 text-[11px] font-semibold text-red-400 transition-all hover:bg-red-500/20"
+                      >
+                        Delete
                       </button>
                     </td>
                   </tr>
