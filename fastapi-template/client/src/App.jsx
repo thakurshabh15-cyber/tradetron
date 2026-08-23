@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Sidebar from "./components/Sidebar";
+import BottomNav from "./components/BottomNav";
 import Dashboard from "./pages/Dashboard";
 import CopyTrading from "./pages/CopyTrading";
 import Marketplace from "./pages/Marketplace";
@@ -126,7 +127,7 @@ export default function App() {
       <BrowserRouter>
         <div className="flex min-h-screen bg-surface-950 text-slate-300 selection:bg-accent-500/20 selection:text-accent-400">
           <Sidebar onOpenKYC={() => setIsKYCModalOpen(true)} kycStatus={kycStatus} />
-          <main className="flex-1 lg:ml-64 pt-16 pb-20 lg:pt-6 lg:pb-8 px-3.5 sm:px-6 lg:px-8 space-y-6 overflow-x-hidden w-full max-w-full">
+          <main className="flex-1 md:ml-64 pt-16 pb-24 md:pt-6 md:pb-8 px-3.5 sm:px-6 md:px-8 space-y-6 overflow-x-hidden w-full max-w-full">
             {/* Top Execution Control & Mode Banner */}
             <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 p-3 sm:p-3.5 rounded-xl bg-slate-900/90 border border-slate-800/80 shadow-lg">
               {/* Mode Indicator & Regulatory Disclaimer */}
@@ -252,6 +253,7 @@ export default function App() {
             <ErrorBoundary>
               <Routes>
                 <Route path="/" element={<Dashboard />} />
+                <Route path="/dashboard" element={<Dashboard />} />
                 <Route path="/copy-trading" element={<CopyTrading />} />
                 <Route path="/marketplace" element={<Marketplace />} />
                 <Route path="/watchlist" element={<Watchlist />} />
@@ -264,6 +266,7 @@ export default function App() {
               </Routes>
             </ErrorBoundary>
           </main>
+          <BottomNav />
 
           {/* Global Modals */}
           <KillSwitchModal

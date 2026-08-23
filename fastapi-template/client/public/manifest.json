@@ -1,0 +1,10 @@
+{
+  "name": "Tradetron Terminal",
+  "short_name": "Tradetron",
+  "theme_color": "#0B0F17",
+  "background_color": "#0B0F17",
+  "display": "standalone",
+  "start_url": "/",
+  "scope": "/",
+  "icons": []
+}

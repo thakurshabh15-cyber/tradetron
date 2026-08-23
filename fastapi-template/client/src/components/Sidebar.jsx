@@ -35,14 +35,6 @@ const links = [
   { to: "/admin", icon: ShieldCheck, label: "Admin Sentinel" },
 ];
 
-const mobileBottomLinks = [
-  { to: "/", icon: LayoutDashboard, label: "Desk" },
-  { to: "/copy-trading", icon: Users, label: "Copy" },
-  { to: "/watchlist", icon: Eye, label: "Watch" },
-  { to: "/strategies", icon: Brain, label: "Strats" },
-  { to: "/history", icon: History, label: "Trades" },
-];
-
 export default function Sidebar({ onOpenKYC, kycStatus = "NOT_SUBMITTED" }) {
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState(getStoredUser());
@@ -70,7 +62,7 @@ export default function Sidebar({ onOpenKYC, kycStatus = "NOT_SUBMITTED" }) {
   return (
     <>
       {/* ── MOBILE TOP NAVIGATION BAR (Visible < lg) ────────────────── */}
-      <header className="lg:hidden fixed top-0 left-0 right-0 z-40 h-14 bg-surface-950/90 border-b border-slate-800/80 backdrop-blur-md px-4 flex items-center justify-between">
+      <header className="md:hidden fixed top-0 left-0 right-0 z-40 h-14 bg-surface-950/90 border-b border-slate-800/80 backdrop-blur-md px-4 flex items-center justify-between">
         <div className="flex items-center gap-2.5">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-brand-purple to-brand-violet shadow-sm shadow-brand-purple/20">
             <Zap size={16} className="text-white" />
@@ -89,7 +81,7 @@ export default function Sidebar({ onOpenKYC, kycStatus = "NOT_SUBMITTED" }) {
 
       {/* ── MOBILE SLIDE-OVER DRAWER (Visible when opened on mobile) ── */}
       {mobileDrawerOpen && (
-        <div className="lg:hidden fixed inset-0 z-50 flex">
+        <div className="md:hidden fixed inset-0 z-50 flex">
           {/* Backdrop */}
           <div
             onClick={() => setMobileDrawerOpen(false)}
@@ -169,7 +161,7 @@ export default function Sidebar({ onOpenKYC, kycStatus = "NOT_SUBMITTED" }) {
       )}
 
       {/* ── DESKTOP FIXED SIDEBAR (Visible >= lg) ────────────────────── */}
-      <aside className="hidden lg:flex fixed left-0 top-0 z-30 h-screen w-64 flex-col border-r border-slate-800/80 bg-surface-900/60 backdrop-blur-md">
+      <aside className="hidden md:flex fixed left-0 top-0 z-30 h-screen w-64 flex-col border-r border-slate-800/80 bg-surface-900/60 backdrop-blur-md">
         {/* Brand Header */}
         <div className="flex items-center gap-3 border-b border-slate-800/80 px-5 py-5">
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-brand-violet via-brand-purple to-brand-indigo shadow-md shadow-brand-purple/30">
@@ -270,26 +262,6 @@ export default function Sidebar({ onOpenKYC, kycStatus = "NOT_SUBMITTED" }) {
           </div>
         </div>
       </aside>
-
-      {/* ── MOBILE BOTTOM QUICK ACTION TAB BAR (Visible < lg) ──────── */}
-      <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 h-16 bg-surface-950/95 border-t border-slate-800/80 backdrop-blur-md px-2 flex items-center justify-around">
-        {mobileBottomLinks.map(({ to, icon: Icon, label }) => (
-          <NavLink
-            key={to}
-            to={to}
-            className={({ isActive }) =>
-              `flex flex-col items-center justify-center gap-1 min-w-[56px] min-h-[44px] rounded-xl text-[10px] font-semibold transition-all ${
-                isActive
-                  ? "text-brand-purple font-bold scale-105"
-                  : "text-slate-400 hover:text-slate-200"
-              }`
-            }
-          >
-            <Icon size={18} />
-            <span>{label}</span>
-          </NavLink>
-        ))}
-      </nav>
 
       {/* Authentication Modal */}
       <AuthModal
