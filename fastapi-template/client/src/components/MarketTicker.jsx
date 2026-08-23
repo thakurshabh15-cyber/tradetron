@@ -1,10 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
-import { useMarket } from "../context/MarketContext";
-import { TrendingUp, TrendingDown, Shield, Activity } from "lucide-react";
+import { useMarketStore } from "../stores/useMarketStore";
+import { TrendingUp, TrendingDown, Shield } from "lucide-react";
 
-function MarketTicker({ symbol, initialData, isSelected, onSelect }) {
-  const { getQuote } = useMarket();
-  const liveQuote = getQuote(symbol);
+function MarketTickerComponent({ symbol, initialData, isSelected, onSelect }) {
+  // Selective Zustand subscription for this symbol only
+  const liveQuote = useMarketStore((state) => state.quotes[String(symbol).toUpperCase().trim()]);
   const data = liveQuote || initialData || { price: 0, change: 0, change_pct: 0 };
 
   const [priceFlash, setPriceFlash] = useState(null); // 'UP' | 'DOWN' | null
@@ -131,4 +131,5 @@ function areMarketTickerPropsEqual(prevProps, nextProps) {
   return true;
 }
 
-export default React.memo(MarketTicker, areMarketTickerPropsEqual);
+export const MarketTicker = React.memo(MarketTickerComponent, areMarketTickerPropsEqual);
+export default MarketTicker;

@@ -1,7 +1,8 @@
-import { ShieldAlert, Activity } from "lucide-react";
+import React from "react";
+import { ShieldAlert } from "lucide-react";
 import { ErrorState } from "./SkeletonLoaders";
 
-export default function RiskGauge({ riskData, loading = false, error = null, onRetry = null }) {
+function RiskGaugeComponent({ riskData, loading = false, error = null, onRetry = null }) {
   if (error) {
     return (
       <div className="glass-card p-4">
@@ -114,3 +115,6 @@ export default function RiskGauge({ riskData, loading = false, error = null, onR
     </div>
   );
 }
+
+export const RiskGauge = React.memo(RiskGaugeComponent);
+export default RiskGauge;

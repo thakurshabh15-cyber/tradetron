@@ -1,12 +1,15 @@
-import { useState } from "react";
-import { useMarket } from "../context/MarketContext";
+import React, { useState, useMemo, useCallback } from "react";
+import { useMarketStore } from "../stores/useMarketStore";
+import { useTradeStore } from "../stores/useTradeStore";
+import { useDebounce } from "../hooks/useDebounce";
 import { Zap, ShieldCheck, AlertCircle, ArrowUpRight, ArrowDownRight, CheckCircle2 } from "lucide-react";
-import { API_BASE } from "../config";
 
-export default function FastOrderPanel({ symbol = "NIFTY50", currentPrice = 24850.0, onOrderPlaced }) {
-  const { getQuote } = useMarket();
-  const liveQuote = getQuote(symbol);
+function FastOrderPanelComponent({ symbol = "NIFTY50", currentPrice = 24850.0, onOrderPlaced }) {
+  // Selective Zustand subscription: only re-render when this specific symbol quote updates
+  const liveQuote = useMarketStore((state) => state.quotes[String(symbol).toUpperCase().trim()]);
   const effectiveLivePrice = liveQuote?.price ?? currentPrice;
+
+  const executeOrder = useTradeStore((state) => state.executeOrder);
 
   const [side, setSide] = useState("BUY");
   const [quantity, setQuantity] = useState(50);
@@ -16,46 +19,43 @@ export default function FastOrderPanel({ symbol = "NIFTY50", currentPrice = 2485
   const [error, setError] = useState(null);
   const [fillResult, setFillResult] = useState(null);
 
-  const price = orderType === "MARKET" ? effectiveLivePrice : Number(customPrice);
-  const totalValue = quantity * price;
-  const marginRequired = totalValue * 0.2; // 5x leverage approx 20% margin for intraday
+  // Debounced input value for custom limit price to prevent recalculating margins on every keystroke
+  const debouncedPrice = useDebounce(customPrice, 200);
+  const debouncedQty = useDebounce(quantity, 200);
+
+  const price = useMemo(() => {
+    return orderType === "MARKET" ? effectiveLivePrice : Number(debouncedPrice) || effectiveLivePrice;
+  }, [orderType, effectiveLivePrice, debouncedPrice]);
+
+  const totalValue = useMemo(() => debouncedQty * price, [debouncedQty, price]);
+  const marginRequired = useMemo(() => totalValue * 0.2, [totalValue]); // 5x leverage
 
   const sym = symbol || "";
   const isINR = sym.includes("NIFTY") || sym.includes("RELIANCE") || sym.includes("INR") || sym.includes("TCS");
   const currencySymbol = isINR ? "₹" : "$";
 
-  const handlePlaceOrder = async () => {
+  const handlePlaceOrder = useCallback(async () => {
     setLoading(true);
     setError(null);
     setFillResult(null);
     try {
-      const token = localStorage.getItem("tradetron_access_token") || "";
-      const res = await fetch(`${API_BASE}/api/trades/order`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          symbol,
-          side,
-          quantity: Number(quantity),
-          order_type: orderType,
-          price: orderType === "LIMIT" ? Number(customPrice) : null,
-        }),
+      const data = await executeOrder({
+        symbol,
+        side,
+        quantity: Number(quantity),
+        order_type: orderType,
+        price: orderType === "LIMIT" ? Number(customPrice) : null,
+        mode: "PAPER",
       });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Order execution rejected");
 
       setFillResult(data);
       if (onOrderPlaced) onOrderPlaced(data);
     } catch (err) {
-      setError(err.message);
+      setError(err.message || "Order execution failed");
     } finally {
       setLoading(false);
     }
-  };
+  }, [executeOrder, symbol, side, quantity, orderType, customPrice, onOrderPlaced]);
 
   return (
     <div className="glass-panel rounded-2xl p-5 border border-slate-800/80 shadow-glass-md flex flex-col justify-between space-y-4">
@@ -86,7 +86,7 @@ export default function FastOrderPanel({ symbol = "NIFTY50", currentPrice = 2485
             <CheckCircle2 size={14} className="text-emerald-400" />
             <span>ORDER FILLED: {fillResult.status}</span>
           </div>
-          <span className="text-[10px] text-slate-400">{fillResult.broker_order_id}</span>
+          <span className="text-[10px] text-slate-400">{fillResult.broker_order_id || fillResult.order_id}</span>
         </div>
       )}
 
@@ -205,3 +205,6 @@ export default function FastOrderPanel({ symbol = "NIFTY50", currentPrice = 2485
     </div>
   );
 }
+
+export const FastOrderPanel = React.memo(FastOrderPanelComponent);
+export default FastOrderPanel;

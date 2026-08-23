@@ -1,16 +1,14 @@
-import { useState } from "react";
-import { Power, Trash2, Cpu, Zap, ShieldCheck, AlertOctagon, SlidersHorizontal, RefreshCw } from "lucide-react";
+import React, { useState } from "react";
+import { Power, Trash2, Cpu, Zap, ShieldCheck, AlertOctagon } from "lucide-react";
 import axios from "axios";
 
-export default function StrategyList({
+function StrategyListComponent({
   strategies = [],
   onToggle,
   onDelete,
-  onConfigure,
 }) {
   const [filterMode, setFilterMode] = useState("ALL"); // 'ALL' | 'LIVE' | 'PAPER'
   const [killSwitchLoading, setKillSwitchLoading] = useState(false);
-  const [killSwitchActive, setKillSwitchActive] = useState(false);
 
   const filteredStrategies = strategies.filter((s) => {
     if (filterMode === "ALL") return true;
@@ -34,7 +32,6 @@ export default function StrategyList({
         action: "PAUSE_ALL",
         reason: "Manual Emergency Kill-Switch Activated by Operator",
       });
-      setKillSwitchActive(true);
       window.location.reload();
     } catch (err) {
       alert("Failed to trigger kill switch: " + (err.response?.data?.detail || err.message));
@@ -219,3 +216,6 @@ export default function StrategyList({
     </div>
   );
 }
+
+export const StrategyList = React.memo(StrategyListComponent);
+export default StrategyList;

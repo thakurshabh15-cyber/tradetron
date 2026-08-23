@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Plus, Trash2, Sliders, AlertTriangle, ShieldCheck, Zap } from "lucide-react";
 import axios from "axios";
 
@@ -18,7 +18,7 @@ const OPERATORS = [
   { value: "cross_below", label: "Crosses Below" },
 ];
 
-export default function StrategyBuilder({ onSubmit, isSubmitting }) {
+function StrategyBuilderComponent({ onSubmit, isSubmitting }) {
   const [name, setName] = useState("");
   const [symbols, setSymbols] = useState("RELIANCE, TCS");
   const [side, setSide] = useState("BUY");
@@ -46,22 +46,22 @@ export default function StrategyBuilder({ onSubmit, isSubmitting }) {
       .catch(() => {});
   }, []);
 
-  const addCondition = () => {
+  const addCondition = useCallback(() => {
     setConditions((prev) => [
       ...prev,
       { indicator: "RSI", operator: "lt", value: 30, period: 14 },
     ]);
-  };
+  }, []);
 
-  const removeCondition = (idx) => {
+  const removeCondition = useCallback((idx) => {
     setConditions((prev) => prev.filter((_, i) => i !== idx));
-  };
+  }, []);
 
-  const updateCondition = (idx, field, val) => {
+  const updateCondition = useCallback((idx, field, val) => {
     setConditions((prev) =>
       prev.map((c, i) => (i === idx ? { ...c, [field]: val } : c))
     );
-  };
+  }, []);
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -356,3 +356,6 @@ export default function StrategyBuilder({ onSubmit, isSubmitting }) {
     </form>
   );
 }
+
+export const StrategyBuilder = React.memo(StrategyBuilderComponent);
+export default StrategyBuilder;

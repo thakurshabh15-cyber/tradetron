@@ -36,12 +36,18 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Logs
+*.log
+logs/
+**/logs/
+
 # IDE & Editor files
 .vscode/
 .idea/
-*.swp
+.swp
 *.swo
 .DS_Store
 Thumbs.db
 .claude/
 .devcontainer/
+

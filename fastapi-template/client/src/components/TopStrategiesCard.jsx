@@ -1,7 +1,8 @@
-import { Award, TrendingUp, Zap } from "lucide-react";
+import React from "react";
+import { Award, TrendingUp } from "lucide-react";
 import { ErrorState } from "./SkeletonLoaders";
 
-export default function TopStrategiesCard({ strategies = [], loading = false, error = null, onRetry = null }) {
+function TopStrategiesCardComponent({ strategies = [], loading = false, error = null, onRetry = null }) {
   if (error) {
     return (
       <div className="card p-5 bg-slate-900 border border-slate-800 rounded-xl shadow-lg">
@@ -99,3 +100,6 @@ export default function TopStrategiesCard({ strategies = [], loading = false, er
     </div>
   );
 }
+
+export const TopStrategiesCard = React.memo(TopStrategiesCardComponent);
+export default TopStrategiesCard;
