@@ -15,12 +15,14 @@ import {
   Menu,
   X,
   Radio,
+  Users,
 } from "lucide-react";
 import AuthModal from "./AuthModal";
 import { getStoredUser, logoutUser, initializeSession } from "../services/apiClient";
 
 const links = [
   { to: "/", icon: LayoutDashboard, label: "Dashboard" },
+  { to: "/copy-trading", icon: Users, label: "Copy Trading" },
   { to: "/marketplace", icon: Store, label: "Marketplace" },
   { to: "/watchlist", icon: Eye, label: "Watchlist & Alerts" },
   { to: "/strategies", icon: Brain, label: "Strategies" },
@@ -31,10 +33,10 @@ const links = [
 
 const mobileBottomLinks = [
   { to: "/", icon: LayoutDashboard, label: "Desk" },
+  { to: "/copy-trading", icon: Users, label: "Copy" },
   { to: "/watchlist", icon: Eye, label: "Watch" },
   { to: "/strategies", icon: Brain, label: "Strats" },
   { to: "/history", icon: History, label: "Trades" },
-  { to: "/admin", icon: ShieldCheck, label: "Admin" },
 ];
 
 export default function Sidebar({ onOpenKYC, kycStatus = "NOT_SUBMITTED" }) {

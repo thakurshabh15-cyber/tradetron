@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Sidebar from "./components/Sidebar";
 import Dashboard from "./pages/Dashboard";
+import CopyTrading from "./pages/CopyTrading";
 import Marketplace from "./pages/Marketplace";
 import Strategies from "./pages/Strategies";
 import TradeHistory from "./pages/TradeHistory";
@@ -249,6 +250,7 @@ export default function App() {
             <ErrorBoundary>
               <Routes>
                 <Route path="/" element={<Dashboard />} />
+                <Route path="/copy-trading" element={<CopyTrading />} />
                 <Route path="/marketplace" element={<Marketplace />} />
                 <Route path="/watchlist" element={<Watchlist />} />
                 <Route path="/strategies" element={<Strategies />} />

@@ -123,6 +123,10 @@ async def init_db() -> None:
         InvoiceRecord,
         PlanRecord,
     )
+    from app.models.copy_trading import (  # noqa: F401
+        CopyGroupRecord,
+        CopyFollowerRecord,
+    )
     from app.models.audit import AuditLogRecord  # noqa: F401
 
     logger.info("Initializing database tables on %s...", "SQLite" if IS_SQLITE else "PostgreSQL")

@@ -132,12 +132,13 @@ app.add_middleware(
 )
 
 # Mount routers
-from app.api import admin, auth, billing, brokers, dashboard, market_data, reports, strategies, trades, user, watchlist, websocket  # noqa: E402
+from app.api import admin, auth, billing, brokers, copy_trading, dashboard, market_data, reports, strategies, trades, user, watchlist, websocket  # noqa: E402
 
 app.include_router(auth.router)
 app.include_router(admin.router)
 app.include_router(billing.router)
 app.include_router(brokers.router)
+app.include_router(copy_trading.router)
 app.include_router(dashboard.router)
 app.include_router(strategies.router)
 app.include_router(trades.router)

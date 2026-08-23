@@ -192,6 +192,21 @@ async def close_position(
 
     await db.commit()
 
+    # Trigger Copy Trading Fan-out for all active followers of master trader
+    try:
+        from app.engine.copy_trading import copy_trading_engine
+        master_uid = user.id if user else pos.user_id
+        if master_uid:
+            asyncio.create_task(
+                copy_trading_engine.mirror_close_position(
+                    symbol=pos.symbol,
+                    master_user_id=master_uid,
+                    exit_price=exit_price,
+                )
+            )
+    except Exception as exc:
+        logger.warning("[CopyTrading] Notice on follower position exit fan-out: %s", exc)
+
     return {
         "success": True,
         "position_id": pos.id,
@@ -314,6 +329,17 @@ async def place_manual_order(
         },
     )
 
+    # 6. Trigger Real-time Copy Trading Fan-out across all active follower accounts
+    fanout_result = None
+    try:
+        from app.engine.copy_trading import copy_trading_engine
+        fanout_result = await copy_trading_engine.mirror_trade(
+            master_order=order,
+            master_user_id=user.id,
+        )
+    except Exception as exc:
+        logger.warning("[CopyTrading] Fan-out trigger exception: %s", exc)
+
     return {
         "success": True,
         "order_id": order_id,
@@ -324,5 +350,6 @@ async def place_manual_order(
         "mode": trade.mode,
         "status": "FILLED",
         "position_id": position.id,
+        "copy_fanout": fanout_result,
         "executed_at": trade.executed_at.isoformat() if trade.executed_at else datetime.now(timezone.utc).isoformat(),
     }
