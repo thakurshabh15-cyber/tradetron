@@ -18,6 +18,7 @@ import {
   Users,
   Server,
   CreditCard,
+  Workflow,
 } from "lucide-react";
 import AuthModal from "./AuthModal";
 import { getStoredUser, logoutUser, initializeSession } from "../services/apiClient";
@@ -32,6 +33,7 @@ const links = [
   { to: "/settings", icon: SettingsIcon, label: "Profile & Settings" },
   { to: "/broker-sessions", icon: Server, label: "Broker Sessions" },
   { to: "/pricing", icon: CreditCard, label: "Pricing & Plans" },
+  { to: "/visual-builder", icon: Workflow, label: "Visual Options Builder" },
   { to: "/admin", icon: ShieldCheck, label: "Admin Sentinel" },
 ];
 

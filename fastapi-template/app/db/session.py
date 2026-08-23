@@ -106,6 +106,7 @@ async def init_db() -> None:
         StrategyRecord,
         TradeRecord,
     )
+    from app.models.visual_strategy import VisualStrategyRecord  # noqa: F401
     from app.models.marketplace import (  # noqa: F401
         MarketplaceStrategyRecord,
         StrategyDeploymentRecord,
@@ -178,6 +179,7 @@ async def init_db() -> None:
         ("positions", "strategy_id VARCHAR(36)"),
         ("positions", "broker_account_id VARCHAR(36)"),
         ("positions", "mode VARCHAR(20) DEFAULT 'PAPER'"),
+        ("visual_strategies", "updated_at TIMESTAMP"),
         ("broker_accounts", "token_expires_at TIMESTAMP"),
         ("broker_accounts", "totp_secret_encrypted TEXT"),
         ("broker_accounts", "refresh_token_encrypted TEXT"),
