@@ -89,6 +89,11 @@ async def lifespan(application: FastAPI):  # noqa: ARG001
     _engine = TradingEngine(broker=broker, tick_queue=tick_queue)
     await _engine.start()
 
+    # 6. Start Automated Daily 8:45 AM IST Broker TOTP & Session Renewal Scheduler
+    from app.engine.broker_cron import broker_scheduler
+
+    broker_scheduler.start()
+
     logger.info(
         "%s ready — broker=%s, symbols=%s",
         settings.app_name,
@@ -100,6 +105,7 @@ async def lifespan(application: FastAPI):  # noqa: ARG001
 
     # Shutdown
     logger.info("Shutting down %s…", settings.app_name)
+    broker_scheduler.stop()
     if _engine:
         await _engine.stop()
     if _simulator:
@@ -132,12 +138,13 @@ app.add_middleware(
 )
 
 # Mount routers
-from app.api import admin, auth, billing, brokers, copy_trading, dashboard, market_data, reports, strategies, trades, user, watchlist, websocket  # noqa: E402
+from app.api import admin, auth, billing, brokers, broker_cron, copy_trading, dashboard, market_data, reports, strategies, trades, user, watchlist, websocket  # noqa: E402
 
 app.include_router(auth.router)
 app.include_router(admin.router)
 app.include_router(billing.router)
 app.include_router(brokers.router)
+app.include_router(broker_cron.router)
 app.include_router(copy_trading.router)
 app.include_router(dashboard.router)
 app.include_router(strategies.router)

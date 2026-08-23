@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -37,6 +37,8 @@ class BrokerAccountRecord(Base):
     api_key_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
     api_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     access_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    totp_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    refresh_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Token Expiry Lifecycle (Daily token refresh tracking)
     token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -68,12 +70,35 @@ class BrokerAccountRecord(Base):
     def get_access_token(self) -> str:
         return decrypt_secret(self.access_token_encrypted) if self.access_token_encrypted else ""
 
-    def set_credentials(self, api_key: str, api_secret: str = "", access_token: str = "") -> None:
+    def set_totp_secret(self, raw_totp: str) -> None:
+        self.totp_secret_encrypted = encrypt_secret(raw_totp) if raw_totp else None
+
+    def get_totp_secret(self) -> str:
+        return decrypt_secret(self.totp_secret_encrypted) if self.totp_secret_encrypted else ""
+
+    def set_refresh_token(self, raw_refresh: str) -> None:
+        self.refresh_token_encrypted = encrypt_secret(raw_refresh) if raw_refresh else None
+
+    def get_refresh_token(self) -> str:
+        return decrypt_secret(self.refresh_token_encrypted) if self.refresh_token_encrypted else ""
+
+    def set_credentials(
+        self,
+        api_key: str,
+        api_secret: str = "",
+        access_token: str = "",
+        totp_secret: str = "",
+        refresh_token: str = "",
+    ) -> None:
         self.set_api_key(api_key)
         if api_secret:
             self.set_api_secret(api_secret)
         if access_token:
             self.set_access_token(access_token)
+        if totp_secret:
+            self.set_totp_secret(totp_secret)
+        if refresh_token:
+            self.set_refresh_token(refresh_token)
 
     @property
     def api_key_masked(self) -> str:
@@ -90,3 +115,26 @@ class BrokerAccountRecord(Base):
                 expiry = expiry.replace(tzinfo=timezone.utc)
             return datetime.now(timezone.utc) >= expiry
         return False
+
+
+class BrokerSessionLogRecord(Base):
+    """Audit log for automated and manual broker session renewals."""
+
+    __tablename__ = "broker_session_logs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    broker_account_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("broker_accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    broker_name: Mapped[str] = mapped_column(String(50), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False)  # SUCCESS, FAILED, TOTP_INVALID, EXPIRED
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    renewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    __table_args__ = (
+        Index("ix_broker_session_logs_acc_status", "broker_account_id", "status"),
+        Index("ix_broker_session_logs_time", "renewed_at"),
+    )
+

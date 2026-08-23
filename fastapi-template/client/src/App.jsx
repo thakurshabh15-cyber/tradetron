@@ -9,6 +9,7 @@ import TradeHistory from "./pages/TradeHistory";
 import Watchlist from "./pages/Watchlist";
 import Settings from "./pages/Settings";
 import Admin from "./pages/Admin";
+import BrokerSessions from "./pages/BrokerSessions";
 import KillSwitchModal from "./components/KillSwitchModal";
 import BrokerConnectModal from "./components/BrokerConnectModal";
 import LiveOptInModal from "./components/LiveOptInModal";
@@ -257,6 +258,7 @@ export default function App() {
                 <Route path="/history" element={<TradeHistory />} />
                 <Route path="/settings" element={<Settings />} />
                 <Route path="/admin" element={<Admin />} />
+                <Route path="/broker-sessions" element={<BrokerSessions />} />
               </Routes>
             </ErrorBoundary>
           </main>

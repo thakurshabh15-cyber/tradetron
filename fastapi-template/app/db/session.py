@@ -99,7 +99,7 @@ class Base(DeclarativeBase):
 async def init_db() -> None:
     """Create all tables if they don't exist and run non-breaking schema additions."""
     from app.models.user import UserRecord, RevokedTokenRecord  # noqa: F401
-    from app.models.broker_account import BrokerAccountRecord  # noqa: F401
+    from app.models.broker_account import BrokerAccountRecord, BrokerSessionLogRecord  # noqa: F401
     from app.models.trading import (  # noqa: F401
         OrderRecord,
         PositionRecord,
@@ -176,6 +176,8 @@ async def init_db() -> None:
         ("positions", "broker_account_id VARCHAR(36)"),
         ("positions", "mode VARCHAR(20) DEFAULT 'PAPER'"),
         ("broker_accounts", "token_expires_at TIMESTAMP"),
+        ("broker_accounts", "totp_secret_encrypted TEXT"),
+        ("broker_accounts", "refresh_token_encrypted TEXT"),
         ("subscriptions", "razorpay_subscription_id VARCHAR(100)"),
         ("subscriptions", "razorpay_customer_id VARCHAR(100)"),
         ("payments", "order_id VARCHAR(100)"),

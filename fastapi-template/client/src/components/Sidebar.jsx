@@ -16,6 +16,7 @@ import {
   X,
   Radio,
   Users,
+  Server,
 } from "lucide-react";
 import AuthModal from "./AuthModal";
 import { getStoredUser, logoutUser, initializeSession } from "../services/apiClient";
@@ -28,6 +29,7 @@ const links = [
   { to: "/strategies", icon: Brain, label: "Strategies" },
   { to: "/history", icon: History, label: "Trade History" },
   { to: "/settings", icon: SettingsIcon, label: "Profile & Settings" },
+  { to: "/broker-sessions", icon: Server, label: "Broker Sessions" },
   { to: "/admin", icon: ShieldCheck, label: "Admin Sentinel" },
 ];
 
