@@ -99,7 +99,6 @@ class Base(DeclarativeBase):
 async def init_db() -> None:
     """Create all tables if they don't exist and run non-breaking schema additions."""
     from app.models.user import UserRecord, RevokedTokenRecord  # noqa: F401
-    from app.models.mobile_otp import MobileOTPRecord  # noqa: F401
     from app.models.broker_account import BrokerAccountRecord, BrokerSessionLogRecord  # noqa: F401
     from app.models.trading import (  # noqa: F401
         OrderRecord,
@@ -159,7 +158,6 @@ async def init_db() -> None:
         ("users", "failed_login_attempts INTEGER DEFAULT 0"),
         ("users", "locked_until TIMESTAMP"),
         ("users", f"is_verified BOOLEAN DEFAULT {bool_default_true}"),
-        ("mobile_otps", "created_at TIMESTAMP"),
         ("orders", "user_id VARCHAR(36)"),
         ("orders", "broker_account_id VARCHAR(36)"),
         ("orders", "price FLOAT"),

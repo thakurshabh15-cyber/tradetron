@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { X, Lock, Mail, User, ShieldCheck, ArrowRight, CheckCircle2, AlertCircle, KeyRound, Smartphone } from "lucide-react";
 import { triggerOAuthFlow, isOAuthAvailable } from "../services/oauth";
 import { API_BASE, setTokens } from "../services/apiClient";
@@ -16,6 +16,13 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, notice = nul
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
+  const [resendCooldown, setResendCooldown] = useState(0);
+
+  useEffect(() => {
+    if (resendCooldown <= 0) return undefined;
+    const timer = window.setInterval(() => setResendCooldown((value) => Math.max(0, value - 1)), 1000);
+    return () => window.clearInterval(timer);
+  }, [resendCooldown]);
 
   if (!isOpen) return null;
 
@@ -129,18 +136,37 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, notice = nul
     setLoading(true);
     setError(null);
     try {
-      const isMobile = email.trim().replace("+", "").replace(/[\s()-]/g, "").match(/^\d+$/);
-      const endpoint = isMobile ? "/api/auth/send-otp" : "/api/auth/request-otp";
-      const body = isMobile ? { phone_number: email.trim() } : { identifier: email.trim() };
-      const res = await fetch(`${API_BASE}${endpoint}`, {
+      const res = await fetch(`${API_BASE}/api/auth/request-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ identifier: email.trim() }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Failed to send OTP");
       setOtpSent(true);
-      setSuccessMsg(`${isMobile ? "Mobile" : "Email"} OTP sent to ${email.trim()}`);
+      setSuccessMsg(`Email OTP sent to ${email.trim()}`);
+      setResendCooldown(60);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResendOtp = async () => {
+    if (resendCooldown > 0 || !email.trim()) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/resend-otp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ identifier: email.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Failed to resend OTP");
+      setSuccessMsg(`Email OTP resent to ${email.trim()}`);
+      setResendCooldown(60);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -530,14 +556,14 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, notice = nul
             {!otpSent ? (
               <form onSubmit={handleRequestOtp} className="space-y-3">
                 <div>
-                  <label className="text-[11px] font-medium text-slate-300">Phone number or email</label>
+                  <label className="text-[11px] font-medium text-slate-300">Email address</label>
                   <div className="relative mt-1">
                     <Mail size={14} className="absolute left-3 top-3 text-slate-500" />
                     <input
                       type="text"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      placeholder="+919876543210 or trader@tradetron.io"
+                      placeholder="trader@tradetron.io"
                       className="w-full bg-slate-800 border border-slate-700 rounded-lg pl-9 pr-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
                       required
                     />
@@ -580,6 +606,12 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, notice = nul
                   {loading ? "Verifying..." : "Verify & Log In"}
                   <CheckCircle2 size={14} />
                 </button>
+                <div className="flex items-center justify-between pt-1 text-[11px]">
+                  <span className="text-slate-500">Code expires in 15 minutes</span>
+                  <button type="button" onClick={handleResendOtp} disabled={loading || resendCooldown > 0} className="font-semibold text-cyan-400 hover:text-cyan-300 disabled:cursor-not-allowed disabled:text-slate-600">
+                    {resendCooldown > 0 ? `Resend OTP in ${resendCooldown}s` : "Resend OTP"}
+                  </button>
+                </div>
 
                 <button
                   type="button"

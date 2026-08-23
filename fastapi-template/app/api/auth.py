@@ -501,15 +501,18 @@ async def toggle_2fa(
 @router.post("/request-otp")
 async def request_otp(req: RequestOtpRequest, request: Request):
     """Generate and dispatch OTP for user authentication."""
+    identifier = req.identifier.strip().lower()
+    if "@" not in identifier:
+        raise HTTPException(status_code=400, detail="Email address is required for OTP login")
     client_ip = request.client.host if request.client else "unknown"
-    if not check_rate_limit(f"otp:{client_ip}:{req.identifier}", max_requests=5, window_seconds=300):
-        raise HTTPException(status_code=429, detail="Too many OTP requests. Please wait a few minutes.")
+    if not check_rate_limit(f"otp-cooldown:{client_ip}:{identifier}", max_requests=1, window_seconds=60):
+        raise HTTPException(status_code=429, detail="Please wait 60 seconds before requesting another OTP")
 
-    otp_code = generate_otp_for_identifier(req.identifier)
-    dispatch_res = await dispatch_otp(req.identifier, otp_code, purpose="login")
-    if not dispatch_res.get("dispatched") and "@" in req.identifier and settings.resend_api_key:
+    otp_code = generate_otp_for_identifier(identifier)
+    dispatch_res = await dispatch_otp(identifier, otp_code, purpose="login")
+    if not dispatch_res.get("dispatched") and settings.resend_api_key:
         err_msg = dispatch_res.get("message") or "Failed to deliver OTP email via Resend."
-        logger.error("OTP email delivery failure for %s: %s", req.identifier, err_msg)
+        logger.error("OTP email delivery failure for %s: %s", identifier, err_msg)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Email delivery failed: {err_msg}",
@@ -517,16 +520,32 @@ async def request_otp(req: RequestOtpRequest, request: Request):
 
     logger.info(
         "OTP generated for %s (dispatched: %s via %s)",
-        req.identifier,
+        identifier,
         dispatch_res.get("dispatched"),
         dispatch_res.get("provider"),
     )
 
     return {
         "success": True,
-        "identifier": req.identifier,
-        "message": f"Verification code sent to {req.identifier}",
+        "identifier": identifier,
+        "message": f"Verification code sent to {identifier}",
     }
+
+
+@router.post("/resend-otp")
+async def resend_otp(req: RequestOtpRequest, request: Request):
+    """Resend an email OTP with a 60-second cooldown."""
+    identifier = req.identifier.strip().lower()
+    if "@" not in identifier:
+        raise HTTPException(status_code=400, detail="Email address is required for OTP login")
+    client_ip = request.client.host if request.client else "unknown"
+    if not check_rate_limit(f"otp-cooldown:{client_ip}:{identifier}", max_requests=1, window_seconds=60):
+        raise HTTPException(status_code=429, detail="Please wait 60 seconds before requesting another OTP")
+    otp_code = generate_otp_for_identifier(identifier)
+    dispatch_res = await dispatch_otp(identifier, otp_code, purpose="login")
+    if not dispatch_res.get("dispatched") and settings.resend_api_key:
+        raise HTTPException(status_code=502, detail="Email delivery failed. Please try again later.")
+    return {"success": True, "identifier": identifier, "message": f"Verification code resent to {identifier}"}
 
 
 @router.post("/verify-otp", response_model=TokenResponse)
@@ -536,32 +555,8 @@ async def verify_otp(
 ):
     """Verify 6-digit OTP code and authenticate user."""
     identifier_clean = req.identifier.strip().lower()
-    mobile_identifier = "".join(
-        character for character in identifier_clean if character.isdigit() or character == "+"
-    )
-    if mobile_identifier.replace("+", "").isdigit():
-        from app.engine.otp_service import normalize_phone, verify_mobile_otp
-
-        if not await verify_mobile_otp(db, identifier_clean, req.otp_code):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired OTP code")
-        phone_clean = normalize_phone(identifier_clean)
-        stmt = select(UserRecord).where(UserRecord.phone == phone_clean)
-        res = await db.execute(stmt)
-        user = res.scalar_one_or_none()
-        if not user:
-            user = UserRecord(
-                email=f"{phone_clean[1:]}@mobile.tradetron.local",
-                phone=phone_clean,
-                hashed_password=None,
-                full_name=req.full_name or "Trader",
-                is_active=True,
-                is_verified=True,
-            )
-            db.add(user)
-            await db.commit()
-            await db.refresh(user)
-        return _generate_token_response(user)
-
+    if "@" not in identifier_clean:
+        raise HTTPException(status_code=400, detail="Email address is required for OTP login")
     if not verify_otp_for_identifier(identifier_clean, req.otp_code.strip()):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired OTP code")
 
