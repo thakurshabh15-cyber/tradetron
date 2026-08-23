@@ -31,7 +31,7 @@ async def send_otp_email(to_email: str, otp_code: str) -> dict[str, Any]:
 
     subject, text = _otp_email(otp_code)
     payload = {
-        "from": settings.emails_from_email or settings.resend_from_email,
+        "from": settings.emails_from_email or "otp@ecosystemofsamartinvesting.in",
         "to": [to_email],
         "subject": subject,
         "text": text,

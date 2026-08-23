@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     # ── Resend & SMTP Email Dispatch (OTP & Notifications) ───────────
     resend_api_key: str = ""
     resend_from_email: str = "onboarding@resend.dev"
-    emails_from_email: str = "onboarding@resend.dev"
+    emails_from_email: str = "otp@ecosystemofsamartinvesting.in"
 
     smtp_host: str = ""
     smtp_port: int = 587
