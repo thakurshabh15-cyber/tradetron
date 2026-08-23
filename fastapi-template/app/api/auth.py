@@ -509,7 +509,8 @@ async def request_otp(req: RequestOtpRequest, request: Request):
         raise HTTPException(status_code=429, detail="Please wait 60 seconds before requesting another OTP")
 
     otp_code = generate_otp_for_identifier(identifier)
-    dispatch_res = await dispatch_otp(identifier, otp_code, purpose="login")
+    from app.engine.email_service import send_otp_email
+    dispatch_res = await send_otp_email(identifier, otp_code)
     if not dispatch_res.get("dispatched") and settings.resend_api_key:
         err_msg = dispatch_res.get("message") or "Failed to deliver OTP email via Resend."
         logger.error("OTP email delivery failure for %s: %s", identifier, err_msg)
@@ -542,7 +543,8 @@ async def resend_otp(req: RequestOtpRequest, request: Request):
     if not check_rate_limit(f"otp-cooldown:{client_ip}:{identifier}", max_requests=1, window_seconds=60):
         raise HTTPException(status_code=429, detail="Please wait 60 seconds before requesting another OTP")
     otp_code = generate_otp_for_identifier(identifier)
-    dispatch_res = await dispatch_otp(identifier, otp_code, purpose="login")
+    from app.engine.email_service import send_otp_email
+    dispatch_res = await send_otp_email(identifier, otp_code)
     if not dispatch_res.get("dispatched") and settings.resend_api_key:
         raise HTTPException(status_code=502, detail="Email delivery failed. Please try again later.")
     return {"success": True, "identifier": identifier, "message": f"Verification code resent to {identifier}"}
