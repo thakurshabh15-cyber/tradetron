@@ -148,18 +148,23 @@ export default function Sidebar({ onOpenKYC, kycStatus = "NOT_SUBMITTED" }) {
             {/* User Auth Section */}
             <div className="pt-3 border-t border-slate-800">
               {isAuthenticated ? (
-                <div className="flex items-center justify-between p-2.5 rounded-xl bg-surface-800 border border-slate-700/60">
-                  <div className="flex items-center gap-2 truncate">
-                    <div className="w-7 h-7 rounded-full bg-brand-purple/20 text-brand-purple flex items-center justify-center text-xs font-bold shrink-0">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 rounded-xl border border-slate-700/60 bg-surface-800 p-2.5">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-purple/20 text-xs font-bold text-brand-purple">
                       {currentUser.full_name ? currentUser.full_name[0].toUpperCase() : "T"}
                     </div>
-                    <div className="truncate text-xs">
+                    <div className="min-w-0 truncate text-xs">
                       <p className="font-bold text-white truncate">{currentUser.full_name || "Trader"}</p>
                       <p className="text-[10px] text-slate-400 truncate">{currentUser.email}</p>
                     </div>
                   </div>
-                  <button onClick={handleLogout} className="p-1.5 text-slate-400 hover:text-rose-400">
+                  <button
+                    onClick={handleLogout}
+                    aria-label="Log out of Tradetron"
+                    className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 text-xs font-bold text-rose-300 transition-colors hover:bg-rose-500/20 hover:text-rose-200"
+                  >
                     <LogOut size={16} />
+                    Logout
                   </button>
                 </div>
               ) : (
