@@ -229,6 +229,9 @@ async def place_manual_order(
     db: AsyncSession = Depends(get_db),
 ):
     """Place manual DMA order for PAPER or LIVE execution with real fill price and open position tracking."""
+    from app.engine.subscription import subscription_engine
+    await subscription_engine.verify_feature_access(db, user.id, "trade_execution")
+
     clean_sym = req.symbol.upper().strip()
 
     # 1. Resolve real live market execution price from market provider / master

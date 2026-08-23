@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -26,10 +26,14 @@ class PlanRecord(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
     name: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)  # FREE, PRO, ELITE
+    code: Mapped[str | None] = mapped_column(String(50), unique=True, index=True, nullable=True)
     display_name: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[str] = mapped_column(Text, default="")
     price_monthly: Mapped[float] = mapped_column(Float, default=0.0)
     price_yearly: Mapped[float] = mapped_column(Float, default=0.0)
+    max_brokers: Mapped[int] = mapped_column(Integer, default=1)
+    copy_trading_allowed: Mapped[bool] = mapped_column(Boolean, default=False)
+    max_algos: Mapped[int] = mapped_column(Integer, default=1)
     currency: Mapped[str] = mapped_column(String(10), default="INR")
     features_json: Mapped[str] = mapped_column(Text, default="{}")  # Stored entitlements
     razorpay_plan_id_monthly: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -47,6 +51,7 @@ class SubscriptionRecord(Base):
     user_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    plan_code: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
     plan_name: Mapped[str] = mapped_column(String(50), default="FREE")  # FREE, PRO, ELITE
     status: Mapped[str] = mapped_column(String(20), default="ACTIVE")  # ACTIVE, CANCELLED, EXPIRED
     billing_cycle: Mapped[str] = mapped_column(String(20), default="MONTHLY")  # MONTHLY, YEARLY
@@ -56,6 +61,8 @@ class SubscriptionRecord(Base):
     razorpay_customer_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     start_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     end_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    current_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    auto_renew: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     __table_args__ = (

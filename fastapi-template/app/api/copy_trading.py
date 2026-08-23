@@ -61,6 +61,11 @@ async def create_copy_group(
     db: AsyncSession = Depends(get_db),
 ):
     """Create a new Master Copy Trading group with unique invite code and profit-sharing fee."""
+    # ── Plan limit enforcement: copy trading requires PRO or INSTITUTIONAL ─────
+    from app.engine.subscription import subscription_engine
+    await subscription_engine.verify_access(user.id, "copy_trading", db)
+    # ─────────────────────────────────────────────────────────────────────────
+
     group = CopyGroupRecord(
         master_user_id=user.id,
         name=req.name.strip(),
@@ -74,6 +79,7 @@ async def create_copy_group(
     await db.refresh(group)
 
     logger.info("Master trader %s created copy group %s (%s)", user.id, group.name, group.invite_code)
+
     return {
         "success": True,
         "group": {
@@ -260,6 +266,9 @@ async def join_copy_group(
     db: AsyncSession = Depends(get_db),
 ):
     """Subscribe to a master copy group via invite code or group ID with custom lot multiplier."""
+    from app.engine.subscription import subscription_engine
+    await subscription_engine.verify_feature_access(db, user.id, "copy_trading")
+
     group = None
     if req.invite_code:
         clean_code = req.invite_code.strip().upper()

@@ -123,6 +123,8 @@ async def init_db() -> None:
         InvoiceRecord,
         PlanRecord,
     )
+    from app.models.subscription import PlanRecord as SubscriptionPlanRecord  # noqa: F401
+    from app.models.subscription import SubscriptionRecord as UserSubscriptionRecord  # noqa: F401
     from app.models.copy_trading import (  # noqa: F401
         CopyGroupRecord,
         CopyFollowerRecord,
@@ -180,6 +182,13 @@ async def init_db() -> None:
         ("broker_accounts", "refresh_token_encrypted TEXT"),
         ("subscriptions", "razorpay_subscription_id VARCHAR(100)"),
         ("subscriptions", "razorpay_customer_id VARCHAR(100)"),
+        ("subscriptions", "plan_code VARCHAR(50)"),
+        ("subscriptions", "current_period_end TIMESTAMP"),
+        ("subscriptions", f"auto_renew BOOLEAN DEFAULT {bool_default_true}"),
+        ("plans", "code VARCHAR(50)"),
+        ("plans", "max_brokers INTEGER DEFAULT 1"),
+        ("plans", f"copy_trading_allowed BOOLEAN DEFAULT {bool_default_false}"),
+        ("plans", "max_algos INTEGER DEFAULT 1"),
         ("payments", "order_id VARCHAR(100)"),
         ("payments", "method VARCHAR(50)"),
         ("payments", "error_reason VARCHAR(255)"),

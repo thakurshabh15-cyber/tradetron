@@ -10,6 +10,7 @@ import Watchlist from "./pages/Watchlist";
 import Settings from "./pages/Settings";
 import Admin from "./pages/Admin";
 import BrokerSessions from "./pages/BrokerSessions";
+import Pricing from "./pages/Pricing";
 import KillSwitchModal from "./components/KillSwitchModal";
 import BrokerConnectModal from "./components/BrokerConnectModal";
 import LiveOptInModal from "./components/LiveOptInModal";
@@ -259,6 +260,7 @@ export default function App() {
                 <Route path="/settings" element={<Settings />} />
                 <Route path="/admin" element={<Admin />} />
                 <Route path="/broker-sessions" element={<BrokerSessions />} />
+                <Route path="/pricing" element={<Pricing />} />
               </Routes>
             </ErrorBoundary>
           </main>

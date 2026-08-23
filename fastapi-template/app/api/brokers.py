@@ -101,6 +101,22 @@ async def oauth_callback(
     broker_norm = req.broker_name.upper().strip()
     token_expiry = _calculate_daily_token_expiry()
 
+    # Re-authentication of an existing broker does not consume another slot.
+    existing_stmt = select(BrokerAccountRecord).where(
+        BrokerAccountRecord.user_id == user.id,
+        BrokerAccountRecord.broker_name == broker_norm,
+        BrokerAccountRecord.is_active.is_(True),
+    )
+    existing = (await db.execute(existing_stmt)).scalar_one_or_none()
+    if not existing:
+        count_stmt = select(BrokerAccountRecord.id).where(
+            BrokerAccountRecord.user_id == user.id,
+            BrokerAccountRecord.is_active.is_(True),
+        )
+        current_count = len((await db.execute(count_stmt)).scalars().all())
+        from app.engine.subscription import subscription_engine
+        await subscription_engine.verify_access(user.id, "broker_link", db, current_count=current_count)
+
     if broker_norm == "ZERODHA":
         kite = ZerodhaKiteBroker()
         session_data = kite.generate_session(req.request_token)
@@ -391,6 +407,17 @@ async def link_broker_manual(
 ):
     """Link broker credentials manually with AES-256 encryption at rest and strict pre-flight verification."""
     broker_name = req.broker_name.upper().strip()
+
+    # ── Plan limit enforcement: count existing active broker accounts ─────────
+    from app.engine.subscription import subscription_engine
+    existing_stmt = select(BrokerAccountRecord).where(
+        BrokerAccountRecord.user_id == user.id,
+        BrokerAccountRecord.is_active.is_(True),
+    )
+    existing_res = await db.execute(existing_stmt)
+    existing_count = len(existing_res.scalars().all())
+    await subscription_engine.verify_access(user.id, "broker_link", db, current_count=existing_count)
+    # ─────────────────────────────────────────────────────────────────────────
 
     # Pre-flight credential verification based on broker
     if broker_name == "ANGEL_ONE":
