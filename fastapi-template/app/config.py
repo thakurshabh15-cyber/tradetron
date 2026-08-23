@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     sentry_dsn: str = ""
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+    whatsapp_access_token: str = ""
+    whatsapp_phone_number_id: str = ""
+    whatsapp_business_account_id: str = ""
+    whatsapp_otp_template_name: str = ""
 
     # ── Resend & SMTP Email Dispatch (OTP & Notifications) ───────────
     resend_api_key: str = ""

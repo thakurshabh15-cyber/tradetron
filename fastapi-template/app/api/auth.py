@@ -536,6 +536,32 @@ async def verify_otp(
 ):
     """Verify 6-digit OTP code and authenticate user."""
     identifier_clean = req.identifier.strip().lower()
+    mobile_identifier = "".join(
+        character for character in identifier_clean if character.isdigit() or character == "+"
+    )
+    if mobile_identifier.replace("+", "").isdigit():
+        from app.engine.otp_service import normalize_phone, verify_mobile_otp
+
+        if not await verify_mobile_otp(db, identifier_clean, req.otp_code):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired OTP code")
+        phone_clean = normalize_phone(identifier_clean)
+        stmt = select(UserRecord).where(UserRecord.phone == phone_clean)
+        res = await db.execute(stmt)
+        user = res.scalar_one_or_none()
+        if not user:
+            user = UserRecord(
+                email=f"{phone_clean[1:]}@mobile.tradetron.local",
+                phone=phone_clean,
+                hashed_password=None,
+                full_name=req.full_name or "Trader",
+                is_active=True,
+                is_verified=True,
+            )
+            db.add(user)
+            await db.commit()
+            await db.refresh(user)
+        return _generate_token_response(user)
+
     if not verify_otp_for_identifier(identifier_clean, req.otp_code.strip()):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired OTP code")
 

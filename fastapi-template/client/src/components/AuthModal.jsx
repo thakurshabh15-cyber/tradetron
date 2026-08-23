@@ -129,15 +129,18 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, notice = nul
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/auth/request-otp`, {
+      const isMobile = email.trim().replace("+", "").replace(/[\s()-]/g, "").match(/^\d+$/);
+      const endpoint = isMobile ? "/api/auth/send-otp" : "/api/auth/request-otp";
+      const body = isMobile ? { phone_number: email.trim() } : { identifier: email.trim() };
+      const res = await fetch(`${API_BASE}${endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ identifier: email.trim() }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Failed to send OTP");
       setOtpSent(true);
-      setSuccessMsg(`6-digit verification code sent to ${email.trim()}`);
+      setSuccessMsg(`${isMobile ? "Mobile" : "Email"} OTP sent to ${email.trim()}`);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -296,7 +299,7 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, notice = nul
                   tab === "otp" ? "bg-cyan-500/20 text-cyan-300 shadow-sm border border-cyan-500/30" : "text-slate-400 hover:text-white"
                 }`}
               >
-                OTP Login
+                Mobile OTP
               </button>
               <button
                 onClick={() => { setTab("register"); setError(null); setSuccessMsg(null); }}
@@ -527,14 +530,14 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, notice = nul
             {!otpSent ? (
               <form onSubmit={handleRequestOtp} className="space-y-3">
                 <div>
-                  <label className="text-[11px] font-medium text-slate-300">Email or Phone</label>
+                  <label className="text-[11px] font-medium text-slate-300">Phone number or email</label>
                   <div className="relative mt-1">
                     <Mail size={14} className="absolute left-3 top-3 text-slate-500" />
                     <input
                       type="text"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      placeholder="trader@tradetron.io or +919876543210"
+                      placeholder="+919876543210 or trader@tradetron.io"
                       className="w-full bg-slate-800 border border-slate-700 rounded-lg pl-9 pr-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
                       required
                     />
