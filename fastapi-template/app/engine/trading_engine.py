@@ -349,6 +349,27 @@ class TradingEngine:
                         pnl=exc.pnl,
                         mode="PAPER",
                     )
+                    from app.engine.alerts import notify_sl_tp, notify_trade_fill
+                    if exc.action_type in ("STOP_LOSS_EXIT", "TAKE_PROFIT_EXIT"):
+                        await notify_sl_tp(
+                            trade_data.get("user_id"),
+                            event=exc.action_type.replace("_", " "),
+                            symbol=exc.symbol,
+                            side=exc.side.value,
+                            quantity=exc.quantity,
+                            price=exc.price,
+                            mode="PAPER",
+                            pnl=exc.pnl,
+                        )
+                    else:
+                        await notify_trade_fill(
+                            trade_data.get("user_id"),
+                            symbol=exc.symbol,
+                            side=exc.side.value,
+                            quantity=exc.quantity,
+                            price=exc.price,
+                            mode="PAPER",
+                        )
                     await ws_manager.broadcast("trades", trade_data)
 
                 # 3. Evaluate custom user-defined strategies watching this symbol
@@ -642,6 +663,7 @@ class TradingEngine:
                     "quantity": quantity,
                     "price": price,
                     "pnl": pnl,
+                    "user_id": user_id,
                     "mode": mode,
                     "executed_at": exec_time,
                 }

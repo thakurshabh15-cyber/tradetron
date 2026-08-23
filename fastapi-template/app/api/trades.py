@@ -315,6 +315,16 @@ async def place_manual_order(
     await db.refresh(trade)
     await db.refresh(position)
 
+    from app.engine.alerts import notify_trade_fill
+    await notify_trade_fill(
+        user.id,
+        symbol=trade.symbol,
+        side=trade.side,
+        quantity=trade.quantity,
+        price=trade.price,
+        mode=trade.mode,
+    )
+
     from app.core.audit import log_audit_event
     await log_audit_event(
         db=db,

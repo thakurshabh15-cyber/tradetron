@@ -59,6 +59,8 @@ export default function Settings() {
   });
   const [isSavingNotifs, setIsSavingNotifs] = useState(false);
   const [notifMsg, setNotifMsg] = useState(null);
+  const [telegramMsg, setTelegramMsg] = useState(null);
+  const [isTestingTelegram, setIsTestingTelegram] = useState(false);
 
   useEffect(() => {
     if (profileData) {
@@ -161,6 +163,42 @@ export default function Settings() {
       setNotifMsg({ type: "error", text: err.message });
     } finally {
       setIsSavingNotifs(false);
+    }
+  };
+
+  const handleSaveTelegramSettings = async () => {
+    setTelegramMsg(null);
+    try {
+      const res = await authFetch("/api/alerts/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: notifs.telegram_chat_id,
+          telegram_alerts_enabled: notifs.telegram_enabled,
+          order_fills_enabled: notifs.order_executed_notify,
+          sl_tp_enabled: notifs.sl_tp_trigger_notify,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Failed to save Telegram settings");
+      setTelegramMsg({ type: "success", text: "Telegram alert settings saved." });
+    } catch (err) {
+      setTelegramMsg({ type: "error", text: err.message });
+    }
+  };
+
+  const handleTestTelegram = async () => {
+    setIsTestingTelegram(true);
+    setTelegramMsg(null);
+    try {
+      const res = await authFetch("/api/alerts/telegram/test", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Telegram test failed");
+      setTelegramMsg({ type: "success", text: data.message });
+    } catch (err) {
+      setTelegramMsg({ type: "error", text: err.message });
+    } finally {
+      setIsTestingTelegram(false);
     }
   };
 
@@ -504,11 +542,11 @@ export default function Settings() {
                 </div>
 
                 {/* Telegram Delivery */}
-                <div className="p-3 rounded-lg bg-surface-800/60 border border-white/[0.06] space-y-2">
+                <div className="p-3 rounded-lg bg-surface-800/60 border border-cyan-500/20 space-y-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <Send size={15} className="text-blue-400" />
-                      <span className="text-xs font-semibold text-white">Telegram Alerts</span>
+                      <span className="text-xs font-semibold text-white">Telegram & Mobile Alerts</span>
                     </div>
                     <input
                       type="checkbox"
@@ -519,17 +557,30 @@ export default function Settings() {
                       className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-blue-500 focus:ring-blue-500"
                     />
                   </div>
-                  {notifs.telegram_enabled && (
-                    <input
-                      type="text"
-                      value={notifs.telegram_chat_id || ""}
-                      onChange={(e) =>
-                        setNotifs((prev) => ({ ...prev, telegram_chat_id: e.target.value }))
-                      }
-                      placeholder="Telegram Chat ID (e.g. @tradetron_bot)"
-                      className="input-field text-xs font-mono mt-1"
-                    />
-                  )}
+                  <input
+                    type="text"
+                    value={notifs.telegram_chat_id || ""}
+                    onChange={(e) =>
+                      setNotifs((prev) => ({ ...prev, telegram_chat_id: e.target.value }))
+                    }
+                    placeholder="Telegram Chat ID (e.g. 123456789)"
+                    className="input-field text-xs font-mono"
+                  />
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <label className="flex items-center justify-between rounded-lg border border-white/[0.04] bg-surface-900/50 px-2.5 py-2 text-[11px] text-slate-300">
+                      Order fills
+                      <input type="checkbox" checked={notifs.order_executed_notify} onChange={(e) => setNotifs((prev) => ({ ...prev, order_executed_notify: e.target.checked }))} className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-cyan-500" />
+                    </label>
+                    <label className="flex items-center justify-between rounded-lg border border-white/[0.04] bg-surface-900/50 px-2.5 py-2 text-[11px] text-slate-300">
+                      SL / TP alerts
+                      <input type="checkbox" checked={notifs.sl_tp_trigger_notify} onChange={(e) => setNotifs((prev) => ({ ...prev, sl_tp_trigger_notify: e.target.checked }))} className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-cyan-500" />
+                    </label>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button type="button" onClick={handleSaveTelegramSettings} className="btn-primary text-[10px] py-1.5 px-3">Save Telegram Settings</button>
+                    <button type="button" onClick={handleTestTelegram} disabled={isTestingTelegram} className="btn-ghost text-[10px] py-1.5 px-3 flex items-center gap-1.5"><Send size={12} />{isTestingTelegram ? "Sending..." : "Send Test Alert"}</button>
+                  </div>
+                  {telegramMsg && <p className={`text-[11px] ${telegramMsg.type === "success" ? "text-emerald-400" : "text-rose-400"}`}>{telegramMsg.text}</p>}
                 </div>
 
                 {/* Browser Push */}

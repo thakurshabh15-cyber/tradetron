@@ -117,6 +117,7 @@ async def init_db() -> None:
     from app.models.notification import (  # noqa: F401
         NotificationPreferenceRecord,
     )
+    from app.models.alerts import UserNotificationSettings  # noqa: F401
     from app.models.billing import (  # noqa: F401
         SubscriptionRecord,
         PaymentRecord,
@@ -185,6 +186,7 @@ async def init_db() -> None:
         ("subscriptions", "plan_code VARCHAR(50)"),
         ("subscriptions", "current_period_end TIMESTAMP"),
         ("subscriptions", f"auto_renew BOOLEAN DEFAULT {bool_default_true}"),
+        ("notification_preferences", f"margin_calls_enabled BOOLEAN DEFAULT {bool_default_true}"),
         ("plans", "code VARCHAR(50)"),
         ("plans", "max_brokers INTEGER DEFAULT 1"),
         ("plans", f"copy_trading_allowed BOOLEAN DEFAULT {bool_default_false}"),

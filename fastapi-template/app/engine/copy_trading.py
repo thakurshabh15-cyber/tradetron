@@ -229,6 +229,16 @@ class CopyTradingEngine:
 
                 await db.commit()
 
+                from app.engine.alerts import notify_trade_fill
+                await notify_trade_fill(
+                    follower.follower_user_id,
+                    symbol=symbol,
+                    side=side,
+                    quantity=calc_qty,
+                    price=price,
+                    mode=follower_mode,
+                )
+
                 return {
                     "success": True,
                     "follower_user_id": follower.follower_user_id,
