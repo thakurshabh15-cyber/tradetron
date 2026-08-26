@@ -132,6 +132,7 @@ app = FastAPI(
 _DEFAULT_PROD_ORIGINS = [
     "https://tradethrone.vercel.app",
     "https://tradethron.vercel.app",
+    "https://*.vercel.app",
     # Local development frontends — safe to expose in production CORS since
     # attacker pages live on random public domains, never on the victim's
     # own localhost. Keeps `npm run dev` functional against any deployment.
@@ -150,9 +151,15 @@ if not cors_origins or cors_origins == ["*"]:
     else:
         cors_origins = ["*"]
 
+# Allow genuine wildcard Vercel preview/deploy subdomains in addition to the
+# explicit exact origins. Starlette matches origins exactly (no *. expansion),
+# so we also register an origin regex that accepts any *.vercel.app host.
+_ALLOW_VERCEL_REGEX = r"https://([a-z0-9-]+\.)*vercel\.app"
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
+    allow_origin_regex=_ALLOW_VERCEL_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

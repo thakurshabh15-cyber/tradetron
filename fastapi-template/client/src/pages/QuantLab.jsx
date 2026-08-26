@@ -6,6 +6,9 @@ import {
 import RobustnessGauge from "../components/RobustnessGauge";
 import EquityCurve from "../components/EquityCurve";
 import { authFetch } from "../services/apiClient";
+import {
+  isOfflineOrHtmlError, simulateQuantParse, simulateQuantHealth, readJsonResponse,
+} from "../services/api";
 import { useToast } from "../components/Toast";
 
 const EXAMPLES = [
@@ -35,8 +38,13 @@ export default function QuantLab() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.detail || `${res.status} request failed`);
+    // readJsonResponse returns null when the body is HTML/empty/garbage
+    // (e.g. a CDN SPA fallback). Treat null as an HTML response so callers
+    // trigger the offline demo path instead of a dead-end "Unexpected token".
+    const data = await readJsonResponse(res);
+    if (data === null || !res.ok) {
+      throw new Error(data?.detail || `${res.status || 200} HTMLError`);
+    }
     return data;
   };
 
@@ -46,7 +54,14 @@ export default function QuantLab() {
       const p = await post("/api/quant-lab/parse", { text });
       setParsed(p);
       toast.success("Strategy parsed", { description: "Structure understood. You can now analyze health." });
-    } catch (e) { setError(e.message); toast.error("Parsing failed", { description: e.message }); }
+    } catch (e) {
+      if (isOfflineOrHtmlError(e)) {
+        setParsed(simulateQuantParse(text));
+        toast.info("Offline demo • parsed locally", { description: "Backend unreachable — showing a deterministic local parse." });
+        return;
+      }
+      setError(e.message); toast.error("Parsing failed", { description: e.message });
+    }
     finally { setBusy(""); }
   };
 
@@ -60,7 +75,16 @@ export default function QuantLab() {
       toast.success("Health analysis ready", {
         description: hr?.verdict || "Robustness report generated from a truthful net-cost backtest.",
       });
-    } catch (e) { setError(e.message); toast.error("Analysis failed", { description: e.message }); }
+    } catch (e) {
+      if (isOfflineOrHtmlError(e)) {
+        setParsed(simulateQuantParse(text)); setReport(simulateQuantHealth());
+        toast.info("Offline demo • simulated analysis", {
+          description: "Backend unreachable — showing a deterministic, non-binding health report.",
+        });
+        return;
+      }
+      setError(e.message); toast.error("Analysis failed", { description: e.message });
+    }
     finally { setBusy(""); }
   };
 

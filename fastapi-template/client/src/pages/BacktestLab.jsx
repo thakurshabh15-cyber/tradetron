@@ -4,6 +4,7 @@ import {
 } from "lucide-react";
 import EquityCurve from "../components/EquityCurve";
 import { authFetch } from "../services/apiClient";
+import { isOfflineOrHtmlError, simulateBacktest } from "../services/api";
 import { useToast } from "../components/Toast";
 
 const SYMBOLS = ["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX", "RELIANCE", "TCS", "INFY", "HDFCBANK"];
@@ -50,6 +51,17 @@ export default function BacktestLab() {
         description: `${data.metrics?.total_trades ?? 0} trades · net ${data.metrics?.total_pnl ? "₹" + Number(data.metrics.total_pnl).toLocaleString("en-IN") : "—"}`,
       });
     } catch (e) {
+      // Hardened fallback: never surface a raw "Failed to fetch" / "<!doctype HTML"
+      // toast. When the backend is offline or returns the SPA HTML, run a
+      // deterministic offline simulation with a clear "offline" label.
+      if (isOfflineOrHtmlError(e)) {
+        const demo = simulateBacktest(form);
+        setReport(demo);
+        toast.info("Offline demo • simulated backtest", {
+          description: "Backend unreachable — showing a deterministic, non-binding simulation.",
+        });
+        return;
+      }
       setError(e.message);
       toast.error("Backtest failed", { description: e.message });
     } finally {

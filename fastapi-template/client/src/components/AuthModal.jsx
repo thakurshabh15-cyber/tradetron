@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { X, Lock, Mail, User, ShieldCheck, ArrowRight, CheckCircle2, AlertCircle, KeyRound, Smartphone } from "lucide-react";
 import { triggerOAuthFlow, isOAuthAvailable } from "../services/oauth";
 import { API_BASE, setTokens } from "../services/apiClient";
+import { isOfflineOrHtmlError, demoLogin } from "../services/api";
 
 export default function AuthModal({ isOpen, onClose, onAuthSuccess, notice = null }) {
   const [tab, setTab] = useState("login"); // 'login' | 'register' | 'register_verify' | 'otp' | 'forgot_password'
@@ -60,6 +61,21 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, notice = nul
       setSuccessMsg("Logged in successfully!");
       setTimeout(() => handleSaveTokens(data), 500);
     } catch (err) {
+      // Hardened fallback: a network outage or a CDN serving SPA HTML for the
+      // /api route must never surface a raw "Failed to fetch" / "Unexpected
+      // token '<'" error to the trader. Fall back to a clearly-labelled demo
+      // session so the UI stays navigable. Real credential rejections (401 JSON
+      // "Invalid credentials") are NOT matched here and still surface normally.
+      if (isOfflineOrHtmlError(err)) {
+        const demo = demoLogin();
+        setTokens(demo);
+        setSuccessMsg("Backend offline — you're in Demo Pilot mode. Live data will resume when the API is reachable.");
+        setTimeout(() => {
+          if (onAuthSuccess) onAuthSuccess(demo.user, demo);
+          onClose();
+        }, 600);
+        return;
+      }
       setError(err.message);
     } finally {
       setLoading(false);
