@@ -346,14 +346,34 @@ async def init_db() -> None:
                 )
                 session.add(new_admin)
                 await session.commit()
-                logger.info("Default Admin User created: admin@tradethrone.io (password: Admin@TradeThrone2026!)")
+                logger.info("Default Admin User created: admin@tradetron.io (password: Admin@TradeThrone2026!)")
 
-            demo_stmt = select(UserRecord).where(UserRecord.email == "admin@tradetron.com")
+            # Seed Super-Admin using configured default credentials
+            from app.config import settings as _cfg
+            _admin_email = _cfg.default_admin_email.lower().strip()
+            demo_stmt = select(UserRecord).where(UserRecord.email == _admin_email)
             demo_user = (await session.execute(demo_stmt)).scalar_one_or_none()
             if not demo_user:
                 from app.core.security import hash_password
                 session.add(UserRecord(
-                    email="admin@tradethrone.com",
+                    email=_admin_email,
+                    hashed_password=hash_password(_cfg.default_admin_password),
+                    full_name="TradeThrone Super-Admin",
+                    role="admin",
+                    kyc_status="VERIFIED",
+                    is_active=True,
+                    is_verified=True,
+                ))
+                await session.commit()
+                logger.info("Super-Admin User created: %s", _admin_email)
+
+            # Back-compat: also seed the older demo admin address if it doesn't exist
+            legacy_demo_stmt = select(UserRecord).where(UserRecord.email == "admin@tradetron.com")
+            legacy_demo_user = (await session.execute(legacy_demo_stmt)).scalar_one_or_none()
+            if not legacy_demo_user:
+                from app.core.security import hash_password
+                session.add(UserRecord(
+                    email="admin@tradetron.com",
                     hashed_password=hash_password("Admin@TradeThrone2026!"),
                     full_name="TradeThrone Demo Admin",
                     role="admin",
@@ -362,7 +382,7 @@ async def init_db() -> None:
                     is_verified=True,
                 ))
                 await session.commit()
-                logger.info("Demo User created: admin@tradetron.com")
+                logger.info("Legacy Demo Admin created: admin@tradetron.com")
 
             # Seed Watchlist if DB is empty
             existing_watchlist = (await session.execute(select(WatchlistRecord))).scalars().all()

@@ -10,7 +10,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, desc, func, select
 from sqlalchemy.exc import IntegrityError
@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.auth import get_current_user
 from app.core.audit import log_audit_event
 from app.core.logging import get_logger
-from app.core.security import create_access_token, verify_password
+from app.core.security import create_access_token, hash_password, hash_token, verify_password
 from app.db.session import get_db
 from app.market_data.manager import ws_manager
 from app.models.audit import AuditLogRecord
@@ -60,6 +60,11 @@ class AdminLoginRequest(BaseModel):
     email: str
     password: str
     admin_security_pin: Optional[str] = None
+
+
+class AdminPasswordResetRequest(BaseModel):
+    current_password: str
+    new_password: str
 
 
 class UserStatusUpdateRequest(BaseModel):
@@ -124,6 +129,70 @@ async def admin_login(
             "kyc_status": user.kyc_status,
         },
     }
+
+
+@router.post("/reset-password")
+async def admin_reset_password(
+    req: AdminPasswordResetRequest,
+    authorization: Optional[str] = Header(None),
+    admin: UserRecord = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Security-sensitive Admin password reset.
+
+    Validates the current admin password, hashes and persists the new password,
+    and revokes the administrator's existing active JWT session. The caller must
+    re-authenticate afterwards (the UI force-logs-out on success).
+    """
+    # 1. Validate current password is correct
+    if not admin.hashed_password or not verify_password(req.current_password, admin.hashed_password):
+        raise HTTPException(status_code=401, detail="Current admin password is incorrect")
+
+    # 2. Enforce a strong new password policy
+    new_pw = req.new_password
+    if len(new_pw) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
+    if not any(ch.islower() for ch in new_pw):
+        raise HTTPException(status_code=400, detail="New password must contain a lowercase letter")
+    if not any(ch.isupper() for ch in new_pw):
+        raise HTTPException(status_code=400, detail="New password must contain an uppercase letter")
+    if not any(ch.isdigit() for ch in new_pw):
+        raise HTTPException(status_code=400, detail="New password must contain a number")
+    if not any(ch in "!@#$%^&*()-_=+[]{};:,.<>?/~" for ch in new_pw):
+        raise HTTPException(status_code=400, detail="New password must contain a special character")
+    if verify_password(new_pw, admin.hashed_password):
+        raise HTTPException(status_code=400, detail="New password must differ from the current password")
+
+    # 3. Persist the newly-hashed password (PBKDF2; broker credentials use AES-256 elsewhere)
+    admin.hashed_password = hash_password(new_pw)
+    admin.failed_login_attempts = 0
+    admin.locked_until = None
+    await db.commit()
+
+    # 4. Revoke the admin's existing active access token so the old session dies
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.split(" ", 1)[1]
+        try:
+            from datetime import timedelta
+            db.add(RevokedTokenRecord(
+                token_hash=hash_token(token),
+                user_id=admin.id,
+                expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+            ))
+            await db.commit()
+        except Exception as exc:  # pragma: no cover - revocation is best-effort
+            logger.warning("Failed to record token revocation: %s", exc)
+
+    await log_audit_event(
+        db=db,
+        action="ADMIN_PASSWORD_RESET",
+        resource_type="ADMIN_PORTAL",
+        user_id=admin.id,
+        status="SUCCESS",
+        details={"email": admin.email, "reason": "Manual password rotation"},
+    )
+
+    return {"status": "ok", "message": "Admin password updated. All previous sessions revoked."}
 
 
 @router.get("/overview")

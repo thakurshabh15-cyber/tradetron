@@ -18,8 +18,22 @@ import {
   XCircle,
   AlertTriangle,
   RefreshCw,
+  Copy,
+  Eye,
 } from "lucide-react";
 import { API_BASE } from "../config";
+
+const DEFAULT_ADMIN_EMAIL = "admin@tradethrone.com";
+const DEFAULT_ADMIN_PASSWORD = "Admin@TradeThrone2026!";
+
+const copyToClipboard = async (text) => {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 export default function Admin() {
   const [adminToken, setAdminToken] = useState(localStorage.getItem("tradetron_admin_token") || "");
@@ -40,10 +54,19 @@ export default function Admin() {
   const [systemHealth, setSystemHealth] = useState(null);
   const [loading, setLoading] = useState(false);
   const [actionMsg, setActionMsg] = useState(null);
-  const [userSearchQuery, setUserSearchQuery] = useState("");
+    const [userSearchQuery, setUserSearchQuery] = useState("");
   const debouncedUserSearchQuery = useDebounce(userSearchQuery, 350);
   const [deleteUserTarget, setDeleteUserTarget] = useState(null);
   const [killConfirmOpen, setKillConfirmOpen] = useState(false);
+  const [showCurrentPw, setShowCurrentPw] = useState(false);
+  const [showNewPw, setShowNewPw] = useState(false);
+  const [showConfirmPw, setShowConfirmPw] = useState(false);
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetError, setResetError] = useState(null);
+  const [resetSuccess, setResetSuccess] = useState(null);
+  const [currentAdminPassword, setCurrentAdminPassword] = useState("");
+  const [newAdminPassword, setNewAdminPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
   const [killLoading, setKillLoading] = useState(false);
   const toast = useToast();
 
@@ -81,11 +104,59 @@ export default function Admin() {
     } finally {
       setLoginLoading(false);
     }
-  };
+    };
 
   const handleAdminLogout = () => {
     setAdminToken("");
     localStorage.removeItem("tradetron_admin_token");
+  };
+
+  // ── Admin Password Reset ─────────────────────────────────────────────
+  const handleResetPassword = async (e) => {
+    e.preventDefault();
+    setResetError(null);
+    setResetSuccess(null);
+
+    if (newAdminPassword.length < 8) {
+      setResetError("New password must be at least 8 characters");
+      return;
+    }
+    if (newAdminPassword !== confirmNewPassword) {
+      setResetError("New password and confirmation do not match");
+      return;
+    }
+
+    setResetLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/reset-password`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify({
+          current_password: currentAdminPassword,
+          new_password: newAdminPassword,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || "Password reset failed");
+
+      setResetSuccess("Admin password updated successfully. All previous sessions revoked.");
+      toast.success("Password updated", {
+        description: "All previous sessions revoked. Please re-authenticate.",
+      });
+      setCurrentAdminPassword("");
+      setNewAdminPassword("");
+      setConfirmNewPassword("");
+      // Force logout since old token is revoked
+      setTimeout(() => handleAdminLogout(), 2000);
+    } catch (err) {
+      setResetError(err.message);
+      toast.error("Password reset failed", { description: err.message });
+    } finally {
+      setResetLoading(false);
+    }
   };
 
   // Fetch overview & current tab data
@@ -234,6 +305,59 @@ export default function Admin() {
               <span>{loginError}</span>
             </div>
           )}
+
+          {/* Default Admin Credentials Notice — quick-copy card */}
+          <div className="mb-6 p-4 rounded-2xl bg-gradient-to-r from-violet-950/60 via-slate-900 to-indigo-950/60 border border-violet-500/30">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-[11px] font-bold text-violet-300 uppercase tracking-widest">
+                Default Admin Credentials
+              </h3>
+              <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-violet-500/20 text-violet-300 border border-violet-500/30">
+                SEED
+              </span>
+            </div>
+            <div className="space-y-2.5">
+              <div className="flex items-center gap-2">
+                <label className="text-[10px] font-semibold text-slate-400 min-w-[60px]">
+                  Email
+                </label>
+                <code className="flex-1 text-[11px] text-white font-mono bg-slate-950 px-2 py-1 rounded border border-slate-800 break-all">
+                  {DEFAULT_ADMIN_EMAIL}
+                </code>
+                <button
+                  onClick={async () => {
+                    const ok = await copyToClipboard(DEFAULT_ADMIN_EMAIL);
+                    toast.success("Email copied!", { description: ok ? DEFAULT_ADMIN_EMAIL : "Copy failed" });
+                  }}
+                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white text-xs"
+                  title="Copy email"
+                >
+                  <Copy size={13} />
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-[10px] font-semibold text-slate-400 min-w-[60px]">
+                  Password
+                </label>
+                <code className="flex-1 text-[11px] text-white font-mono bg-slate-950 px-2 py-1 rounded border border-slate-800 break-all">
+                  {DEFAULT_ADMIN_PASSWORD}
+                </code>
+                <button
+                  onClick={async () => {
+                    const ok = await copyToClipboard(DEFAULT_ADMIN_PASSWORD);
+                    toast.success("Password copied!", { description: ok ? DEFAULT_ADMIN_PASSWORD : "Copy failed" });
+                  }}
+                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white text-xs"
+                  title="Copy password"
+                >
+                  <Copy size={13} />
+                </button>
+              </div>
+            </div>
+            <div className="mt-2.5 text-[10px] text-slate-500">
+              These credentials are seeded on first boot. Change them in the System tab after login.
+            </div>
+          </div>
 
           <form onSubmit={handleAdminLogin} className="space-y-4">
             <div>
@@ -674,25 +798,133 @@ export default function Admin() {
         </div>
       )}
 
-      {/* TAB CONTENT: 8. SYSTEM TELEMETRY */}
-      {activeTab === "system" && systemHealth && (
-        <div className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-3">
-            <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800">
-              <span className="text-xs text-slate-400">Indian Equity SmartAPI Feed</span>
-              <div className="text-lg font-bold font-mono text-emerald-400 mt-1">{systemHealth.providers.indian_equity_smartapi.status}</div>
-              <div className="text-[11px] text-slate-500 mt-1">Latency: {systemHealth.providers.indian_equity_smartapi.latency_ms}ms • Rate: {systemHealth.providers.indian_equity_smartapi.tick_rate_sec} ticks/sec</div>
+      
+      {/* TAB CONTENT: 8. SYSTEM TELEMETRY + Admin Password Reset */}
+      {activeTab === "system" && (
+        <div className="space-y-6">
+          {systemHealth && (
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800">
+                <span className="text-xs text-slate-400">Indian Equity SmartAPI Feed</span>
+                <div className="text-lg font-bold font-mono text-emerald-400 mt-1">{systemHealth.providers.indian_equity_smartapi.status}</div>
+                <div className="text-[11px] text-slate-500 mt-1">Latency: {systemHealth.providers.indian_equity_smartapi.latency_ms}ms • Rate: {systemHealth.providers.indian_equity_smartapi.tick_rate_sec} ticks/sec</div>
+              </div>
+              <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800">
+                <span className="text-xs text-slate-400">Binance Crypto WebSocket</span>
+                <div className="text-lg font-bold font-mono text-cyan-400 mt-1">{systemHealth.providers.crypto_binance.status}</div>
+                <div className="text-[11px] text-slate-500 mt-1">Latency: {systemHealth.providers.crypto_binance.latency_ms}ms • Rate: {systemHealth.providers.crypto_binance.tick_rate_sec} ticks/sec</div>
+              </div>
+              <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800">
+                <span className="text-xs text-slate-400">WebSocket Live Client Sessions</span>
+                <div className="text-lg font-bold font-mono text-white mt-1">{systemHealth.websocket_subscribers} active</div>
+                <div className="text-[11px] text-slate-500 mt-1">24h Error Rate: {systemHealth.error_rate_24h_pct}%</div>
+              </div>
             </div>
-            <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800">
-              <span className="text-xs text-slate-400">Binance Crypto WebSocket</span>
-              <div className="text-lg font-bold font-mono text-cyan-400 mt-1">{systemHealth.providers.crypto_binance.status}</div>
-              <div className="text-[11px] text-slate-500 mt-1">Latency: {systemHealth.providers.crypto_binance.latency_ms}ms • Rate: {systemHealth.providers.crypto_binance.tick_rate_sec} ticks/sec</div>
-            </div>
-            <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800">
-              <span className="text-xs text-slate-400">WebSocket Live Client Sessions</span>
-              <div className="text-lg font-bold font-mono text-white mt-1">{systemHealth.websocket_subscribers} active</div>
-              <div className="text-[11px] text-slate-500 mt-1">24h Error Rate: {systemHealth.error_rate_24h_pct}%</div>
-            </div>
+          )}
+
+              Admin Security & Password Reset
+          <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800">
+            <h3 className="text-sm font-bold text-white mb-1 flex items-center gap-2">
+              <Lock size={16} className="text-violet-400" />
+              Admin Security & Password Reset
+            </h3>
+            <p className="text-[11px] text-slate-500 mb-4">
+              Rotate the Super-Admin password. The current password is validated before the new
+              password is persisted; all active JWT sessions are revoked on success and you will
+              be logged out to re-authenticate.
+            </p>
+
+            {resetError && (
+              <div className="mb-4 flex items-center gap-2 p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-xs">
+                <AlertTriangle size={14} className="shrink-0" />
+                <span>{resetError}</span>
+              </div>
+            )}
+            {resetSuccess && (
+              <div className="mb-4 flex items-center gap-2 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs">
+                <CheckCircle2 size={14} className="shrink-0" />
+                <span>{resetSuccess}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleResetPassword} className="space-y-4">
+              <div>
+                <label className="text-[11px] font-semibold text-slate-300">Current Admin Password</label>
+                <div className="relative mt-1">
+                  <input
+                    type={showCurrentPw ? "text" : "password"}
+                    value={currentAdminPassword}
+                    onChange={(e) => setCurrentAdminPassword(e.target.value)}
+                    required
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-violet-500 font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowCurrentPw((v) => !v)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded-lg text-slate-500 hover:text-slate-300"
+                    title={showCurrentPw ? "Hide" : "Show"}
+                  >
+                    <Eye size={13} />
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-slate-300">New Admin Password</label>
+                <div className="relative mt-1">
+                  <input
+                    type={showNewPw ? "text" : "password"}
+                    value={newAdminPassword}
+                    onChange={(e) => setNewAdminPassword(e.target.value)}
+                    required
+                    minLength={8}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-violet-500 font-mono"
+                    placeholder="min 8 chars, upper/lower/number/special"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowNewPw((v) => !v)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded-lg text-slate-500 hover:text-slate-300"
+                    title={showNewPw ? "Hide" : "Show"}
+                  >
+                    <Eye size={13} />
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-slate-300">Confirm New Password</label>
+                <div className="relative mt-1">
+                  <input
+                    type={showConfirmPw ? "text" : "password"}
+                    value={confirmNewPassword}
+                    onChange={(e) => setConfirmNewPassword(e.target.value)}
+                    required
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-violet-500 font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPw((v) => !v)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded-lg text-slate-500 hover:text-slate-300"
+                    title={showConfirmPw ? "Hide" : "Show"}
+                  >
+                    <Eye size={13} />
+                  </button>
+                </div>
+                {newAdminPassword && confirmNewPassword && newAdminPassword !== confirmNewPassword && (
+                  <p className="mt-1.5 text-[10px] text-red-400">Passwords do not match</p>
+                )}
+              </div>
+
+              <button
+                type="submit"
+                disabled={resetLoading || !currentAdminPassword || !newAdminPassword || !confirmNewPassword || newAdminPassword !== confirmNewPassword}
+                className="w-full py-2.5 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold text-xs transition-all shadow-lg shadow-violet-600/30 flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                <RefreshCw size={14} className={resetLoading ? "animate-spin" : ""} />
+                {resetLoading ? "Updating…" : "Reset / Update Admin Password"}
+              </button>
+            </form>
           </div>
         </div>
       )}

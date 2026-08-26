@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     # ── OAuth ────────────────────────────────────────────────────────
     google_oauth_client_id: str = ""  # Google Cloud Console OAuth client ID
 
+    # ── Default Super-Admin account (seeded on first boot) ─────────────
+    default_admin_email: str = "admin@tradethrone.com"
+    default_admin_password: str = "Admin@TradeThrone2026!"
+
     # ── Monitoring & Alerting ────────────────────────────────────────
     sentry_dsn: str = ""
     telegram_bot_token: str = ""
@@ -133,7 +137,7 @@ class Settings(BaseSettings):
 
     # ── Market data simulator ────────────────────────────────────────
     sim_symbols: str = "AAPL,MSFT,NVDA,GOOGL,AMZN"
-    sim_tick_interval: float = 1.0  # seconds between simulated ticks
+    sim_tick_interval: float = 0.5  # seconds between simulated ticks (500ms live cadence)
 
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",

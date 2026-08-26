@@ -76,6 +76,10 @@ async def trade_feed(websocket: WebSocket):
 # Backward-compatible aliases → same canonical global stream handler
 router.websocket("/ws/stream")(global_market_stream)
 router.websocket("/ws/dashboard")(global_market_stream)
+# Data-engine / ticker aliases — any frontend hitting these paths gets the
+# same multiplexed live tick stream instead of a silent 404 close.
+router.websocket("/ws/ticks")(global_market_stream)
+router.websocket("/ws/market-data")(global_market_stream)
 
 
 @router.websocket("/ws/events")
