@@ -1,4 +1,4 @@
-# Tradetron — High-Frequency Algorithmic Trading Platform MVP
+# TradeThrone — High-Frequency Algorithmic Trading Platform MVP
 
 A modular, production-ready algorithmic trading platform featuring asynchronous order routing, real-time WebSocket market feeds, multi-threaded strategy evaluation, and pre-trade risk management.
 

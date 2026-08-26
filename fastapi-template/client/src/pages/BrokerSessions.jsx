@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, memo } from "react";
+import { useState, useEffect, useCallback, memo } from "react";
 import {
   RefreshCw,
   CheckCircle2,
@@ -231,7 +231,7 @@ export default function BrokerSessions() {
     try {
       const res = await authFetch("/api/brokers/health-status");
       if (res.ok) setHealthData(await res.json());
-    } catch (e) {
+    } catch {
       setError("Failed to load broker health data.");
     }
   }, []);
@@ -240,7 +240,9 @@ export default function BrokerSessions() {
     try {
       const res = await authFetch("/api/brokers/renewal-logs?limit=50");
       if (res.ok) setLogs(await res.json());
-    } catch {}
+    } catch {
+      // Renewal logs are supplementary — surface empty table rather than an error banner
+    }
   }, []);
 
   const loadAll = useCallback(async () => {

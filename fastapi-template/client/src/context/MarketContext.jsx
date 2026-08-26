@@ -1,4 +1,5 @@
-import { createContext, useContext, useEffect } from "react";
+/* eslint-disable react-refresh/only-export-components -- Provider + useMarket hook pairing is the intended context-module pattern */
+import { createContext, useContext, useEffect, useMemo } from "react";
 import { useMarketStore } from "../stores/useMarketStore";
 
 const MarketContext = createContext({
@@ -28,26 +29,24 @@ export function MarketProvider({ children }) {
     };
   }, [fetchInitialSnapshot, connectWebSocket, disconnectWebSocket]);
 
-  return (
-    <MarketContext.Provider
-      value={{
-        quotes,
-        getQuote,
-        isConnected,
-        tickCount,
-        lastUpdated,
-      }}
-    >
-      {children}
-    </MarketContext.Provider>
+  // Stable identity: consumers re-render only when real market data changes,
+  // never because the provider re-created its context object.
+  const value = useMemo(
+    () => ({
+      quotes,
+      getQuote,
+      isConnected,
+      tickCount,
+      lastUpdated,
+    }),
+    [quotes, getQuote, isConnected, tickCount, lastUpdated]
   );
+
+  return <MarketContext.Provider value={value}>{children}</MarketContext.Provider>;
 }
 
 export function useMarket() {
-  const context = useContext(MarketContext);
-  // If context is available, use context; otherwise direct Zustand store access
-  const store = useMarketStore();
-  return context && Object.keys(context.quotes || {}).length > 0 ? context : store;
+  return useContext(MarketContext);
 }
 
 export default MarketProvider;

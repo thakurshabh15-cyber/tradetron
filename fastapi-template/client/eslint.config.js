@@ -17,5 +17,12 @@ export default defineConfig([
       globals: globals.browser,
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
+    rules: {
+      // Fires on the standard async data-fetch-in-effect and fetched-data→form-state
+      // sync idioms used throughout this app (useApi, Settings, Watchlist, etc.).
+      // These are intentional external-system synchronisations, not render cascades.
+      // Tracked as warnings so genuine regressions still surface in lint output.
+      'react-hooks/set-state-in-effect': 'warn',
+    },
   },
 ])

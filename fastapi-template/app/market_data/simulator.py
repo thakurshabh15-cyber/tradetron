@@ -134,6 +134,9 @@ class MarketSimulator:
                     # Broadcast to WebSocket subscribers
                     await ws_manager.broadcast(f"market:{symbol}", tick)
 
+                    # Broadcast to the global ticker-tape channel powering /ws/market/stream
+                    await ws_manager.broadcast("market:stream", tick)
+
                 await asyncio.sleep(settings.sim_tick_interval)
         except asyncio.CancelledError:
             logger.debug("Simulator tick loop cancelled")

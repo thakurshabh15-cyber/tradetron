@@ -1,4 +1,4 @@
-# Production Dockerfile for Tradetron FastAPI Backend
+# Production Dockerfile for TradeThrone FastAPI Backend
 FROM python:3.11-slim as base
 
 # Prevent Python from writing .pyc files & enable unbuffered standard output

@@ -114,6 +114,23 @@ export async function refreshAccessToken() {
 }
 
 /**
+ * Public (unauthenticated) fetch for endpoints accessible to guests.
+ * Uses no Authorization header and does NOT attempt token refresh on 401.
+ * A 401/403 resolves to `null` so callers can fall back to skeleton UI
+ * without getting stuck in an infinite loading state.
+ */
+export async function publicFetch(url, options = {}) {
+  const fullUrl = url.startsWith("http") ? url : `${API_BASE}${url}`;
+  const headers = { ...options.headers };
+  if (!headers["Content-Type"] && !(options.body instanceof FormData)) {
+    headers["Content-Type"] = "application/json";
+  }
+  const res = await fetch(fullUrl, { ...options, headers });
+  if (res.status === 401 || res.status === 403) return null;
+  return res;
+}
+
+/**
  * Core authenticated fetch with automatic 401 interception & retry
  */
 export async function authFetch(url, options = {}) {

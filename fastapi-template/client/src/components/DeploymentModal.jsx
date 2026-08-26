@@ -1,6 +1,7 @@
-import { useState } from "react";
-import { X, Play, ShieldCheck, Zap, DollarSign, CheckCircle2 } from "lucide-react";
-import { API_BASE } from "../config";
+import { useEffect, useState } from "react";
+import { AlertCircle, X, Play, Zap, CheckCircle2 } from "lucide-react";
+import { authFetch } from "../services/apiClient";
+import { useToast } from "./Toast";
 
 export default function DeploymentModal({ isOpen, onClose, strategy, onDeployed }) {
   const [executionMode, setExecutionMode] = useState("PAPER");
@@ -9,16 +10,29 @@ export default function DeploymentModal({ isOpen, onClose, strategy, onDeployed 
   const [capital, setCapital] = useState(strategy?.min_capital || 5000);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deployedSuccess, setDeployedSuccess] = useState(false);
+  const [deployError, setDeployError] = useState(null);
+  const toast = useToast();
+
+  // Reset transient state whenever a different strategy is deployed
+  useEffect(() => {
+    if (isOpen) {
+      setDeployError(null);
+      setDeployedSuccess(false);
+      setExecutionMode("PAPER");
+      setBrokerName("Simulated");
+      setCapital(strategy?.min_capital || 5000);
+    }
+  }, [isOpen, strategy]);
 
   if (!isOpen || !strategy) return null;
 
   const handleDeploy = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
+    setDeployError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/strategies/${strategy.id}/deploy`, {
+      const res = await authFetch(`/api/strategies/${strategy.id}/deploy`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           execution_mode: executionMode,
           broker_name: brokerName,
@@ -27,16 +41,21 @@ export default function DeploymentModal({ isOpen, onClose, strategy, onDeployed 
         }),
       });
 
-      if (res.ok) {
-        setDeployedSuccess(true);
-        setTimeout(() => {
-          if (onDeployed) onDeployed();
-          onClose();
-          setDeployedSuccess(false);
-        }, 900);
-      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || `Deployment rejected (HTTP ${res.status})`);
+
+      setDeployedSuccess(true);
+      toast.success(`"${strategy.name}" is live`, {
+        description: `${executionMode} execution via ${brokerName} · ₹${Number(capital).toLocaleString("en-IN")} allocated.`,
+      });
+      setTimeout(() => {
+        if (onDeployed) onDeployed();
+        onClose();
+        setDeployedSuccess(false);
+      }, 900);
     } catch (err) {
-      console.error("Failed to deploy strategy:", err);
+      setDeployError(err.message);
+      toast.error("Deployment failed", { description: err.message });
     } finally {
       setIsSubmitting(false);
     }
@@ -146,7 +165,7 @@ export default function DeploymentModal({ isOpen, onClose, strategy, onDeployed 
 
               <div>
                 <label className="text-xs font-medium text-slate-300">
-                  Allocated Capital ($)
+                  Allocated Capital (₹)
                 </label>
                 <input
                   type="number"
@@ -160,7 +179,14 @@ export default function DeploymentModal({ isOpen, onClose, strategy, onDeployed 
               </div>
             </div>
 
-            {/* Strategy Specs Summary */}
+            {deployError && (
+          <div className="mb-3 flex items-start gap-2 p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs">
+            <AlertCircle size={14} className="shrink-0 mt-0.5" />
+            <span>{deployError}</span>
+          </div>
+        )}
+
+        {/* Strategy Specs Summary */}
             <div className="p-3 rounded-lg bg-slate-800/60 border border-slate-700/60 text-xs space-y-1 text-slate-400">
               <div className="flex justify-between">
                 <span>Expected Win Rate:</span>

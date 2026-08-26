@@ -121,9 +121,27 @@ async def test_broker_oauth_and_live_balances_suite():
             "client_id": "INVALID_CLIENT",
             "api_key": "invalid_key_123",
             "api_secret": "wrong_password",
+            "totp_secret": "INVALID_TOTP_KEY",
         }, headers=headers)
         assert invalid_angel_res.status_code == 400
         assert "validation failed" in invalid_angel_res.json()["detail"].lower()
+
+        # 11b. Test Angel One missing TOTP secret rejection
+        no_totp_res = await client.post("/api/brokers/accounts/manual", json={
+            "broker_name": "ANGEL_ONE",
+            "client_id": "MISSING_TOTP",
+            "api_key": "valid_key",
+            "api_secret": "password123",
+        }, headers=headers)
+        assert no_totp_res.status_code == 422  # Pydantic missing field
+
+        # 11c. Test Binance invalid key length rejection
+        bad_binance_res = await client.post("/api/brokers/accounts/manual", json={
+            "broker_name": "BINANCE",
+            "api_key": "short",
+            "api_secret": "short",
+        }, headers=headers)
+        assert bad_binance_res.status_code == 422  # Pydantic validation
 
         # 12. Test GET /api/brokers/balance (Paper & Live Balance)
         bal_res = await client.get("/api/brokers/balance", headers=headers)

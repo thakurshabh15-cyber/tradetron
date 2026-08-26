@@ -3,62 +3,97 @@ import {
   X,
   ShieldCheck,
   Key,
-  Lock,
-  ArrowRight,
   CheckCircle2,
   AlertCircle,
   ExternalLink,
-  RefreshCw,
-  Wallet,
-  PieChart,
 } from "lucide-react";
 import { authFetch } from "../services/apiClient";
-import { API_BASE } from "../config";
 
-const BROKERS = [
-  {
-    id: "ZERODHA",
+// ── Dynamic broker configuration with per-broker credential field requirements ──
+const BROKER_CONFIG = {
+  ZERODHA: {
     name: "Zerodha Kite Connect",
     badge: "OAuth 2.0 (Official)",
     logo: "🪁",
     desc: "Institutional direct OAuth integration. Authorize on Kite login portal.",
+    oauthSupported: true,
+    manualFields: [],
   },
-  {
-    id: "UPSTOX",
+  UPSTOX: {
     name: "Upstox Pro",
     badge: "OAuth 2.0 (Official)",
     logo: "📈",
     desc: "Direct Upstox developer authorization flow with daily token sync.",
+    oauthSupported: true,
+    manualFields: [],
   },
-  {
-    id: "ANGEL_ONE",
+  ANGEL_ONE: {
     name: "Angel One SmartAPI",
     badge: "Live F&O / MCX",
     logo: "👼",
     desc: "High-speed SmartAPI publisher login & TOTP authentication.",
+    oauthSupported: true,
+    manualFields: [
+      { key: "client_id", label: "Client Code", placeholder: "e.g. S123456", required: true },
+      { key: "api_key", label: "API Key", placeholder: "SmartAPI Key", required: true },
+      { key: "api_secret", label: "MPIN / Password", type: "password", placeholder: "Your Angel One MPIN", required: true },
+      { key: "totp_secret", label: "TOTP Secret Key", placeholder: "Base32 key from Authenticator", required: true,
+        description: "Auto-generates 6-digit TOTP for login (RFC 6238)" },
+    ],
   },
-  {
-    id: "BINANCE",
+  DHAN_HQ: {
+    name: "Dhan HQ",
+    badge: "API (Bearer Token)",
+    logo: "⚡",
+    desc: "Dhan HQ API integration via client ID and bearer access token.",
+    oauthSupported: false,
+    manualFields: [
+      { key: "client_id", label: "Client ID", placeholder: "e.g. D123456789", required: true },
+      { key: "access_token", label: "Access Token", type: "password", placeholder: "Bearer token or JWT", required: true },
+    ],
+  },
+  UPSTOX_PRO: {
+    name: "Upstox Pro (Manual)",
+    badge: "Manual API",
+    logo: "📊",
+    desc: "Upstox Pro manual API key/secret connection.",
+    oauthSupported: false,
+    manualFields: [
+      { key: "api_key", label: "API Key", placeholder: "Upstox API Key", required: true },
+      { key: "api_secret", label: "API Secret", type: "password", placeholder: "Upstox API Secret", required: true },
+    ],
+  },
+  BINANCE: {
     name: "Binance Crypto",
     badge: "Spot & Futures",
     logo: "🪙",
     desc: "HMAC-SHA256 encrypted API key with read/trade scope.",
+    oauthSupported: false,
+    manualFields: [
+      { key: "api_key", label: "API Key", placeholder: "32+ character API Key", required: true },
+      { key: "api_secret", label: "API Secret Key", type: "password", placeholder: "32+ character Secret Key", required: true },
+    ],
   },
-];
+};
+
+const BROKERS = Object.keys(BROKER_CONFIG).map((id) => ({ id, ...BROKER_CONFIG[id] }));
 
 export default function BrokerConnectModal({ isOpen, onClose, onLinkedSuccess }) {
   const [selectedBroker, setSelectedBroker] = useState("ZERODHA");
-  const [authMode, setAuthMode] = useState("oauth"); // 'oauth' | 'manual'
-  const [apiKey, setApiKey] = useState("");
-  const [apiSecret, setApiSecret] = useState("");
-  const [clientId, setClientId] = useState("");
+  const [authMode, setAuthMode] = useState("oauth");
+  const [credentials, setCredentials] = useState({});
   const [requestToken, setRequestToken] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
-  const [oauthStep, setOauthStep] = useState("init"); // 'init' | 'await_token'
+  const [oauthStep, setOauthStep] = useState("init");
 
+  const brokerCfg = BROKER_CONFIG[selectedBroker] || BROKER_CONFIG.ZERODHA;
   if (!isOpen) return null;
+
+  const handleCredentialChange = (key, value) => {
+    setCredentials((prev) => ({ ...prev, [key]: value }));
+  };
 
   // Step 1: Open Broker OAuth Authorization URL in new tab
   const handleLaunchBrokerAuth = async () => {
@@ -68,8 +103,6 @@ export default function BrokerConnectModal({ isOpen, onClose, onLinkedSuccess })
       const res = await authFetch(`/api/brokers/oauth/authorize?broker=${selectedBroker}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Failed to retrieve OAuth URL");
-
-      // Open official broker auth window
       if (data.authorize_url) {
         window.open(data.authorize_url, "_blank", "width=600,height=700");
       }
@@ -94,42 +127,41 @@ export default function BrokerConnectModal({ isOpen, onClose, onLinkedSuccess })
         body: JSON.stringify({
           broker_name: selectedBroker,
           request_token: tok,
-          client_id: clientId || undefined,
+          client_id: credentials.client_id || undefined,
         }),
       });
-
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "OAuth token exchange failed");
-
       setSuccessMsg(`🎉 Successfully linked ${selectedBroker}! Daily token active until 06:00 AM IST.`);
       if (onLinkedSuccess) onLinkedSuccess(data);
-      setTimeout(() => {
-        setOauthStep("init");
-        onClose();
-      }, 1500);
-    } catch (err) {
+      setTimeout(() => { setOauthStep("init"); onClose(); }, 1500);
+        } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
   };
 
-  // Manual API Key / Secret Connect
+  // Manual API Key / Secret Connect with dynamic fields
   const handleManualConnect = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
     try {
+      const payload = {
+        broker_name: selectedBroker,
+        account_name: `${selectedBroker} Trading Account`,
+      };
+      for (const field of brokerCfg.manualFields) {
+        payload[field.key] = credentials[field.key] || undefined;
+      }
+      const brokerNameMap = { UPSTOX_PRO: "UPSTOX", DHAN_HQ: "DHAN_HQ" };
+      payload.broker_name = brokerNameMap[selectedBroker] || selectedBroker;
+
       const res = await authFetch(`/api/brokers/accounts/manual`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          broker_name: selectedBroker,
-          account_name: `${selectedBroker} Trading Account`,
-          client_id: clientId || "CLIENT_01",
-          api_key: apiKey,
-          api_secret: apiSecret || null,
-        }),
+        body: JSON.stringify(payload),
       });
 
       const data = await res.json();
@@ -145,8 +177,37 @@ export default function BrokerConnectModal({ isOpen, onClose, onLinkedSuccess })
     }
   };
 
+  // Render dynamic credential fields for manual mode
+  const renderManualFields = () => {
+    if (!brokerCfg.manualFields || brokerCfg.manualFields.length === 0) {
+      return (
+        <div className="text-center py-6 text-slate-500">
+          This broker requires OAuth authorization. Switch to the OAuth tab.
+        </div>
+      );
+    }
+    return brokerCfg.manualFields.map((field) => (
+      <div key={field.key}>
+        <label className="text-[11px] font-medium text-slate-300 flex items-center justify-between">
+          {field.label}
+          {field.description && <span className="text-xs text-slate-500 font-normal">({field.description})</span>}
+        </label>
+        <input
+          type={field.type || "text"}
+          value={credentials[field.key] || ""}
+          onChange={(e) => handleCredentialChange(field.key, e.target.value)}
+          placeholder={field.placeholder}
+          className={`w-full mt-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500${
+            field.type === "password" ? " font-mono" : ""
+          }`}
+          required={field.required}
+        />
+        {field.description && <p className="text-[10px] text-slate-500 mt-1">{field.description}</p>}
+      </div>
+    ));
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3.5 sm:p-4 bg-black/85 backdrop-blur-md animate-fade-in">
       <div className="relative w-full max-w-lg bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-4 sm:p-6 overflow-y-auto max-h-[90vh]">
         {/* Glow Accent */}
         <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-cyan-500 via-brand-purple to-indigo-500" />
@@ -301,43 +362,21 @@ export default function BrokerConnectModal({ isOpen, onClose, onLinkedSuccess })
               </form>
             )}
           </div>
+        ) : brokerCfg.oauthSupported ? (
+          <div className="space-y-4">
+            <div className="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 text-xs text-slate-300 space-y-2">
+              <div className="flex items-center gap-2 font-semibold text-white">
+                <ExternalLink size={14} className="text-cyan-400" />
+                <span>OAuth Required</span>
+              </div>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                {brokerCfg.name} supports only OAuth 2.0 direct authorization. Please switch to the "OAuth 2.0 Direct Login" tab to connect.
+              </p>
+            </div>
+          </div>
         ) : (
           <form onSubmit={handleManualConnect} className="space-y-3">
-            <div>
-              <label className="text-[11px] font-medium text-slate-300">Client Code / Account ID</label>
-              <input
-                type="text"
-                value={clientId}
-                onChange={(e) => setClientId(e.target.value)}
-                placeholder="e.g. ZR1234 or UPSTOX01"
-                className="w-full mt-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="text-[11px] font-medium text-slate-300">API Key</label>
-              <input
-                type="text"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="Your developer API Key"
-                className="w-full mt-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 font-mono"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="text-[11px] font-medium text-slate-300">API Secret (Encrypted at Rest)</label>
-              <input
-                type="password"
-                value={apiSecret}
-                onChange={(e) => setApiSecret(e.target.value)}
-                placeholder="••••••••••••••••"
-                className="w-full mt-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 font-mono"
-              />
-            </div>
-
+            {renderManualFields()}
             <button
               type="submit"
               disabled={loading}
@@ -346,9 +385,8 @@ export default function BrokerConnectModal({ isOpen, onClose, onLinkedSuccess })
               <Key size={14} />
               {loading ? "Encrypting & Linking..." : "Save Encrypted Broker Account"}
             </button>
-          </form>
+              </form>
         )}
       </div>
-    </div>
   );
 }

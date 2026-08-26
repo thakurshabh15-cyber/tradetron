@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useDebounce } from "../hooks/useDebounce";
+import ConfirmDialog from "../components/ConfirmDialog";
+import { useToast } from "../components/Toast";
 import {
   ShieldCheck,
-  ShieldAlert,
   Users,
   FileCheck,
   Radio,
@@ -17,14 +18,11 @@ import {
   XCircle,
   AlertTriangle,
   RefreshCw,
-  Eye,
-  Key,
 } from "lucide-react";
 import { API_BASE } from "../config";
 
 export default function Admin() {
   const [adminToken, setAdminToken] = useState(localStorage.getItem("tradetron_admin_token") || "");
-  const [adminUser, setAdminUser] = useState(null);
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [adminPin, setAdminPin] = useState("");
@@ -44,11 +42,19 @@ export default function Admin() {
   const [actionMsg, setActionMsg] = useState(null);
   const [userSearchQuery, setUserSearchQuery] = useState("");
   const debouncedUserSearchQuery = useDebounce(userSearchQuery, 350);
+  const [deleteUserTarget, setDeleteUserTarget] = useState(null);
+  const [killConfirmOpen, setKillConfirmOpen] = useState(false);
+  const [killLoading, setKillLoading] = useState(false);
+  const toast = useToast();
 
-  const authHeaders = {
-    Authorization: `Bearer ${adminToken}`,
-    "Content-Type": "application/json",
-  };
+  // Stable across renders; only changes when the admin session token changes
+  const authHeaders = useMemo(
+    () => ({
+      Authorization: `Bearer ${adminToken}`,
+      "Content-Type": "application/json",
+    }),
+    [adminToken]
+  );
 
   // Dedicated Admin Login
   const handleAdminLogin = async (e) => {
@@ -69,7 +75,6 @@ export default function Admin() {
       if (!res.ok) throw new Error(data.detail || "Admin authentication failed");
 
       setAdminToken(data.access_token);
-      setAdminUser(data.user);
       localStorage.setItem("tradetron_admin_token", data.access_token);
     } catch (err) {
       setLoginError(err.message);
@@ -80,7 +85,6 @@ export default function Admin() {
 
   const handleAdminLogout = () => {
     setAdminToken("");
-    setAdminUser(null);
     localStorage.removeItem("tradetron_admin_token");
   };
 
@@ -122,7 +126,7 @@ export default function Admin() {
     } finally {
       setLoading(false);
     }
-  }, [adminToken, activeTab, debouncedUserSearchQuery]);
+  }, [authHeaders, adminToken, activeTab, debouncedUserSearchQuery]);
 
   useEffect(() => {
     fetchData();
@@ -145,19 +149,27 @@ export default function Admin() {
     }
   };
 
-  const handleDeleteUser = async (user) => {
-    if (!window.confirm("Are you sure you want to permanently delete this user?")) return;
+  const requestDeleteUser = (user) => {
+    setDeleteUserTarget(user);
+  };
+
+  const handleDeleteUser = async () => {
+    if (!deleteUserTarget) return;
     try {
-      const res = await fetch(`${API_BASE}/api/admin/users/${user.id}`, {
+      const res = await fetch(`${API_BASE}/api/admin/users/${deleteUserTarget.id}`, {
         method: "DELETE",
         headers: authHeaders,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Failed to delete user");
-      setUsers((current) => current.filter((item) => item.id !== user.id));
-      setActionMsg(`${user.email} was permanently deleted.`);
+      setUsers((current) => current.filter((item) => item.id !== deleteUserTarget.id));
+      setActionMsg(`${deleteUserTarget.email} was permanently deleted.`);
+      toast.success("User deleted", { description: `${deleteUserTarget.email} was permanently removed.` });
     } catch (err) {
       setActionMsg(`Delete failed: ${err.message}`);
+      toast.error("User deletion failed", { description: err.message });
+    } finally {
+      setDeleteUserTarget(null);
     }
   };
 
@@ -178,19 +190,26 @@ export default function Admin() {
   };
 
   const handlePlatformKillSwitch = async () => {
-    if (!confirm("CRITICAL WARNING: Are you sure you want to halt ALL live strategy trading across the entire platform?")) return;
+    setKillLoading(true);
     try {
       const res = await fetch(`${API_BASE}/api/admin/kill-switch/platform`, {
         method: "POST",
         headers: authHeaders,
         body: JSON.stringify({ reason: "Emergency operator platform halt" }),
       });
-      if (res.ok) {
-        setActionMsg("CRITICAL: Platform-wide trading halted successfully!");
-        fetchData();
-      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || "Platform halt failed");
+      setActionMsg("CRITICAL: Platform-wide trading halted successfully!");
+      toast.warning("Platform-wide kill-switch engaged", {
+        description: data.message || "All live strategy execution is halted.",
+      });
+      fetchData();
     } catch (err) {
       console.error(err);
+      toast.error("Platform halt failed", { description: err.message });
+    } finally {
+      setKillLoading(false);
+      setKillConfirmOpen(false);
     }
   };
 
@@ -205,7 +224,7 @@ export default function Admin() {
             <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-violet-500/10 text-violet-400 border border-violet-500/30 mb-3 shadow-inner">
               <ShieldCheck size={28} />
             </div>
-            <h1 className="text-2xl font-bold text-white tracking-tight">Tradetron Sentinel</h1>
+            <h1 className="text-2xl font-bold text-white tracking-tight">TradeThrone Sentinel</h1>
             <p className="text-xs text-slate-400 mt-1">Strictly Restricted Administrator Clearance Portal</p>
           </div>
 
@@ -293,7 +312,7 @@ export default function Admin() {
             <RefreshCw size={13} className={loading ? "animate-spin" : ""} /> Refresh
           </button>
           <button
-            onClick={handlePlatformKillSwitch}
+            onClick={() => setKillConfirmOpen(true)}
             className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-600/20 hover:bg-red-600/30 border border-red-500/40 text-red-300 text-xs font-bold shadow-md shadow-red-500/10"
           >
             <Power size={13} className="text-red-400" /> Platform Panic Halt
@@ -456,7 +475,7 @@ export default function Admin() {
                         {u.is_active ? "Suspend" : "Reactivate"}
                       </button>
                       <button
-                        onClick={() => handleDeleteUser(u)}
+                        onClick={() => requestDeleteUser(u)}
                         className="ml-2 rounded-lg border border-red-500/40 bg-red-500/10 px-2.5 py-1 text-[11px] font-semibold text-red-400 transition-all hover:bg-red-500/20"
                       >
                         Delete
@@ -677,6 +696,27 @@ export default function Admin() {
           </div>
         </div>
       )}
+
+      {/* ── Destructive-action confirmation dialogs ─────────────────────── */}
+      <ConfirmDialog
+        isOpen={Boolean(deleteUserTarget)}
+        onClose={() => setDeleteUserTarget(null)}
+        onConfirm={handleDeleteUser}
+        title="Permanently delete this user?"
+        message={`${deleteUserTarget?.email || "This user"} and all associated records, trades and KYC data will be irreversibly removed.`}
+        confirmLabel="Delete Permanently"
+        variant="danger"
+      />
+      <ConfirmDialog
+        isOpen={killConfirmOpen}
+        onClose={() => setKillConfirmOpen(false)}
+        onConfirm={handlePlatformKillSwitch}
+        title="Halt ALL live trading platform-wide?"
+        message="This immediately suspends every live strategy and squares off routing across the entire platform. This is a critical emergency control."
+        confirmLabel={killLoading ? "Halting…" : "Confirm Platform Halt"}
+        variant="critical"
+        loading={killLoading}
+      />
     </div>
   );
 }

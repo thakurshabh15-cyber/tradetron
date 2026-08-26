@@ -1,18 +1,7 @@
-import { useState, useEffect, useCallback } from "react";
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { useState, useEffect, useCallback, lazy, Suspense } from "react";
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import Sidebar from "./components/Sidebar";
 import BottomNav from "./components/BottomNav";
-import Dashboard from "./pages/Dashboard";
-import CopyTrading from "./pages/CopyTrading";
-import Marketplace from "./pages/Marketplace";
-import Strategies from "./pages/Strategies";
-import TradeHistory from "./pages/TradeHistory";
-import Watchlist from "./pages/Watchlist";
-import Settings from "./pages/Settings";
-import Admin from "./pages/Admin";
-import BrokerSessions from "./pages/BrokerSessions";
-import Pricing from "./pages/Pricing";
-import VisualBuilder from "./pages/VisualBuilder";
 import KillSwitchModal from "./components/KillSwitchModal";
 import BrokerConnectModal from "./components/BrokerConnectModal";
 import LiveOptInModal from "./components/LiveOptInModal";
@@ -22,14 +11,50 @@ import AuthModal from "./components/AuthModal";
 import { MarketProvider } from "./context/MarketContext";
 import { authFetch } from "./services/apiClient";
 import { useAuthStore } from "./stores/useAuthStore";
+import { ToastProvider } from "./components/Toast";
+import CommandPalette from "./components/CommandPalette";
+import DataEngineChip from "./components/DataEngineChip";
 
-import { ShieldAlert, ShieldCheck, Power, Zap, Radio, Link as LinkIcon, AlertCircle, FileCheck } from "lucide-react";
+// Route-level code splitting: each terminal screen ships as its own chunk,
+// keeping the critical execution-shell bundle lean on first paint.
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const CopyTrading = lazy(() => import("./pages/CopyTrading"));
+const Marketplace = lazy(() => import("./pages/Marketplace"));
+const Strategies = lazy(() => import("./pages/Strategies"));
+const TradeHistory = lazy(() => import("./pages/TradeHistory"));
+const Watchlist = lazy(() => import("./pages/Watchlist"));
+const Settings = lazy(() => import("./pages/Settings"));
+const Admin = lazy(() => import("./pages/Admin"));
+const BrokerSessions = lazy(() => import("./pages/BrokerSessions"));
+const Pricing = lazy(() => import("./pages/Pricing"));
+const VisualBuilder = lazy(() => import("./pages/VisualBuilder"));
+const QuantLab = lazy(() => import("./pages/QuantLab"));
+const BacktestLab = lazy(() => import("./pages/BacktestLab"));
+const Markets = lazy(() => import("./pages/Markets"));
+const MarketDetail = lazy(() => import("./pages/MarketDetail"));
+const PortfolioPage = lazy(() => import("./pages/Portfolio"));
+const ExecutionPage = lazy(() => import("./pages/Execution"));
+const KYC = lazy(() => import("./pages/KYC"));
+const TradeJournal = lazy(() => import("./pages/TradeJournal"));
+
+import { Power, Link as LinkIcon, AlertCircle, FileCheck, Radio, Zap } from "lucide-react";
+
+/** Full-viewport skeleton shown while a lazily-loaded route chunk streams in */
+function RouteFallback() {
+  return (
+    <div className="flex min-h-[60vh] items-center justify-center" role="status" aria-label="Loading module">
+      <div className="flex flex-col items-center gap-3">
+        <div className="h-10 w-10 rounded-full border-2 border-brand-purple/30 border-t-brand-purple animate-spin" />
+        <p className="font-mono text-[11px] uppercase tracking-widest text-slate-500">Loading module…</p>
+      </div>
+    </div>
+  );
+}
 
 function ProtectedRoute({ children }) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const isLoading = useAuthStore((state) => state.isLoading);
   const location = useLocation();
-  const setAuthData = useAuthStore((state) => state.setAuthData);
 
   if (isLoading) return <div className="p-8 text-sm text-slate-400">Checking your session...</div>;
   if (!isAuthenticated) {
@@ -42,6 +67,7 @@ function LoginScreen() {
   const navigate = useNavigate();
   const location = useLocation();
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const setAuthData = useAuthStore((state) => state.setAuthData);
 
   if (isAuthenticated) {
     return <Navigate to={location.state?.from || "/dashboard"} replace />;
@@ -60,7 +86,7 @@ function LoginScreen() {
   );
 }
 
-export default function App() {
+function AppShell() {
   const [executionMode, setExecutionMode] = useState("PAPER"); // 'PAPER' is strictly enforced default
   const [brokerAccounts, setBrokerAccounts] = useState([]);
   const [kycStatus, setKycStatus] = useState("NOT_SUBMITTED");
@@ -124,13 +150,16 @@ export default function App() {
     }
   }, []);
 
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+
   useEffect(() => {
+    if (!isAuthenticated) return undefined;
     fetchBrokers();
     fetchKYCStatus();
     fetchBalances();
     const interval = setInterval(fetchBalances, 8000);
     return () => clearInterval(interval);
-  }, [fetchBrokers, fetchKYCStatus, fetchBalances]);
+  }, [fetchBrokers, fetchKYCStatus, fetchBalances, isAuthenticated]);
 
   // Verified active brokers only
   const connectedBrokers = brokerAccounts.filter(
@@ -161,9 +190,8 @@ export default function App() {
   };
 
   return (
-    <MarketProvider>
-      <BrowserRouter>
-        <div className="flex min-h-screen bg-surface-950 text-slate-300 selection:bg-accent-500/20 selection:text-accent-400">
+    <BrowserRouter>
+      <div className="flex min-h-screen bg-surface-950 text-slate-300 selection:bg-accent-500/20 selection:text-accent-400">
           <Sidebar onOpenKYC={() => setIsKYCModalOpen(true)} kycStatus={kycStatus} />
           <main className="flex-1 md:ml-64 pt-16 pb-24 md:pt-6 md:pb-8 px-3.5 sm:px-6 md:px-8 space-y-6 overflow-x-hidden w-full max-w-full">
             {/* Top Execution Control & Mode Banner */}
@@ -289,29 +317,48 @@ export default function App() {
             )}
 
             <ErrorBoundary>
-              <Routes>
-                <Route path="/" element={<Dashboard />} />
-                <Route path="/dashboard" element={<Dashboard />} />
-                <Route path="/login" element={<LoginScreen />} />
-                <Route path="/copy-trading" element={<ProtectedRoute><CopyTrading /></ProtectedRoute>} />
-                <Route path="/marketplace" element={<Marketplace />} />
-                <Route path="/watchlist" element={<Watchlist />} />
-                <Route path="/strategies" element={<Strategies />} />
-                <Route path="/history" element={<TradeHistory />} />
-                <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
-                <Route path="/admin" element={<Admin />} />
-                <Route path="/broker-sessions" element={<BrokerSessions />} />
-                <Route path="/pricing" element={<Pricing />} />
-                <Route path="/visual-builder" element={<ProtectedRoute><VisualBuilder /></ProtectedRoute>} />
-              </Routes>
+              <Suspense fallback={<RouteFallback />}>
+                <Routes>
+                  <Route path="/" element={<Dashboard />} />
+                  <Route path="/dashboard" element={<Dashboard />} />
+                  <Route path="/login" element={<LoginScreen />} />
+                  <Route path="/copy-trading" element={<ProtectedRoute><CopyTrading /></ProtectedRoute>} />
+                  <Route path="/marketplace" element={<Marketplace />} />
+                  <Route path="/watchlist" element={<Watchlist />} />
+                  <Route path="/strategies" element={<Strategies />} />
+                  <Route path="/history" element={<TradeHistory />} />
+                  <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+                  <Route path="/admin" element={<Admin />} />
+                  <Route path="/broker-sessions" element={<BrokerSessions />} />
+                  <Route path="/pricing" element={<Pricing />} />
+                  <Route path="/visual-builder" element={<ProtectedRoute><VisualBuilder /></ProtectedRoute>} />
+                  <Route path="/quant-lab" element={<ProtectedRoute><QuantLab /></ProtectedRoute>} />
+                  <Route path="/backtest" element={<BacktestLab />} />
+                <Route path="/command-center" element={<Dashboard />} />
+                <Route path="/markets" element={<Markets />} />
+                <Route path="/markets/:symbol" element={<MarketDetail />} />
+                <Route path="/portfolio" element={<ProtectedRoute><PortfolioPage /></ProtectedRoute>} />
+                <Route path="/execution" element={<ProtectedRoute><ExecutionPage /></ProtectedRoute>} />
+                <Route path="/risk-center" element={<ProtectedRoute><ExecutionPage /></ProtectedRoute>} />
+                <Route path="/kyc" element={<KYC />} />
+                <Route path="/trade-journal" element={<ProtectedRoute><TradeJournal /></ProtectedRoute>} />
+                <Route path="/reality-mode" element={<BacktestLab />} />
+                </Routes>
+              </Suspense>
             </ErrorBoundary>
           </main>
+          <DataEngineChip />
+          <CommandPalette />
           <BottomNav />
 
           {/* Global Modals */}
           <KillSwitchModal
             isOpen={isKillSwitchOpen}
             onClose={() => setIsKillSwitchOpen(false)}
+            onKillSuccess={() => {
+              fetchBrokers();
+              fetchBalances();
+            }}
           />
           <BrokerConnectModal
             isOpen={isBrokerModalOpen}
@@ -346,6 +393,20 @@ export default function App() {
           />
         </div>
       </BrowserRouter>
+  );
+}
+
+/**
+ * Application root — mounts the global market data provider and the
+ * institutional toast notification layer above the entire router tree,
+ * so every page, modal and layout component can raise notifications.
+ */
+export default function App() {
+  return (
+    <MarketProvider>
+      <ToastProvider>
+        <AppShell />
+      </ToastProvider>
     </MarketProvider>
   );
 }

@@ -8,8 +8,8 @@
 const rawApiUrl = import.meta.env.VITE_API_URL;
 const rawWsUrl = import.meta.env.VITE_WS_URL;
 
-const PROD_API_URL = "https://tradetron-8jkz.onrender.com";
-const PROD_WS_URL = "wss://tradetron-8jkz.onrender.com";
+const PROD_API_URL = "https://tradethrone.onrender.com";
+const PROD_WS_URL = "wss://tradethrone.onrender.com";
 
 export const API_BASE = (() => {
   if (rawApiUrl !== undefined && rawApiUrl !== "") {

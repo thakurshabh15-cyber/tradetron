@@ -525,18 +525,51 @@ async def razorpay_webhook(
                 p_rec.error_reason = error_desc
                 await db.commit()
 
-    elif event_type in ("subscription.cancelled", "payment.refunded"):
+    elif event_type == "subscription.charged":
+        # Auto-renew: extend the subscription billing period by 30/365 days
         sub_entity = payload.get("subscription", {}).get("entity", {})
-        sub_id = sub_entity.get("id")
-        if sub_id:
-            stmt = select(SubscriptionRecord).where(SubscriptionRecord.razorpay_subscription_id == sub_id)
+        rzp_sub_id = sub_entity.get("id")
+        notes = sub_entity.get("notes") or {}
+        billing_cycle = (notes.get("billing_cycle") or "MONTHLY").upper()
+        if rzp_sub_id:
+            stmt = select(SubscriptionRecord).where(
+                SubscriptionRecord.razorpay_subscription_id == rzp_sub_id
+            )
+            res = await db.execute(stmt)
+            s_rec = res.scalar_one_or_none()
+            if s_rec and s_rec.status == "ACTIVE":
+                duration_days = 365 if billing_cycle == "YEARLY" else 30
+                now = datetime.now(timezone.utc)
+                # Extend from existing end_date (or now) to avoid losing remaining days
+                base = s_rec.end_date if (s_rec.end_date and s_rec.end_date > now) else now
+                s_rec.end_date = base + timedelta(days=duration_days)
+                await db.commit()
+                logger.info(
+                    "[Webhook] subscription.charged: extended sub %s until %s",
+                    rzp_sub_id, s_rec.end_date.isoformat(),
+                )
+
+    elif event_type in ("subscription.halted", "subscription.cancelled", "payment.refunded"):
+        # Downgrade user to FREE plan on cancellation or payment halt
+        sub_entity = payload.get("subscription", {}).get("entity", {})
+        rzp_sub_id = sub_entity.get("id")
+        if rzp_sub_id:
+            stmt = select(SubscriptionRecord).where(
+                SubscriptionRecord.razorpay_subscription_id == rzp_sub_id
+            )
             res = await db.execute(stmt)
             s_rec = res.scalar_one_or_none()
             if s_rec:
                 s_rec.status = "CANCELLED"
+                s_rec.plan_name = "FREE"
                 await db.commit()
+                logger.info(
+                    "[Webhook] %s: user sub %s downgraded to FREE plan",
+                    event_type, rzp_sub_id,
+                )
 
     return {"status": "ok", "event": event_type}
+
 
 
 @router.get("/invoices")

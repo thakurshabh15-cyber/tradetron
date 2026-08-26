@@ -9,7 +9,6 @@ import {
   initializeSession as initApiSession,
   refreshAccessToken as apiRefresh,
   API_BASE,
-  authFetch,
 } from "../services/apiClient";
 
 export const useAuthStore = create((set, get) => ({

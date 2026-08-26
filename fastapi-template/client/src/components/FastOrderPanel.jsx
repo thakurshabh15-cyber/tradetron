@@ -3,6 +3,7 @@ import { useMarketStore } from "../stores/useMarketStore";
 import { useTradeStore } from "../stores/useTradeStore";
 import { useDebounce } from "../hooks/useDebounce";
 import { Zap, ShieldCheck, AlertCircle, ArrowUpRight, ArrowDownRight, CheckCircle2 } from "lucide-react";
+import { useToast } from "./Toast";
 
 function FastOrderPanelComponent({ symbol = "NIFTY50", currentPrice = 24850.0, onOrderPlaced }) {
   // Selective Zustand subscription: only re-render when this specific symbol quote updates
@@ -10,6 +11,7 @@ function FastOrderPanelComponent({ symbol = "NIFTY50", currentPrice = 24850.0, o
   const effectiveLivePrice = liveQuote?.price ?? currentPrice;
 
   const executeOrder = useTradeStore((state) => state.executeOrder);
+  const toast = useToast();
 
   const [side, setSide] = useState("BUY");
   const [quantity, setQuantity] = useState(50);
@@ -49,9 +51,13 @@ function FastOrderPanelComponent({ symbol = "NIFTY50", currentPrice = 24850.0, o
       });
 
       setFillResult(data);
+      toast.success(`${side} ${quantity} ${symbol} filled`, {
+        description: `${orderType}${orderType === "LIMIT" ? ` @ ${Number(customPrice).toFixed(2)}` : " @ market"} · paper orderId #${data.order_id || data.position_id || "n/a"}`,
+      });
       if (onOrderPlaced) onOrderPlaced(data);
     } catch (err) {
       setError(err.message || "Order execution failed");
+      toast.error("Order rejected", { description: err.message || "Order execution failed" });
     } finally {
       setLoading(false);
     }

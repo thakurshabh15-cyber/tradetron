@@ -21,10 +21,27 @@ from typing import Any
 from app.config import settings
 
 # ── TOKEN LIFETIME RULES ──────────────────────────────────────────────────────
-ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+# Both values are environment-configurable (.env.production):
+#   JWT_ALGORITHM=HS256, ACCESS_TOKEN_EXPIRE_MINUTES=1440
+_ACCESS_TOKEN_EXPIRE_MINUTES_CFG: int = max(1, settings.access_token_expire_minutes)
+ACCESS_TOKEN_EXPIRE_MINUTES: int = _ACCESS_TOKEN_EXPIRE_MINUTES_CFG
 REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 JWT_SECRET: str = settings.jwt_secret
+
+# Algorithm lock-down: the signing implementation below is strictly
+# HMAC-SHA256. Any configured value other than "HS256" would create an
+# algorithm-confusion vulnerability (header claims ≠ actual cipher), so we
+# hard-clamp to HS256 and warn loudly on misconfiguration.
+_CONFIGURED_JWT_ALGORITHM: str = settings.jwt_algorithm.strip().upper()
 JWT_ALGORITHM: str = "HS256"
+if _CONFIGURED_JWT_ALGORITHM != JWT_ALGORITHM:
+    import logging
+
+    logging.getLogger(__name__).warning(
+        "JWT_ALGORITHM=%s requested but only HS256 is supported — enforcing HS256.",
+        _CONFIGURED_JWT_ALGORITHM or "(empty)",
+    )
+
 
 
 # ── PASSWORD HASHING (PBKDF2-HMAC-SHA256) ────────────────────────────────────
@@ -173,7 +190,7 @@ def generate_totp_secret() -> str:
     return base64.b32encode(raw_bytes).decode("ascii").replace("=", "")
 
 
-def generate_totp_uri(secret: str, email: str, issuer: str = "Tradetron") -> str:
+def generate_totp_uri(secret: str, email: str, issuer: str = "TradeThrone") -> str:
     """Generate standard otpauth:// URI for authenticator apps."""
     return f"otpauth://totp/{issuer}:{email}?secret={secret}&issuer={issuer}&algorithm=SHA1&digits=6&period=30"
 

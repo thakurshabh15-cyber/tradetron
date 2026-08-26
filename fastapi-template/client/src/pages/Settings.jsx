@@ -10,7 +10,6 @@ import {
   Save,
   CheckCircle2,
   AlertCircle,
-  RefreshCw,
   CreditCard,
   Zap,
   Check,
@@ -21,9 +20,11 @@ import {
 import { useApi } from "../hooks/useApi";
 import { authFetch, getStoredUser } from "../services/apiClient";
 import { API_BASE } from "../config";
+import { useToast } from "../components/Toast";
 
 export default function Settings() {
   const storedUser = getStoredUser();
+  const toast = useToast();
   const [activeTab, setActiveTab] = useState("profile"); // "profile" | "billing"
   const { data: profileData, refetch: refetchProfile } = useApi("/api/user/profile");
   const { data: notifData, refetch: refetchNotifs } = useApi("/api/user/notifications");
@@ -137,9 +138,11 @@ export default function Settings() {
       }
 
       setProfileMsg({ type: "success", text: "Profile updated successfully!" });
+      toast.success("Profile updated", { description: "Your account details have been saved." });
       refetchProfile();
     } catch (err) {
       setProfileMsg({ type: "error", text: err.message });
+      toast.error("Could not save profile", { description: err.message });
     } finally {
       setIsSavingProfile(false);
     }
@@ -158,9 +161,11 @@ export default function Settings() {
 
       if (!res.ok) throw new Error("Failed to save notification preferences");
       setNotifMsg({ type: "success", text: "Preferences saved successfully!" });
+      toast.success("Notification preferences saved");
       refetchNotifs();
     } catch (err) {
       setNotifMsg({ type: "error", text: err.message });
+      toast.error("Could not save preferences", { description: err.message });
     } finally {
       setIsSavingNotifs(false);
     }
@@ -235,7 +240,7 @@ export default function Settings() {
         key: orderData.key_id,
         amount: orderData.amount,
         currency: orderData.currency,
-        name: "Tradetron Technologies",
+        name: "TradeThrone Technologies",
         description: `Upgrade to ${planName} Plan (${billingCycle})`,
         order_id: orderData.order_id,
         prefill: {

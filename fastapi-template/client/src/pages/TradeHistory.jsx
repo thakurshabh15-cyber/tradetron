@@ -1,24 +1,37 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useApi } from "../hooks/useApi";
 import StatusBadge from "../components/StatusBadge";
-import { History, Filter, Download } from "lucide-react";
+import { Filter, Download } from "lucide-react";
 import { reportsController } from "../services/reportsController";
+import { useToast } from "../components/Toast";
 
 export default function TradeHistory() {
   const [selectedSymbol, setSelectedSymbol] = useState("");
   const [isExporting, setIsExporting] = useState(false);
+  const toast = useToast();
   const url = selectedSymbol
     ? `/api/trades?symbol=${selectedSymbol}&limit=100`
     : `/api/trades?limit=100`;
 
-  const { data: trades, loading, refetch } = useApi(url);
+  const { data: trades, loading } = useApi(url);
   const { data: stats } = useApi("/api/trades/stats");
+
+  // Distinct symbols present in the ledger — drives the filter without stale hardcoded lists
+  const distinctSymbols = useMemo(() => {
+    const seen = new Set();
+    for (const t of trades || []) {
+      if (t?.symbol) seen.add(t.symbol);
+    }
+    return [...seen].sort();
+  }, [trades]);
 
   const handleExport = async () => {
     setIsExporting(true);
     try {
       await reportsController.downloadCsvExport();
+      toast.success("CSV report downloaded", { description: "Your full trade ledger has been exported." });
     } catch (err) {
+      toast.error("Export failed", { description: err.message || "Could not download the CSV report." });
       console.error("Export error:", err);
     } finally {
       setIsExporting(false);
@@ -101,11 +114,9 @@ export default function TradeHistory() {
             className="select-field text-xs w-full sm:w-48"
           >
             <option value="">All Instruments</option>
-            <option value="AAPL">AAPL</option>
-            <option value="MSFT">MSFT</option>
-            <option value="NVDA">NVDA</option>
-            <option value="GOOGL">GOOGL</option>
-            <option value="AMZN">AMZN</option>
+            {distinctSymbols.map((sym) => (
+              <option key={sym} value={sym}>{sym}</option>
+            ))}
           </select>
         </div>
 

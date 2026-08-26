@@ -120,6 +120,11 @@
     @apply input-field cursor-pointer appearance-none bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIiIGhlaWdodD0iOCIgdmlld0JveD0iMCAwIDEyIDgiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHBhdGggZD0iTTEgMS41TDYgNi41TDExIDEuNSIgc3Ryb2tlPSIjOTRhM2I4IiBzdHJva2Utd2lkdGg9IjEuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PC9zdmc+')] bg-[right_14px_center] bg-no-repeat pr-10;
   }
 
+  /* Legacy alias kept so older screens render identically */
+  .input-dark {
+    @apply input-field;
+  }
+
   /* Badges */
   .badge {
     @apply inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-bold font-mono tracking-wide uppercase;

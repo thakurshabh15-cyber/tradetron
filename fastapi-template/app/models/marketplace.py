@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -62,3 +62,44 @@ class StrategyDeploymentRecord(Base):
     deployed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow
     )
+
+
+class CreatorPayoutSettingsRecord(Base):
+    """Marketplace creator payout destination — bank/UPI details encrypted at rest."""
+
+    __tablename__ = "creator_payout_settings"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    user_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    payout_method: Mapped[str] = mapped_column(String(10), default="UPI")  # UPI | BANK
+    account_holder_name: Mapped[str] = mapped_column(String(100), default="")
+    bank_name: Mapped[str] = mapped_column(String(100), default="")
+    account_number_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ifsc_code: Mapped[str] = mapped_column(String(15), default="")
+    upi_id: Mapped[str] = mapped_column(String(100), default="")
+    gstin: Mapped[str] = mapped_column(String(20), default="")
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    def set_account_number(self, raw_number: str) -> None:
+        from app.core.crypto import encrypt_secret
+
+        self.account_number_encrypted = encrypt_secret(raw_number) if raw_number else None
+
+    def masked_account_number(self) -> str | None:
+        """Return last-4 preview only — full number never leaves the vault."""
+        if not self.account_number_encrypted:
+            return None
+        from app.core.crypto import decrypt_secret
+
+        raw = decrypt_secret(self.account_number_encrypted)
+        return f"XXXXXX{raw[-4:]}" if len(raw) >= 4 else "XXXX"

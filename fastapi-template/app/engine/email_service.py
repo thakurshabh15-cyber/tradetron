@@ -13,13 +13,13 @@ logger = get_logger("engine.email")
 
 
 def _otp_email(otp_code: str) -> tuple[str, str]:
-    subject = "Your Tradetron Login Verification Code"
+    subject = "Your TradeThrone Login Verification Code"
     text = (
         "Hello,\n\n"
-        f"Your Tradetron verification code is: {otp_code}\n\n"
+        f"Your TradeThrone verification code is: {otp_code}\n\n"
         "This code will expire in 15 minutes.\n"
         "If you did not request this code, please ignore this email.\n\n"
-        "Tradetron Security Team"
+        "TradeThrone Security Team"
     )
     return subject, text
 

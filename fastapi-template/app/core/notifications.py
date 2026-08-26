@@ -214,17 +214,17 @@ async def dispatch_otp(
 
     if is_email:
         subject = {
-            "registration": "Verify Your Tradetron Account",
-            "login": "Your Tradetron Login Verification Code",
-            "password_reset": "Reset Your Tradetron Password",
-        }.get(purpose, "Your Tradetron Verification Code")
+            "registration": "Verify Your TradeThrone Account",
+            "login": "Your TradeThrone Login Verification Code",
+            "password_reset": "Reset Your TradeThrone Password",
+        }.get(purpose, "Your TradeThrone Verification Code")
 
         text_body = (
             f"Hello,\n\n"
-            f"Your Tradetron verification code is: {otp_code}\n\n"
+            f"Your TradeThrone verification code is: {otp_code}\n\n"
             f"This code will expire in 15 minutes.\n"
             f"If you did not request this code, please ignore this message.\n\n"
-            f"— Tradetron Security Team"
+            f"— TradeThrone Security Team"
         )
 
         html_body = f"""
@@ -233,14 +233,14 @@ async def dispatch_otp(
         <head><meta charset="utf-8"></head>
         <body style="font-family: Arial, sans-serif; background-color: #0f172a; color: #f8fafc; padding: 24px;">
           <div style="max-width: 480px; margin: 0 auto; background: #1e293b; border-radius: 12px; padding: 32px; border: 1px solid #334155;">
-            <h2 style="color: #38bdf8; margin-top: 0;">Tradetron Security Verification</h2>
+            <h2 style="color: #38bdf8; margin-top: 0;">TradeThrone Security Verification</h2>
             <p style="color: #94a3b8; font-size: 14px;">Use the verification code below to complete your {purpose.replace('_', ' ')}:</p>
             <div style="background: #0f172a; border-radius: 8px; padding: 18px; text-align: center; margin: 24px 0; border: 1px dashed #0284c7;">
               <span style="font-size: 32px; font-weight: bold; letter-spacing: 6px; color: #38bdf8; font-family: monospace;">{otp_code}</span>
             </div>
             <p style="color: #64748b; font-size: 12px;">This code is valid for 15 minutes. Never share this code with anyone.</p>
             <hr style="border: 0; border-top: 1px solid #334155; margin: 24px 0;" />
-            <p style="color: #475569; font-size: 11px; margin: 0;">Tradetron Algorithmic Trading Platform • Secure Operations</p>
+            <p style="color: #475569; font-size: 11px; margin: 0;">TradeThrone Algorithmic Trading Platform • Secure Operations</p>
           </div>
         </body>
         </html>
@@ -256,7 +256,7 @@ async def dispatch_otp(
 
     else:
         # SMS route (optional)
-        sms_body = f"Your Tradetron verification code is {otp_code}. Valid for 15 minutes. Do not share."
+        sms_body = f"Your TradeThrone verification code is {otp_code}. Valid for 15 minutes. Do not share."
 
         if settings.msg91_auth_key:
             dispatched = await dispatch_sms_msg91(identifier, otp_code)

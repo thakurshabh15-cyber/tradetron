@@ -4,7 +4,6 @@ import {
   Trash2,
   Bell,
   BellRing,
-  BellOff,
   ArrowUpRight,
   ArrowDownRight,
   RefreshCw,
@@ -12,17 +11,16 @@ import {
   ShieldAlert,
   Search,
   CheckCircle2,
-  TrendingUp,
   Layers,
   Sparkles,
 } from "lucide-react";
 import { useApi } from "../hooks/useApi";
 import { useDebounce } from "../hooks/useDebounce";
 import { useMarket } from "../context/MarketContext";
-import MarketTicker from "../components/MarketTicker";
 import FastOrderPanel from "../components/FastOrderPanel";
 import { alertService } from "../services/alertService";
 import { API_BASE } from "../config";
+import { useToast } from "../components/Toast";
 
 const SEGMENT_TABS = [
   { id: "ALL", label: "All Markets" },
@@ -34,7 +32,8 @@ const SEGMENT_TABS = [
 ];
 
 export default function Watchlist() {
-  const { quotes, getQuote, isConnected: isMarketConnected } = useMarket();
+  const { quotes } = useMarket();
+  const toast = useToast();
   const { data: watchlistData, refetch: refetchWatchlist } = useApi("/api/watchlist");
   const { data: marketData, refetch: refetchMarket } = useApi("/api/market-data");
 
@@ -52,20 +51,13 @@ export default function Watchlist() {
   const [activeOrderSymbol, setActiveOrderSymbol] = useState(null);
 
   // Price Alert Form State
+  // (alert triggers are dispatched by alertService itself — Web Notification + toasts)
   const [alertSymbol, setAlertSymbol] = useState("NIFTY50");
   const [alertCondition, setAlertCondition] = useState("ABOVE");
   const [alertPrice, setAlertPrice] = useState("");
-  const [alerts, setAlerts] = useState([]);
   const [isCreatingAlert, setIsCreatingAlert] = useState(false);
 
   const searchContainerRef = useRef(null);
-
-  useEffect(() => {
-    const unsub = alertService.subscribe((updatedAlerts) => {
-      setAlerts(updatedAlerts);
-    });
-    return () => unsub();
-  }, []);
 
   // Close search dropdown on click outside
   useEffect(() => {
@@ -139,9 +131,11 @@ export default function Watchlist() {
       setShowDropdown(false);
       refetchWatchlist();
       refetchMarket();
+      toast.success(`${symbol} added to watchlist`);
       setTimeout(() => setAddSuccessMsg(null), 3000);
     } catch (err) {
       setError(err.message);
+      toast.error("Could not add symbol", { description: err.message });
     } finally {
       setIsAddingSymbol(null);
     }
@@ -154,9 +148,14 @@ export default function Watchlist() {
       });
       if (res.ok) {
         refetchWatchlist();
+        toast.success(`${symbol} removed from watchlist`);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || "Failed to remove symbol");
       }
     } catch (err) {
       console.error("Failed to delete symbol:", err);
+      toast.error("Could not remove symbol", { description: err.message });
     }
   };
 
@@ -167,8 +166,12 @@ export default function Watchlist() {
     try {
       await alertService.createAlert(alertSymbol, alertCondition, alertPrice);
       setAlertPrice("");
+      toast.success(`Price alert set for ${alertSymbol}`, {
+        description: `${alertCondition} ${Number(alertPrice).toLocaleString()}`,
+      });
     } catch (err) {
       console.error("Failed to create alert:", err);
+      toast.error("Could not create alert", { description: err.message });
     } finally {
       setIsCreatingAlert(false);
     }

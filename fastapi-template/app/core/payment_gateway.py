@@ -164,7 +164,7 @@ class RazorpayGateway:
 <body>
   <div class="header">
     <div>
-      <div class="brand">TRADETRON TECHNOLOGIES</div>
+      <div class="brand">TRADETHRONE TECHNOLOGIES</div>
       <div style="font-size: 12px; color: #64748b; margin-top: 4px;">
         Algorithmic Trading Marketplace & High-Frequency Engine<br>
         GSTIN: 27AABCT9988C1Z4 | SAC Code: 998431
@@ -203,7 +203,7 @@ class RazorpayGateway:
     <tbody>
       <tr>
         <td>
-          <strong>Tradetron {plan_name} Membership</strong><br>
+          <strong>TradeThrone {plan_name} Membership</strong><br>
           <span style="font-size: 11px; color: #64748b;">Multi-Broker Execution & Live Quantitative Strategies</span>
         </td>
         <td>998431</td>
@@ -222,7 +222,7 @@ class RazorpayGateway:
 
   <div class="footer">
     This is an electronically generated tax invoice per the Goods and Services Tax Act, 2017. No signature required.<br>
-    Tradetron Technologies India Pvt. Ltd. | support@tradetron.io
+    TradeThrone Technologies India Pvt. Ltd. | support@tradethrone.io
   </div>
 </body>
 </html>"""

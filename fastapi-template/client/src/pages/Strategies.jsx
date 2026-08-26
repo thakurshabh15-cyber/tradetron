@@ -4,7 +4,7 @@ import StrategyList from "../components/StrategyList";
 import StrategyWizardScreen from "../components/StrategyWizardScreen";
 import StrategyConfiguratorScreen from "../components/StrategyConfiguratorScreen";
 import { useApi } from "../hooks/useApi";
-import { Sliders, Wand2, Plus, List } from "lucide-react";
+import { Sliders, Wand2 } from "lucide-react";
 
 export default function Strategies() {
   const [activeTab, setActiveTab] = useState("builder"); // 'builder' | 'wizard' | 'config'

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { API_BASE, authFetch } from "../services/apiClient";
+import { authFetch } from "../services/apiClient";
 import { useAuthStore } from "./useAuthStore";
 
 export const useTradeStore = create((set, get) => ({
@@ -31,63 +31,43 @@ export const useTradeStore = create((set, get) => ({
   },
 
   closePosition: async (positionId) => {
-    try {
-      const res = await authFetch(`/api/trades/positions/${positionId}/close`, {
-        method: "POST",
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Failed to close position");
+    const res = await authFetch(`/api/trades/positions/${positionId}/close`, {
+      method: "POST",
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Failed to close position");
 
-      // Update state
-      set((state) => ({
-        positions: state.positions.filter((p) => p.id !== positionId),
-      }));
+    // Update state
+    set((state) => ({
+      positions: state.positions.filter((p) => p.id !== positionId),
+    }));
 
-      // Update paper balance if returned
-      if (data.paper_balance !== undefined) {
-        useAuthStore.getState().setPaperBalance(data.paper_balance);
-      }
-
-      // Re-fetch trade stats & history
-      get().fetchTradeStats();
-      get().fetchTrades();
-
-      return data;
-    } catch (err) {
-      throw err;
+    // Update paper balance if returned
+    if (data.paper_balance !== undefined) {
+      useAuthStore.getState().setPaperBalance(data.paper_balance);
     }
+
+    // Re-fetch trade stats & history
+    get().fetchTradeStats();
+    get().fetchTrades();
+
+    return data;
   },
 
   executeOrder: async ({ symbol, side, quantity, order_type = "MARKET", price = null, mode = "PAPER" }) => {
     set({ isPlacingOrder: true, error: null });
     try {
-      // First try serverless trade route, fall back to API_BASE endpoint
-      let res;
-      try {
-        res = await authFetch("/api/trades/order", {
-          method: "POST",
-          body: JSON.stringify({
-            symbol,
-            side,
-            quantity: Number(quantity),
-            order_type,
-            price: price ? Number(price) : null,
-            mode,
-          }),
-        });
-      } catch {
-        res = await authFetch("/api/trades/order", {
-          method: "POST",
-          body: JSON.stringify({
-            symbol,
-            side,
-            quantity: Number(quantity),
-            order_type,
-            price: price ? Number(price) : null,
-            mode,
-          }),
-        });
-      }
+      const res = await authFetch("/api/trades/order", {
+        method: "POST",
+        body: JSON.stringify({
+          symbol,
+          side,
+          quantity: Number(quantity),
+          order_type,
+          price: price ? Number(price) : null,
+          mode,
+        }),
+      });
 
       const data = await res.json();
       if (!res.ok) {

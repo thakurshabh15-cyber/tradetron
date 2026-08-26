@@ -1,1 +1,1 @@
-# Tradetron Trading Platform
+# TradeThrone Trading Platform

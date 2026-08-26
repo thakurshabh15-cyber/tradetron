@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertTriangle, ShieldCheck, X, CheckSquare, Square, ArrowRight } from "lucide-react";
+import { AlertTriangle, ShieldCheck, X, CheckSquare, Square } from "lucide-react";
 
 export default function LiveOptInModal({ isOpen, onClose, onConfirm, onConnectBroker }) {
   const [hasAgreedTerms, setHasAgreedTerms] = useState(false);

@@ -19,7 +19,7 @@ const TASK_ICONS = {
 };
 
 export default function SetupChecklist() {
-  const { data: setupData, loading, error, refetch, patch } = useApi("/api/user/setup-status");
+  const { data: setupData, loading, refetch } = useApi("/api/user/setup-status");
   const [updatingTaskId, setUpdatingTaskId] = useState(null);
 
   const handleToggle = async (taskId, currentStatus) => {

@@ -1,4 +1,4 @@
-# Tradetron Algo Strategy Marketplace — Final System Audit
+# TradeThrone Algo Strategy Marketplace — Final System Audit
 
 **Audit Date:** 2026-08-20  
 **Repository Scope:** Backend (`fastapi-template/app`), Frontend (`fastapi-template/client`)  

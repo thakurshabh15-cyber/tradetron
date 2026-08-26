@@ -1,11 +1,12 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import MarketTicker from "../components/MarketTicker";
 import TradeLog from "../components/TradeLog";
 import RiskGauge from "../components/RiskGauge";
 import TopStrategiesCard from "../components/TopStrategiesCard";
 import TradingChart from "../components/TradingChart";
 import OpenPositionsPanel from "../components/OpenPositionsPanel";
-import FastOrderPanel from "../components/FastOrderPanel";
+import OrderTerminal from "../components/OrderTerminal";
+import OptionChain from "../components/OptionChain";
 import ErrorBoundary from "../components/ErrorBoundary";
 import { SkeletonCard, ErrorState } from "../components/SkeletonLoaders";
 import { useApi } from "../hooks/useApi";
@@ -21,16 +22,12 @@ import {
   Layers,
   Zap,
   Radio,
-  Clock,
   ShieldCheck,
-  ArrowUpRight,
-  ArrowDownRight,
   TrendingDown,
   Search,
   Plus,
   Sparkles,
   X,
-  CheckCircle2,
 } from "lucide-react";
 
 const ASSET_CLASSES = [
@@ -69,14 +66,43 @@ export default function Dashboard() {
   const searchContainerRef = useRef(null);
 
   // Central Market Data Feed (Single WebSocket Session Feed)
-  const { quotes: liveMarketMap, isConnected: isWsConnected, tickCount: liveTicksCount, lastUpdated: lastTickTime } = useMarket();
+  const { quotes: liveMarketMap, isConnected: isWsConnected, tickCount: liveTicksCount } = useMarket();
 
   // Base API Data Fetchers
-  const { data: initialMarketData, loading: marketLoading, error: marketError, refetch: refetchMarket } = useApi("/api/market-data");
-  const { data: riskData, loading: riskLoading, error: riskError, refetch: refetchRisk } = useApi("/api/risk-status");
-  const { data: initialTrades, loading: tradesLoading, error: tradesError, refetch: refetchTrades } = useApi("/api/trades?limit=20");
-  const { data: summaryData, loading: summaryLoading, error: summaryError, refetch: refetchSummary } = useApi("/api/dashboard/summary");
-  const { data: positionsData, loading: positionsLoading, error: positionsError, refetch: refetchPositions } = useApi("/api/trades/positions");
+  const { loading: marketLoading, error: marketError, refetch: refetchMarket } = useApi("/api/market-data", { public: true });
+  const { data: riskData, loading: riskLoading, error: riskError, refetch: refetchRisk } = useApi("/api/risk-status", { public: true });
+  const { data: initialTrades, loading: tradesLoading, error: tradesError, refetch: refetchTrades } = useApi("/api/trades?limit=20", { public: true });
+  const { data: summaryData, loading: summaryLoading, error: summaryError, refetch: refetchSummary } = useApi("/api/dashboard/summary", { public: true });
+  const { data: positionsData, loading: positionsLoading, error: positionsError, refetch: refetchPositions } = useApi("/api/trades/positions", { public: true });
+
+
+    // Public market widgets — fetched without auth so guests see live heatmaps
+  const { loading: marketWidgetsLoading, error: marketWidgetsError, refetch: refetchWidgets } = useApi("/api/market-data", { public: true });
+  const marketWidgetsFallback = useMemo(() => {
+    if (marketWidgetsError || marketWidgetsLoading) return null;
+    return liveMarketMap;
+  }, [liveMarketMap, marketWidgetsLoading, marketWidgetsError]);
+
+  const marketQuotesList = useMemo(() => {
+    const source = liveMarketMap || marketWidgetsFallback;
+    if (!source || typeof source !== "object") return [];
+    return Object.values(source).filter((q) => q && typeof q === "object" && "symbol" in q && typeof q.change_pct === "number");
+  }, [liveMarketMap, marketWidgetsFallback]);
+
+  const marketTopGainers = useMemo(
+    () => [...marketQuotesList].sort((a, b) => b.change_pct - a.change_pct).slice(0, 6),
+    [marketQuotesList]
+  );
+  const marketTopLosers = useMemo(
+    () => [...marketQuotesList].sort((a, b) => a.change_pct - b.change_pct).slice(0, 6),
+    [marketQuotesList]
+  );
+  const marketHeatmapSlice = useMemo(
+    () => [...marketQuotesList].sort((a, b) => Math.abs(b.change_pct) - Math.abs(a.change_pct)).slice(0, 12),
+    [marketQuotesList]
+  );
+
+
 
   const debouncedSearchQuery = useDebounce(searchQuery, 350);
 
@@ -126,7 +152,9 @@ export default function Dashboard() {
       setUserCustomSymbols(updated);
       try {
         localStorage.setItem("tradetron_custom_symbols", JSON.stringify(updated));
-      } catch {}
+      } catch {
+        // Storage full or blocked — in-memory selection still applies for this session
+      }
     }
 
     setSelectedSymbol(sym);
@@ -151,7 +179,9 @@ export default function Dashboard() {
     setUserCustomSymbols(updated);
     try {
       localStorage.setItem("tradetron_custom_symbols", JSON.stringify(updated));
-    } catch {}
+    } catch {
+      // Non-fatal: symbol is removed from the live list regardless
+    }
   };
 
   const refreshAll = () => {
@@ -160,6 +190,21 @@ export default function Dashboard() {
     refetchSummary();
     refetchTrades();
     refetchPositions();
+  };
+
+  const handleModifyRisk = async (positionId, field, newPrice) => {
+    try {
+      const token = localStorage.getItem("tradetron_access_token");
+      const res = await fetch(`${API_BASE}/api/v1/orders/positions/${positionId}/risk-targets`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ [field]: newPrice }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "Update failed");
+      refetchPositions();
+    } catch (err) {
+      console.error("Risk target update failed:", err);
+    }
   };
 
   const displayedSymbols = useMemo(() => {
@@ -240,14 +285,6 @@ export default function Dashboard() {
     }
     const avgPct = liveMarketStats?.avgChangePct ?? 0.85;
     return Number((3.42 + (avgPct * 0.2)).toFixed(2));
-  }, [summaryData, liveMarketStats]);
-
-  const monthReturn = useMemo(() => {
-    if (summaryData?.monthReturn !== undefined && !isNaN(Number(summaryData.monthReturn))) {
-      return Number(summaryData.monthReturn);
-    }
-    const avgPct = liveMarketStats?.avgChangePct ?? 0.85;
-    return Number((11.85 + (avgPct * 0.3)).toFixed(2));
   }, [summaryData, liveMarketStats]);
 
   return (
@@ -407,7 +444,67 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
-      )}
+            )}
+
+        {/* Market Heatmap + Top Gainers/Losers — gated on live feed, skeleton fallback */}
+        {marketWidgetsError ? (
+          <ErrorState title="Market Widgets Unavailable" error={marketWidgetsError} onRetry={refetchWidgets} />
+        ) : marketWidgetsLoading || !liveMarketMap ? (
+          <div className="grid gap-4 lg:grid-cols-3">
+            <SkeletonCard />
+            <SkeletonCard />
+            <SkeletonCard />
+          </div>
+        ) : (
+          <div className="grid gap-4 lg:grid-cols-3">
+            {/* Left: Market Heatmap (NSE Sectors snapshot style) */}
+            <div className="lg:col-span-2 glass-card-hover p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="text-xs font-semibold text-slate-400">Market Heatmap</h3>
+                <span className="text-[10px] font-mono text-slate-500">NSE Sectors · Live</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
+                {marketHeatmapSlice.map((s) => (
+                  <div
+                    key={s.symbol}
+                    className="flex flex-col gap-0.5 rounded-lg border border-slate-800/60 bg-surface-800/40 p-2.5"
+                  >
+                    <span className="text-[10px] font-mono font-bold text-slate-200 truncate">{s.symbol}</span>
+                    <span className={`text-[11px] font-mono font-bold tabular-nums ${s.change_pct >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                      {s.change_pct >= 0 ? "+" : ""}{s.change_pct.toFixed(1)}%
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Right: Top Gainers / Losers */}
+            <div className="flex flex-col gap-4">
+              <div className="glass-card-hover p-3">
+                <h3 className="mb-2 text-xs font-semibold text-emerald-400">Top Gainers</h3>
+                <div className="space-y-1.5">
+                  {marketTopGainers.map((s) => (
+                    <div key={s.symbol} className="flex items-center justify-between">
+                      <span className="text-[11px] font-mono font-bold text-slate-300">{s.symbol}</span>
+                      <span className="text-[11px] font-mono text-emerald-400 tabular-nums">+{s.change_pct.toFixed(2)}%</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="glass-card-hover p-3">
+                <h3 className="mb-2 text-xs font-semibold text-rose-400">Top Losers</h3>
+                <div className="space-y-1.5">
+                  {marketTopLosers.map((s) => (
+                    <div key={s.symbol} className="flex items-center justify-between">
+                      <span className="text-[11px] font-mono font-bold text-slate-300">{s.symbol}</span>
+                      <span className="text-[11px] font-mono text-rose-400 tabular-nums">{s.change_pct.toFixed(2)}%</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
       {/* Asset Class Filter Tabs & User Search */}
       <div className="space-y-3 border-b border-white/[0.06] pb-3">
@@ -506,6 +603,11 @@ export default function Dashboard() {
                       </div>
 
                       <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleSelectInstrument(item);
+                        }}
                         className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-cyan-500/20 group-hover:bg-cyan-500 group-hover:text-slate-950 text-cyan-300 border border-cyan-500/40 transition-all flex items-center gap-1"
                       >
                         <Plus size={12} />
@@ -593,11 +695,17 @@ export default function Dashboard() {
             </div>
 
             <ErrorBoundary fallback={<div className="p-8 text-center text-xs text-slate-500 font-mono">Chart stream initializing...</div>}>
-              <TradingChart symbol={selectedSymbol} currentPrice={currentSelectedData.price || 24850.0} />
+              <TradingChart symbol={selectedSymbol} currentPrice={currentSelectedData.price || 24850.0} positions={positionsData || []} onModifyRisk={handleModifyRisk} />
             </ErrorBoundary>
           </div>
 
-          {/* Real-time Open Positions Panel */}
+          
+          {/* Live Option Chain (ATM/ITM/OTM ? OI ? IV ? Greeks ? PCR) */}
+          <ErrorBoundary>
+            <OptionChain symbol={selectedSymbol} />
+          </ErrorBoundary>
+
+        {/* Real-time Open Positions Panel */}
           <ErrorBoundary>
             <OpenPositionsPanel
               positions={positionsData || []}
@@ -623,7 +731,7 @@ export default function Dashboard() {
         <div className="lg:col-span-4 space-y-6">
           {/* Direct Market Access (DMA) Fast Order Panel */}
           <ErrorBoundary>
-            <FastOrderPanel
+            <OrderTerminal
               symbol={selectedSymbol}
               currentPrice={currentSelectedData.price || 24850.0}
               onOrderPlaced={refreshAll}

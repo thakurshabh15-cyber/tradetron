@@ -1,6 +1,7 @@
-import { useState } from "react";
-import { AlertTriangle, ShieldAlert, Power, CheckCircle2, X } from "lucide-react";
-import { API_BASE } from "../config";
+import { useEffect, useState } from "react";
+import { AlertTriangle, Power, CheckCircle2, X } from "lucide-react";
+import { authFetch } from "../services/apiClient";
+import { useToast } from "./Toast";
 
 export default function KillSwitchModal({ isOpen, onClose, onKillSuccess }) {
   const [loading, setLoading] = useState(false);
@@ -8,6 +9,21 @@ export default function KillSwitchModal({ isOpen, onClose, onKillSuccess }) {
   const [actionType, setActionType] = useState("PAUSE_ALL");
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
+  const toast = useToast();
+
+  // ESC to dismiss + body scroll lock while the panic modal is open
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const onKeyDown = (e) => {
+      if (e.key === "Escape" && !loading) onClose();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = "";
+    };
+  }, [isOpen, loading, onClose]);
 
   if (!isOpen) return null;
 
@@ -15,18 +31,22 @@ export default function KillSwitchModal({ isOpen, onClose, onKillSuccess }) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/strategies/kill-switch`, {
+      const res = await authFetch("/api/strategies/kill-switch", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: actionType, reason }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.detail || "Failed to trigger kill switch");
 
       setResult(data);
+      toast.warning(
+        actionType === "SQUARE_OFF_ALL" ? "Panic stop engaged — positions squared off" : "Panic stop engaged",
+        { description: data.message || `${data.paused_strategies_count ?? 0} strategies paused.` }
+      );
       if (onKillSuccess) onKillSuccess(data);
     } catch (err) {
       setError(err.message);
+      toast.error("Kill-switch failed", { description: err.message });
     } finally {
       setLoading(false);
     }

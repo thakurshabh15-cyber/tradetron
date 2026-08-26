@@ -1,6 +1,6 @@
 # Production Readiness Audit & Real-Money Gating Verification
 
-**Platform Target:** Tradetron Production Algorithmic Trading Marketplace  
+**Platform Target:** TradeThrone Production Algorithmic Trading Marketplace  
 **Compliance Standards:** Auditable double-entry ledgers, RBAC, Multi-Asset Feeds (NSE/BSE, Crypto, Forex), Multi-Broker Routing (Angel One, Zerodha Kite, Binance), Admin Panel, and Mobile/Desktop Responsive UI.
 
 ---

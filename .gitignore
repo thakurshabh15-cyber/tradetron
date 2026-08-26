@@ -51,3 +51,6 @@ Thumbs.db
 .claude/
 .devcontainer/
 
+
+# Dev / third-party folders
+agency-agents-main/

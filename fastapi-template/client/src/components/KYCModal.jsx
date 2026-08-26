@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from "react";
 import {
-  ShieldCheck,
   AlertTriangle,
   FileCheck,
   Upload,
@@ -8,14 +7,12 @@ import {
   CheckCircle2,
   AlertCircle,
   Clock,
-  FileText,
   Lock,
 } from "lucide-react";
 import { authFetch } from "../services/apiClient";
 
 export default function KYCModal({ isOpen, onClose, onKYCUpdated }) {
   const [kycData, setKycData] = useState(null);
-  const [loading, setLoading] = useState(true);
   const [panNumber, setPanNumber] = useState("");
   const [idProofType, setIdProofType] = useState("PAN_CARD");
   const [idProofDoc, setIdProofDoc] = useState(null);
@@ -25,7 +22,6 @@ export default function KYCModal({ isOpen, onClose, onKYCUpdated }) {
   const fileInputRef = useRef(null);
 
   const fetchKYC = async () => {
-    setLoading(true);
     try {
       const res = await authFetch("/api/user/kyc");
       if (res.ok) {
@@ -36,8 +32,6 @@ export default function KYCModal({ isOpen, onClose, onKYCUpdated }) {
       }
     } catch {
       // ignore
-    } finally {
-      setLoading(false);
     }
   };
 

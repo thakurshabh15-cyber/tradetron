@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Sliders, ArrowRight, ArrowLeft, CheckCircle2, Plus, Trash2, Zap } from "lucide-react";
+import { ArrowRight, ArrowLeft, CheckCircle2, Plus, Trash2, Zap } from "lucide-react";
 
 const INDICATORS = [
   { value: "PRICE", label: "Market Price" },

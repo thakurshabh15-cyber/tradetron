@@ -3,16 +3,13 @@ import { useMarket } from "../context/MarketContext";
 import { API_BASE } from "../config";
 import { authFetch } from "../services/apiClient";
 import { ErrorState } from "./SkeletonLoaders";
+import { useToast } from "./Toast";
 import {
-  TrendingUp,
-  TrendingDown,
   Layers,
   XCircle,
   RefreshCw,
   ArrowUpRight,
   ArrowDownRight,
-  ShieldCheck,
-  Zap,
 } from "lucide-react";
 
 const PositionRow = React.memo(function PositionRow({
@@ -127,9 +124,10 @@ function OpenPositionsPanel({
   onRetry = null,
   onPositionClosed,
 }) {
-  const { quotes, getQuote } = useMarket();
+  const { getQuote } = useMarket();
   const [closingId, setClosingId] = useState(null);
   const [actionError, setActionError] = useState(null);
+  const toast = useToast();
 
   const handleClosePosition = async (posId, symbol) => {
     setClosingId(posId);
@@ -142,12 +140,14 @@ function OpenPositionsPanel({
         const data = await res.json().catch(() => ({}));
         throw new Error(data.detail || "Failed to close position");
       }
+      toast.success(`${symbol} position closed`, { description: "Squared off at the latest market price." });
       if (onPositionClosed) {
         onPositionClosed();
       }
     } catch (err) {
       console.error("Close position error:", err);
       setActionError(err.message || "Failed to close position");
+      toast.error("Could not close position", { description: err.message });
     } finally {
       setClosingId(null);
     }

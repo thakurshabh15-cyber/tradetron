@@ -1,6 +1,8 @@
 import React, { useState } from "react";
 import { Power, Trash2, Cpu, Zap, ShieldCheck, AlertOctagon } from "lucide-react";
-import axios from "axios";
+import { authFetch } from "../services/apiClient";
+import ConfirmDialog from "./ConfirmDialog";
+import { useToast } from "./Toast";
 
 function StrategyListComponent({
   strategies = [],
@@ -9,6 +11,9 @@ function StrategyListComponent({
 }) {
   const [filterMode, setFilterMode] = useState("ALL"); // 'ALL' | 'LIVE' | 'PAPER'
   const [killSwitchLoading, setKillSwitchLoading] = useState(false);
+  const [killConfirmOpen, setKillConfirmOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const toast = useToast();
 
   const filteredStrategies = strategies.filter((s) => {
     if (filterMode === "ALL") return true;
@@ -21,23 +26,39 @@ function StrategyListComponent({
   ).length;
 
   const handleKillSwitch = async () => {
-    const confirmed = window.confirm(
-      "⚠️ EMERGENCY KILL SWITCH: Are you sure you want to immediately halt all live trading order dispatch and pause all strategies?"
-    );
-    if (!confirmed) return;
-
     setKillSwitchLoading(true);
     try {
-      await axios.post("/api/strategies/kill-switch", {
-        action: "PAUSE_ALL",
-        reason: "Manual Emergency Kill-Switch Activated by Operator",
+      const res = await authFetch("/api/strategies/kill-switch", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "PAUSE_ALL",
+          reason: "Manual Emergency Kill-Switch Activated by Operator",
+        }),
       });
-      window.location.reload();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || "Failed to trigger kill switch");
+      toast.warning("Kill-switch engaged", {
+        description: data.message || `${data.paused_strategies_count ?? 0} strategies paused.`,
+      });
     } catch (err) {
-      alert("Failed to trigger kill switch: " + (err.response?.data?.detail || err.message));
+      toast.error("Kill-switch failed", { description: err.message });
     } finally {
       setKillSwitchLoading(false);
+      setKillConfirmOpen(false);
     }
+  };
+
+  const handleDeleteClick = (strat) => {
+    setDeleteTarget(strat);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return;
+    const ok = await onDelete(deleteTarget.id);
+    if (ok !== false) {
+      toast.success(`"${deleteTarget.name}" deleted`);
+    }
+    setDeleteTarget(null);
   };
 
   return (
@@ -92,7 +113,7 @@ function StrategyListComponent({
 
           {/* Emergency Kill Switch Button */}
           <button
-            onClick={handleKillSwitch}
+            onClick={() => setKillConfirmOpen(true)}
             disabled={killSwitchLoading}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-loss-500/20 text-loss-400 border border-loss-500/40 hover:bg-loss-500/30 transition-all shadow-sm active:scale-95"
             title="Emergency Panic Button: Immediately pause all running strategies"
@@ -201,7 +222,7 @@ function StrategyListComponent({
                   </button>
 
                   <button
-                    onClick={() => onDelete(strat.id)}
+                    onClick={() => handleDeleteClick(strat)}
                     title="Delete Strategy"
                     className="p-1.5 rounded-lg text-slate-400 hover:bg-loss-500/10 hover:text-loss-400 transition-colors"
                   >
@@ -213,6 +234,29 @@ function StrategyListComponent({
           })}
         </div>
       )}
+
+      {/* Kill-Switch Confirmation */}
+      <ConfirmDialog
+        isOpen={killConfirmOpen}
+        onClose={() => setKillConfirmOpen(false)}
+        onConfirm={handleKillSwitch}
+        title="Engage Emergency Kill-Switch?"
+        message="This immediately halts all live trading order dispatch and pauses every running strategy. This cannot be undone from here."
+        confirmLabel={killSwitchLoading ? "Halting…" : "Confirm Kill-Switch"}
+        variant="critical"
+        loading={killSwitchLoading}
+      />
+
+      {/* Strategy Deletion Confirmation */}
+      <ConfirmDialog
+        isOpen={Boolean(deleteTarget)}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={handleDeleteConfirm}
+        title="Delete this strategy?"
+        message={`"${deleteTarget?.name || "This strategy"}" and its full trading history will be permanently removed. This cannot be undone.`}
+        confirmLabel="Permanently Delete"
+        variant="danger"
+      />
     </div>
   );
 }

@@ -1,9 +1,8 @@
-import React, { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   Users,
   UserCheck,
   Zap,
-  TrendingUp,
   ShieldCheck,
   Copy,
   Check,
@@ -11,21 +10,17 @@ import {
   Play,
   Pause,
   Trash2,
-  Sliders,
   Award,
   Search,
   RefreshCw,
   AlertCircle,
-  Clock,
-  ArrowUpRight,
-  ArrowDownRight,
   Radio,
-  Lock,
-  Layers,
   ChevronRight,
 } from "lucide-react";
 import { authFetch } from "../services/apiClient";
 import { useDebounce } from "../hooks/useDebounce";
+import ConfirmDialog from "../components/ConfirmDialog";
+import { useToast } from "../components/Toast";
 
 export default function CopyTrading() {
   const [activeTab, setActiveTab] = useState("explore"); // 'explore' | 'following' | 'master_hub'
@@ -40,8 +35,6 @@ export default function CopyTrading() {
   const [selectedGroup, setSelectedGroup] = useState(null);
   const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
   const [isCreateGroupModalOpen, setIsCreateGroupModalOpen] = useState(false);
-  const [isEditFollowerModalOpen, setIsEditFollowerModalOpen] = useState(false);
-  const [activeFollowerSub, setActiveFollowerSub] = useState(null);
 
   // Form States
   const [joinMultiplier, setJoinMultiplier] = useState(1.0);
@@ -67,6 +60,11 @@ export default function CopyTrading() {
 
   // Copied code feedback
   const [copiedCode, setCopiedCode] = useState(null);
+
+  // Leave-group confirmation
+  const [leaveSubId, setLeaveSubId] = useState(null);
+  const [leaveSubName, setLeaveSubName] = useState("");
+  const toast = useToast();
 
   const debouncedSearch = useDebounce(searchQuery, 300);
 
@@ -214,20 +212,28 @@ export default function CopyTrading() {
     }
   };
 
-  const handleLeaveGroup = async (subId) => {
-    const confirmed = window.confirm("Are you sure you want to stop copying this master trader and leave the group?");
-    if (!confirmed) return;
+  const promptLeaveGroup = (subId, name) => {
+    setLeaveSubId(subId);
+    setLeaveSubName(name || "this master trader");
+  };
 
+  const handleLeaveGroup = async () => {
+    if (!leaveSubId) return;
     try {
-      const res = await authFetch(`/api/copy-trading/following/${subId}`, {
+      const res = await authFetch(`/api/copy-trading/following/${leaveSubId}`, {
         method: "DELETE",
       });
-      if (res.ok) {
-        fetchMyFollowed();
-        fetchExplore();
-      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || "Failed to leave group");
+      fetchMyFollowed();
+      fetchExplore();
+      toast.success(`Stopped copying ${leaveSubName}`, { description: "Mirror stream disconnected." });
     } catch (err) {
       console.error("Failed to leave group:", err);
+      toast.error("Could not leave group", { description: err.message });
+    } finally {
+      setLeaveSubId(null);
+      setLeaveSubName("");
     }
   };
 
@@ -584,7 +590,7 @@ export default function CopyTrading() {
                             </button>
 
                             <button
-                              onClick={() => handleLeaveGroup(sub.id)}
+                              onClick={() => promptLeaveGroup(sub.id, sub.group_name || sub.master_name)}
                               title="Stop Copying & Leave Group"
                               className="p-1.5 rounded-lg bg-rose-500/10 text-rose-400 border border-rose-500/30 hover:bg-rose-500/20 transition-all"
                             >
@@ -1003,6 +1009,17 @@ export default function CopyTrading() {
           </div>
         </div>
       )}
+
+      {/* ── MODAL: LEAVE GROUP CONFIRMATION ────────────────────────────────── */}
+      <ConfirmDialog
+        isOpen={Boolean(leaveSubId)}
+        onClose={() => { setLeaveSubId(null); setLeaveSubName(""); }}
+        onConfirm={handleLeaveGroup}
+        title="Stop copying and leave this group?"
+        message={`You will immediately stop mirroring ${leaveSubName || "this master trader"}'s trades and the replication rules for this group will be removed.`}
+        confirmLabel="Stop Copying & Leave"
+        variant="danger"
+      />
     </div>
   );
 }

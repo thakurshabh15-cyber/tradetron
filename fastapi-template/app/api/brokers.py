@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,19 +29,69 @@ logger = get_logger("api.brokers")
 router = APIRouter(prefix="/api/brokers", tags=["brokers"])
 
 
+# ── Dynamic broker-specific credential validation ──────────────────────────────
+# Replaces the old one-size-fits-all LinkBrokerRequest with broker-specific
+# field requirements (see app/schemas/broker.py → BrokerCredentialsBase).
+
+# Mapping of broker_name → required credential fields
+_BROKER_REQUIRED_FIELDS: dict[str, list[str]] = {
+    "ANGEL_ONE":   ["client_id", "api_key", "api_secret", "totp_secret"],
+    "ZERODHA":     ["api_key", "api_secret"],
+    "DHAN_HQ":     ["client_id", "access_token"],
+    "UPSTOX_PRO":  ["api_key", "api_secret"],
+    "BINANCE":     ["api_key", "api_secret"],
+    "SIMULATED":   ["api_key"],
+}
+
+
 class LinkBrokerRequest(BaseModel):
-    broker_name: str = Field(..., description="ZERODHA, UPSTOX, ANGEL_ONE, BINANCE, or SIMULATED")
+    broker_name: str = Field(..., description="ANGEL_ONE | ZERODHA | DHAN_HQ | UPSTOX_PRO | BINANCE | SIMULATED")
     account_name: str = "Trading Account"
-    client_id: str
-    api_key: str
+    client_id: Optional[str] = None
+    api_key: Optional[str] = None
     api_secret: Optional[str] = None
     access_token: Optional[str] = None
+    totp_secret: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_credentials(self) -> "LinkBrokerRequest":
+        b = self.broker_name.upper() if isinstance(self.broker_name, str) else self.broker_name.value
+        required = _BROKER_REQUIRED_FIELDS.get(b)
+        if not required:
+            raise ValueError(f"Unsupported broker: {self.broker_name}")
+
+        provided = {
+            "client_id": self.client_id, "api_key": self.api_key,
+            "api_secret": self.api_secret, "access_token": self.access_token,
+            "totp_secret": self.totp_secret,
+        }
+        missing = [f for f in required if not provided.get(f)]
+        if missing:
+            raise ValueError(
+                f"Credential validation failed for {b}: missing {missing}"
+            )
+
+        # Bearer/JWT format check for Dhan HQ
+        if b == "DHAN_HQ" and self.access_token:
+            token = self.access_token.strip()
+            if not (token.startswith("Bearer ") or token.startswith("eyJ")):
+                raise ValueError("DHAN_HQ access_token must be a Bearer token or JWT")
+
+        # Binance key sanity
+        if b == "BINANCE":
+            for label, val in [("api_key", self.api_key), ("api_secret", self.api_secret)]:
+                if val and len(val) < 16:
+                    raise ValueError(
+                        f"BINANCE {label} looks invalid — expected 32+ char key/secret"
+                    )
+        return self
 
 
 class OAuthCallbackRequest(BaseModel):
     broker_name: str
     request_token: str
     client_id: Optional[str] = None
+    totp_secret: Optional[str] = None  # Required for Angel One OAuth flow
 
 
 def _calculate_daily_token_expiry() -> datetime:
@@ -216,7 +266,7 @@ async def oauth_callback(
             "account_id": acc.id,
             "status": "CONNECTED",
             "token_expires_at": acc.token_expires_at.isoformat(),
-        }
+            }
 
     elif broker_norm == "ANGEL_ONE":
         # Angel One SmartAPI session
@@ -240,11 +290,33 @@ async def oauth_callback(
 
         acc.set_api_key("angel_api_key")
         acc.set_access_token(f"angel_jwt_{req.request_token[:16]}")
+        # Store TOTP secret if provided (auto-generates 6-digit TOTP on subsequent logins)
+        if req.totp_secret:
+            acc.set_totp_secret(req.totp_secret)
         acc.token_expires_at = token_expiry
         acc.status = "CONNECTED"
         acc.last_synced_at = datetime.now(timezone.utc)
         await db.commit()
         await db.refresh(acc)
+
+        # Auto-generate TOTP code for Angel One login
+        totp_code = None
+        if req.totp_secret:
+            try:
+                from app.core.crypto import generate_totp
+                totp_code = generate_totp(req.totp_secret)
+            except Exception as exc:
+                logger.warning("TOTP generation failed for Angel One: %s", exc)
+
+        await log_audit_event(
+            db=db,
+            action="BROKER_OAUTH_LINKED",
+            resource_type="BROKER_ACCOUNT",
+            user_id=user.id,
+            resource_id=acc.id,
+            status="SUCCESS",
+            details={"broker": "ANGEL_ONE", "client_code": client_code},
+        )
 
         return {
             "success": True,
@@ -252,6 +324,7 @@ async def oauth_callback(
             "account_id": acc.id,
             "status": "CONNECTED",
             "token_expires_at": acc.token_expires_at.isoformat(),
+            "totp_code": totp_code,
         }
 
     raise HTTPException(status_code=400, detail=f"OAuth callback not supported for {req.broker_name}")
@@ -419,13 +492,14 @@ async def link_broker_manual(
     await subscription_engine.verify_access(user.id, "broker_link", db, current_count=existing_count)
     # ─────────────────────────────────────────────────────────────────────────
 
-    # Pre-flight credential verification based on broker
+            # Pre-flight credential verification based on broker
     if broker_name == "ANGEL_ONE":
         angel = AngelOneBroker(
             api_key=req.api_key,
-            client_code=req.client_id,
-            password=req.api_secret,
+            client_id=req.client_id,
+            pin=req.api_secret,
             jwt_token=req.access_token,
+            totp_key=req.totp_secret,
         )
         is_valid, msg = await angel.validate_credentials()
         if not is_valid:
@@ -469,11 +543,13 @@ async def link_broker_manual(
         )
         db.add(acc)
 
-    acc.set_api_key(req.api_key)
+        acc.set_api_key(req.api_key)
     if req.api_secret:
         acc.set_api_secret(req.api_secret)
     if req.access_token:
         acc.set_access_token(req.access_token)
+    if req.totp_secret:
+        acc.set_totp_secret(req.totp_secret)
     acc.status = "CONNECTED"
     acc.last_synced_at = datetime.now(timezone.utc)
 
@@ -487,7 +563,11 @@ async def link_broker_manual(
         user_id=user.id,
         resource_id=acc.id,
         status="SUCCESS",
-        details={"broker": acc.broker_name, "client_id": acc.client_id},
+        details={
+            "broker": acc.broker_name,
+            "client_id": acc.client_id,
+            **({"totp_secret_stored": True} if req.totp_secret else {}),
+        },
     )
 
     return {
@@ -496,6 +576,7 @@ async def link_broker_manual(
         "broker_name": acc.broker_name,
         "api_key_masked": acc.api_key_masked,
         "status": acc.status,
+        **({"token_expires_at": acc.token_expires_at.isoformat()} if acc.token_expires_at else {}),
     }
 
 

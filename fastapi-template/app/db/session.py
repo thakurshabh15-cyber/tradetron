@@ -131,7 +131,7 @@ async def init_db() -> None:
         CopyGroupRecord,
         CopyFollowerRecord,
     )
-    from app.models.audit import AuditLogRecord  # noqa: F401
+    from app.models.audit import AuditLogRecord, TradeAuditRecord  # noqa: F401
 
     logger.info("Initializing database tables on %s...", "SQLite" if IS_SQLITE else "PostgreSQL")
 
@@ -237,8 +237,8 @@ async def init_db() -> None:
                         name="PRO",
                         display_name="Pro Trader",
                         description="Full multi-broker execution, 10 live strategies, and 1m real candles",
-                        price_monthly=1999.0,
-                        price_yearly=19990.0,
+                        price_monthly=1499.0,
+                        price_yearly=14390.0,
                         currency="INR",
                         features_json=json.dumps({
                             "max_live_strategies": 10,
@@ -247,6 +247,24 @@ async def init_db() -> None:
                             "historical_candles": "1m",
                             "priority_support": True,
                             "vip_vps": False,
+                        }),
+                    ),
+                    PlanRecord(
+                        name="CREATOR",
+                        display_name="Creator Pro",
+                        description="Publish verified strategies on the marketplace and earn an 80% revenue share",
+                        price_monthly=4999.0,
+                        price_yearly=47990.0,
+                        currency="INR",
+                        features_json=json.dumps({
+                            "max_live_strategies": 25,
+                            "max_brokers": 10,
+                            "tick_speed": "realtime",
+                            "historical_candles": "1m",
+                            "priority_support": True,
+                            "vip_vps": False,
+                            "marketplace_publishing": True,
+                            "payout_eligibility": True,
                         }),
                     ),
                     PlanRecord(
@@ -268,7 +286,7 @@ async def init_db() -> None:
                 ]
                 session.add_all(default_plans)
                 await session.commit()
-                logger.info("Default subscription plans seeded (FREE, PRO, ELITE)")
+                logger.info("Default subscription plans seeded (FREE, PRO, CREATOR, ELITE/Enterprise)")
 
             # Seed Default Trading Strategies if DB is empty
             existing_strats = (await session.execute(select(StrategyRecord))).scalars().all()
@@ -319,8 +337,8 @@ async def init_db() -> None:
                 from app.core.security import hash_password
                 new_admin = UserRecord(
                     email="admin@tradetron.io",
-                    hashed_password=hash_password("Admin@Tradetron2026!"),
-                    full_name="Tradetron Platform Admin",
+                    hashed_password=hash_password("Admin@TradeThrone2026!"),
+                    full_name="TradeThrone Platform Admin",
                     role="admin",
                     kyc_status="VERIFIED",
                     is_active=True,
@@ -328,16 +346,16 @@ async def init_db() -> None:
                 )
                 session.add(new_admin)
                 await session.commit()
-                logger.info("Default Admin User created: admin@tradetron.io (password: Admin@Tradetron2026!)")
+                logger.info("Default Admin User created: admin@tradethrone.io (password: Admin@TradeThrone2026!)")
 
             demo_stmt = select(UserRecord).where(UserRecord.email == "admin@tradetron.com")
             demo_user = (await session.execute(demo_stmt)).scalar_one_or_none()
             if not demo_user:
                 from app.core.security import hash_password
                 session.add(UserRecord(
-                    email="admin@tradetron.com",
-                    hashed_password=hash_password("Admin@Tradetron2026!"),
-                    full_name="Tradetron Demo Admin",
+                    email="admin@tradethrone.com",
+                    hashed_password=hash_password("Admin@TradeThrone2026!"),
+                    full_name="TradeThrone Demo Admin",
                     role="admin",
                     kyc_status="VERIFIED",
                     is_active=True,

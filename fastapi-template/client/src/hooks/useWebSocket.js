@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getWsUrl } from "../config";
 
+const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 15000];
+
 /**
  * Auto-reconnecting WebSocket hook.
  *
@@ -13,70 +15,81 @@ import { getWsUrl } from "../config";
 export function useWebSocket(path, { enabled = true, onMessage } = {}) {
   const [lastMessage, setLastMessage] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
-  const wsRef = useRef(null);
-  const retriesRef = useRef(0);
-  const enabledRef = useRef(enabled);
-  enabledRef.current = enabled;
-
   const onMessageRef = useRef(onMessage);
-  onMessageRef.current = onMessage;
 
-  const connect = useCallback(() => {
-    if (!enabledRef.current) return;
-
-    const url = getWsUrl(path);
-    const ws = new WebSocket(url);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      setIsConnected(true);
-      retriesRef.current = 0;
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        setLastMessage(data);
-        onMessageRef.current?.(data);
-      } catch {
-        // Non-JSON message — ignore
-      }
-    };
-
-    ws.onclose = () => {
-      setIsConnected(false);
-      wsRef.current = null;
-
-      if (!enabledRef.current) return;
-
-      // Reconnect with exponential backoff
-      const delay =
-        RECONNECT_DELAYS[
-          Math.min(retriesRef.current, RECONNECT_DELAYS.length - 1)
-        ];
-      retriesRef.current += 1;
-      setTimeout(connect, delay);
-    };
-
-    ws.onerror = () => {
-      ws.close();
-    };
-  }, [path]);
+  // Keep the latest handler without re-opening the socket on every render
+  useEffect(() => {
+    onMessageRef.current = onMessage;
+  }, [onMessage]);
+  const wsOutRef = useRef(null);
 
   useEffect(() => {
-    if (enabled) {
-      connect();
-    }
+    if (!enabled) return undefined;
+
+    let ws = null;
+    let cancelled = false;
+    let retries = 0;
+    let timer = null;
+
+    const scheduleReconnect = () => {
+      const delay = RECONNECT_DELAYS[Math.min(retries, RECONNECT_DELAYS.length - 1)];
+      retries += 1;
+      timer = setTimeout(openSocket, delay);
+    };
+
+    const openSocket = () => {
+      if (cancelled) return;
+      try {
+        ws = new WebSocket(getWsUrl(path));
+      } catch {
+        scheduleReconnect();
+        return;
+      }
+      wsOutRef.current = ws;
+
+      ws.onopen = () => {
+        setIsConnected(true);
+        retries = 0;
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          setLastMessage(data);
+          onMessageRef.current?.(data);
+        } catch {
+          // Non-JSON message — ignore
+        }
+      };
+
+      ws.onclose = () => {
+        setIsConnected(false);
+        if (wsOutRef.current === ws) wsOutRef.current = null;
+        ws = null;
+        if (!cancelled) scheduleReconnect();
+      };
+
+      ws.onerror = () => {
+        ws?.close();
+      };
+    };
+
+    openSocket();
 
     return () => {
-      enabledRef.current = false;
-      wsRef.current?.close();
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      if (wsOutRef.current === ws) wsOutRef.current = null;
+      ws?.close();
+      ws = null;
+      setIsConnected(false);
     };
-  }, [connect, enabled]);
+  }, [path, enabled]);
 
   const send = useCallback((data) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(typeof data === "string" ? data : JSON.stringify(data));
+    const socket = wsOutRef.current;
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(typeof data === "string" ? data : JSON.stringify(data));
     }
   }, []);
 

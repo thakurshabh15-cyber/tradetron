@@ -1,4 +1,4 @@
-import { AlertCircle, Inbox, RefreshCw, FolderSearch } from "lucide-react";
+import { AlertCircle, Inbox, RefreshCw } from "lucide-react";
 
 export function SkeletonCard() {
   return (

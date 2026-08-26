@@ -141,3 +141,49 @@ async def get_instrument_categories():
         {"id": "FOREX", "label": "Forex & Currency (USD/INR)", "count": "20+"},
         {"id": "CRYPTO", "label": "Crypto Spot (BTC, ETH, SOL)", "count": "100+"},
     ]
+
+
+@router.get("/optionchain")
+async def get_option_chain(
+    symbol: str = Query("NIFTY50", description="Underlying: NIFTY50, BANKNIFTY, FINNIFTY, SENSEX"),
+    expiry: str | None = Query(None, description="YYYY-MM-DD expiry override"),
+    levels: int = Query(7, ge=3, le=12, description="Strikes each side of ATM"),
+):
+    """Live option chain: ATM/ITM/OTM ladder priced off the real-time spot tape
+    with OI, volume, IV surface, full Greeks, PCR and Max-Pain."""
+    from app.market_data.option_chain import build_option_chain
+
+    clean = symbol.upper().strip()
+    quote = unified_market_manager.get_quote(clean)
+    spot = _spot_from_quote(quote)
+    if spot is None:
+        raise HTTPException(status_code=409, detail=f"No live underlying quote for {clean} — feed warming up")
+
+    chain = build_option_chain(clean, float(spot), expiry=expiry, levels=levels)
+    chain["ws_channel"] = f"/ws/optionchain/{clean}"
+    return chain
+
+
+def _spot_from_quote(quote):
+    """Tolerant price extractor across dict / object tick shapes."""
+    if quote is None:
+        return None
+    if isinstance(quote, dict):
+        for k in ("price", "last_price", "ltp", "close"):
+            v = quote.get(k)
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                continue
+            if v > 0:
+                return v
+    else:
+        for attr in ("price", "last_price", "ltp", "close"):
+            v = getattr(quote, attr, None)
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                continue
+            if v > 0:
+                return v
+    return None

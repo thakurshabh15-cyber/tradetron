@@ -66,7 +66,7 @@ def format_trade_alert(
 ) -> str:
     """Build a compact Markdown message shared by API and engine fills."""
     lines = [
-        f"*Tradetron {event}*",
+        f"*TradeThrone {event}*",
         f"*{side}* `{quantity}` x `{symbol}` @ `₹{price:.2f}`",
         f"Mode: `{mode}`",
     ]

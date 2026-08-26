@@ -3,7 +3,7 @@
 import json
 from typing import Optional, Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +17,24 @@ from app.schemas.trading import StrategyCreate, StrategyRead, StrategyUpdate
 logger = get_logger("api.strategies")
 
 router = APIRouter(prefix="/api/strategies", tags=["strategies"])
+
+
+async def _get_optional_user_id(request: Request) -> Optional[str]:
+    """Extract user_id from JWT token if present, without raising on missing auth."""
+    try:
+        from app.api.auth import get_current_user
+        from app.db.session import SessionLocal
+        async with SessionLocal() as _db:
+            # Reuse auth dependency by calling it directly with the request
+            from app.core.security import decode_token
+            auth_header = request.headers.get("Authorization", "")
+            if auth_header.startswith("Bearer "):
+                token = auth_header[7:]
+                payload = decode_token(token)
+                return payload.get("sub") if payload else None
+    except Exception:
+        pass
+    return None
 
 
 class DeployStrategyRequest(BaseModel):
@@ -254,9 +272,23 @@ _DEFAULT_MARKETPLACE_ITEMS = [
 @router.post("", response_model=StrategyRead, status_code=201)
 async def create_strategy(
     payload: StrategyCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """Create a new trading strategy."""
+    # ── Plan limit enforcement: count existing strategies for this user ───────
+    user_id = await _get_optional_user_id(request)
+    if user_id:
+        from app.engine.subscription import subscription_engine
+        count_stmt = select(StrategyRecord).where(
+            StrategyRecord.user_id == user_id
+        ) if hasattr(StrategyRecord, "user_id") else None
+        if count_stmt is not None:
+            count_res = await db.execute(count_stmt)
+            strat_count = len(count_res.scalars().all())
+            await subscription_engine.verify_access(user_id, "strategy_create", db, current_count=strat_count)
+    # ─────────────────────────────────────────────────────────────────────────
+
     record = StrategyRecord(
         name=payload.name,
         symbols_json=json.dumps([s.upper() for s in payload.symbols]),

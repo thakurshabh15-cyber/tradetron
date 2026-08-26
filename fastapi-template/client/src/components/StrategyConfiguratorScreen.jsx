@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Sliders, Shield, Zap, RefreshCw, CheckCircle2 } from "lucide-react";
+import { Sliders, Shield, CheckCircle2 } from "lucide-react";
 
 export default function StrategyConfiguratorScreen({ strategy, onSave, onCancel }) {
   const [multiplier, setMultiplier] = useState(1.0);

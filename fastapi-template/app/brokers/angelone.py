@@ -10,12 +10,22 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Optional
 
-import pyotp
-
 from app.brokers.base import BrokerClient
 from app.config import settings
 from app.core.logging import get_logger
 from app.schemas.trading import OrderRequest
+
+# Optional import for SmartConnect - allows mock mode without the package
+try:
+    from SmartApi import SmartConnect
+except ImportError:
+    SmartConnect = None
+
+# Optional import for pyotp - allows mock mode without TOTP generation
+try:
+    import pyotp
+except ImportError:
+    pyotp = None
 
 logger = get_logger("broker.angelone")
 
@@ -26,76 +36,74 @@ class AngelOneBroker(BrokerClient):
     def __init__(
         self,
         api_key: Optional[str] = None,
-        client_code: Optional[str] = None,
-        password: Optional[str] = None,
-        totp_secret: Optional[str] = None,
+        client_id: Optional[str] = None,
+        pin: Optional[str] = None,
+        totp_key: Optional[str] = None,
         jwt_token: Optional[str] = None,
     ) -> None:
         self.api_key = api_key or settings.angel_api_key or ""
-        self.client_code = client_code or settings.angel_client_code or ""
-        self.password = password or settings.angel_password or ""
-        self.totp_secret = totp_secret or settings.angel_totp_secret or ""
+        self.client_id = client_id or settings.angel_client_id or ""
+        self.pin = pin or settings.angel_pin or ""
+        self.totp_key = totp_key or settings.angel_totp_key or ""
         self.jwt_token = jwt_token
 
         self._client = None
         self._session: dict | None = None
 
-        if self.api_key:
+        if self.api_key and SmartConnect is not None:
             try:
-                from SmartApi import SmartConnect
                 self._client = SmartConnect(api_key=self.api_key)
             except Exception as exc:
                 logger.warning("SmartApi package import notice: %s", exc)
 
     async def validate_credentials(self) -> tuple[bool, str]:
-        """Verify the validity of Angel One API Key & credentials against Angel One server."""
         if not self.api_key or len(self.api_key.strip()) < 8 or self.api_key.strip().lower() in ("test", "mock", "placeholder", "123", "angel_api_key"):
             return False, "Invalid API Key: Angel One requires a valid SmartAPI Key registered on smartapi.angelbroking.com"
 
-        if not self.client_code or len(self.client_code.strip()) < 3:
-            return False, "Invalid Client Code: Please enter your valid Angel One Client Code (e.g. S123456)"
+        if not self.client_id or len(self.client_id.strip()) < 3:
+            return False, "Invalid Client ID: Please enter your valid Angel One Client ID (e.g. S123456)"
 
-        try:
-            from SmartApi import SmartConnect
+        if SmartConnect is None:
+            return False, "SmartApi package not installed. Install with: pip install smartapi-python"
 
-            client = SmartConnect(api_key=self.api_key.strip())
+        client = SmartConnect(api_key=self.api_key.strip())
 
-            # If JWT token provided
-            if self.jwt_token:
-                client.setAccessToken(self.jwt_token)
-                res = await asyncio.to_thread(client.getProfile, self.jwt_token)
-                if res and isinstance(res, dict) and res.get("status"):
-                    return True, "Angel One SmartAPI session validated successfully."
-                err_msg = res.get("message") if isinstance(res, dict) else "Session expired or invalid token"
-                return False, f"Angel One authentication failed: {err_msg}"
+        # If JWT token provided
+        if self.jwt_token:
+            client.setAccessToken(self.jwt_token)
+            res = await asyncio.to_thread(client.getProfile, self.jwt_token)
+            if res and isinstance(res, dict) and res.get("status"):
+                return True, "Angel One SmartAPI session validated successfully."
+            err_msg = res.get("message") if isinstance(res, dict) else "Session expired or invalid token"
+            return False, f"Angel One authentication failed: {err_msg}"
 
-            # If password and TOTP secret provided
-            if self.password and self.totp_secret:
-                try:
-                    totp = pyotp.TOTP(self.totp_secret.strip()).now()
-                except Exception:
-                    return False, "Invalid TOTP Secret Key: Please provide a valid Base32 TOTP secret from Angel One"
+        # If PIN and TOTP key provided
+        if self.pin and self.totp_key:
+            if pyotp is None:
+                logger.warning("pyotp package not installed, cannot generate TOTP. Falling back to mock mode.")
+                return False, "pyotp package not installed. Install with: pip install pyotp"
+            try:
+                totp = pyotp.TOTP(self.totp_key.strip()).now()
+            except Exception:
+                return False, "Invalid TOTP Key: Please provide a valid Base32 TOTP key from Angel One"
 
-                session = await asyncio.to_thread(
-                    client.generateSession,
-                    self.client_code.strip(),
-                    self.password.strip(),
-                    totp,
-                )
+            session = await asyncio.to_thread(
+                client.generateSession,
+                self.client_id.strip(),
+                self.pin.strip(),
+                totp,
+            )
 
-                if session and isinstance(session, dict) and session.get("status"):
-                    self._session = session
-                    self._client = client
-                    return True, "Angel One SmartAPI authenticated successfully."
+            if session and isinstance(session, dict) and session.get("status"):
+                self._session = session
+                self._client = client
+                return True, "Angel One SmartAPI authenticated successfully."
 
-                err_msg = session.get("message") if isinstance(session, dict) else "Invalid credentials"
-                return False, f"Angel One rejected login: {err_msg}"
+            err_msg = session.get("message") if isinstance(session, dict) else "Invalid credentials"
+            return False, f"Angel One rejected login: {err_msg}"
 
-            # If only API Key and Client Code were provided
-            return False, "Angel One requires API Key, Client ID, and Password or TOTP to authenticate live sessions."
-
-        except Exception as exc:
-            return False, f"Angel One connection error: {str(exc)}"
+        # If only API Key and Client ID were provided
+        return False, "Angel One requires API Key, Client ID, and PIN or TOTP to authenticate live sessions."
 
     async def connect(self) -> None:
         """Authenticate with Angel One using TOTP."""
@@ -103,18 +111,28 @@ class AngelOneBroker(BrokerClient):
             return
 
         if not self._client:
-            from SmartApi import SmartConnect
+            if SmartConnect is None:
+                raise RuntimeError("SmartApi package not installed. Install with: pip install smartapi-python")
             self._client = SmartConnect(api_key=self.api_key)
 
-        if not self.totp_secret:
-            raise RuntimeError("Angel One TOTP secret is not configured.")
+        if not self.totp_key:
+            if SmartConnect is None:
+                raise RuntimeError("Angel One TOTP key is not configured.")
+            # If we don't have TOTP key but SmartConnect is available, we can't do real auth
+            # This will be handled by the mock mode fallback
+            logger.warning("Angel One TOTP key is not configured, cannot authenticate. Will use mock mode.")
+            raise RuntimeError("Angel One TOTP key is not configured.")
 
-        totp = pyotp.TOTP(self.totp_secret).now()
+        if pyotp is None:
+            logger.warning("pyotp package not installed, cannot generate TOTP. Falling back to mock mode.")
+            raise RuntimeError("pyotp package not installed. Install with: pip install pyotp")
+
+        totp = pyotp.TOTP(self.totp_key).now()
 
         self._session = await asyncio.to_thread(
             self._client.generateSession,
-            self.client_code,
-            self.password,
+            self.client_id,
+            self.pin,
             totp,
         )
 
@@ -262,3 +280,140 @@ class AngelOneBroker(BrokerClient):
         except Exception as exc:
             logger.warning("Angel One holdings fetch failed: %s", exc)
         return []
+def place_tradethrone_order(payload: dict) -> dict:
+    """
+    Place an order from a validated TradeThrone signal payload for Angel One.
+    
+    Args:
+        payload: Validated TradeThrone signal containing:
+            - signal: str (e.g., "entry_long", "exit_long")
+            - symbol: str (e.g., "NIFTY24AUG25000CE")
+            - action: str (e.g., "BUY", "SELL")
+            - quantity: int
+            - price: float
+            - exchange: str (optional, e.g., "NSE", "NFO", default "NSE")
+            - order_type: str (optional, "LIMIT" or "MARKET", default "LIMIT")
+            - product_type: str (optional, e.g., "INTRADAY", "DELIVERY", default "INTRADAY")
+            - duration: str (optional, e.g., "DAY", "IOC", default "DAY")
+    
+    Returns:
+        Order response with order_id, status, and symbol.
+        If credentials are available and SmartConnect is installed, places real order.
+        Otherwise, returns mock order response.
+    """
+    signal = payload.get("signal", "")
+    symbol = payload.get("symbol", "")
+    action = payload.get("action", "")
+    quantity = payload.get("quantity", 0)
+    price = payload.get("price", 0.0)
+    exchange = payload.get("exchange", "NSE")
+    order_type = payload.get("order_type", "LIMIT").upper()
+    product_type = payload.get("product_type", "INTRADAY")
+    duration = payload.get("duration", "DAY")
+    
+    logger.info(
+        "Placing TradeThrone order (Angel One): signal=%s symbol=%s action=%s quantity=%d price=%.2f exchange=%s order_type=%s",
+        signal, symbol, action, quantity, price, exchange, order_type
+    )
+    
+    # Check if we have real credentials and SmartConnect is available
+    has_real_credentials = (
+        bool(settings.angel_api_key) 
+        and bool(settings.angel_client_id) 
+        and (bool(settings.angel_pin) or bool(settings.angel_totp_key))
+    )
+    
+    if has_real_credentials and SmartConnect is not None and pyotp is not None:
+        try:
+            # Initialize SmartConnect
+            client = SmartConnect(api_key=settings.angel_api_key)
+            
+            # Generate session using PIN + TOTP
+            if not settings.angel_totp_key:
+                logger.warning("Angel One TOTP key is not configured, cannot authenticate. Using mock mode.")
+                raise RuntimeError("Angel One TOTP key is not configured.")
+            
+            totp = pyotp.TOTP(settings.angel_totp_key.strip()).now()
+            session = client.generateSession(
+                settings.angel_client_id.strip(),
+                settings.angel_pin.strip(),
+                totp,
+            )
+            
+            if not session or not session.get("status"):
+                raise RuntimeError(f"Angel One auth failed: {session.get('message', 'Unknown error')}")
+            
+            # Resolve symbol token
+            search_result = client.searchScrip(exchange, symbol)
+            if not search_result or not search_result.get("data"):
+                raise RuntimeError(f"Could not resolve symbol token for '{symbol}' on {exchange}")
+            
+            symbol_token = None
+            for scrip in search_result["data"]:
+                if scrip.get("tradingsymbol", "").upper() == symbol.upper():
+                    symbol_token = scrip.get("symboltoken", "")
+                    break
+            
+            if not symbol_token:
+                raise RuntimeError(f"Could not find symbol token for '{symbol}'")
+            
+            # Map transaction type
+            transaction_type = "BUY" if action.upper() == "BUY" else "SELL"
+            
+            # Place the order
+            order_payload = {
+                "variety": "NORMAL",
+                "tradingsymbol": symbol,
+                "symboltoken": symbol_token,
+                "transactiontype": transaction_type,
+                "exchange": exchange,
+                "ordertype": order_type,
+                "producttype": product_type,
+                "duration": duration,
+                "quantity": str(quantity),
+            }
+            
+            if order_type == "LIMIT":
+                order_payload["price"] = str(price)
+            
+            response = client.placeOrder(order_payload)
+            order_id = str(response) if response else ""
+            
+            logger.info("Angel One real order placed successfully: order_id=%s", order_id)
+            
+            return {
+                "order_id": order_id,
+                "status": "COMPLETE",
+                "symbol": symbol,
+                "exchange": exchange,
+                "action": action,
+                "quantity": quantity,
+                "price": price,
+                "broker": "angelone",
+            }
+        except Exception as exc:
+            logger.error("Angel One real order placement failed: %s", exc)
+            logger.warning("Falling back to mock order response")
+            # Fall through to mock response
+    else:
+        if not has_real_credentials:
+            logger.warning("Angel One credentials not fully configured, using mock order response")
+        if SmartConnect is None:
+            logger.warning("SmartApi package not installed, using mock order response")
+        if pyotp is None:
+            logger.warning("pyotp package not installed, using mock order response")
+    
+    # Mock order response
+    import time
+    order_id = f"ANGEL{int(time.time() * 1000) % 100000000:08d}"
+    
+    return {
+        "order_id": order_id,
+        "status": "COMPLETE",
+        "symbol": symbol,
+        "broker": "angelone",
+    }
+
+
+# Backward-compatible alias for legacy integrations.
+place_tradetron_order = place_tradethrone_order

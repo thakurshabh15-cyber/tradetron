@@ -18,17 +18,20 @@ class Settings(BaseSettings):
 
     # ── Security ─────────────────────────────────────────────────────
     jwt_secret: str = ""  # REQUIRED — must be set in .env
+    jwt_algorithm: str = "HS256"  # Only HS256 (HMAC-SHA256) is implemented; others are rejected
+    access_token_expire_minutes: int = 15  # Short-lived access token lifetime (production: 1440)
 
     # ── Broker credentials (Angel One) ───────────────────────────────
     angel_api_key: str = ""
-    angel_client_code: str = ""
-    angel_password: str = ""
-    angel_totp_secret: str = ""
+    angel_client_id: str = ""
+    angel_pin: str = ""
+    angel_totp_key: str = ""
     broker_mode: str = "simulated"  # "simulated" | "live"
 
     # ── Broker credentials (Zerodha Kite) ────────────────────────────
     zerodha_api_key: str = ""
     zerodha_api_secret: str = ""
+    zerodha_access_token: str = ""
 
     # ── Broker credentials (Binance) ─────────────────────────────────
     binance_api_key: str = ""
@@ -52,7 +55,7 @@ class Settings(BaseSettings):
     smtp_port: int = 587
     smtp_user: str = ""
     smtp_password: str = ""
-    smtp_from_email: str = "noreply@tradetron.io"
+    smtp_from_email: str = "noreply@tradethrone.io"
     smtp_tls: bool = True
 
     # SMS Providers (Twilio or MSG91)
@@ -75,13 +78,53 @@ class Settings(BaseSettings):
     feed_mode_forex: str = "demo"    # always demo (no free real-time forex API)
 
     # ── Application ──────────────────────────────────────────────────
-    app_name: str = "Tradetron"
+    app_name: str = "TradeThrone"
     port: int = 8080
     frontend_url: str = "http://localhost:5173"
     allowed_origins: str = "*"  # Comma-separated list or "*"
     database_url: str = f"sqlite+aiosqlite:///{BASE_DIR / 'trading.db'}"
     log_level: str = "INFO"
     environment: str = "production"  # "development" | "production"
+    
+    # ── Redis ──────────────────────────────────────────────────────────
+    redis_url: str = "redis://localhost:6379/0"
+    
+    # ── Webhook provider secrets ───────────────────────────────────────
+    upstox_webhook_secret: str = ""
+    angelone_webhook_secret: str = ""
+    binance_webhook_secret: str = ""
+    tradethrone_webhook_secret: str = ""
+    
+    # ── OTLP tracing ───────────────────────────────────────────────────
+    otlp_endpoint: str = ""
+    otlp_insecure: bool = True
+
+    # ── Webhook local testing ──────────────────────────────────────────
+    webhook_local_mode: bool = False  # skip signature verification & Redis
+    webhook_http_port: int = 8001     # HTTP port when running locally
+
+    # ── Production Infrastructure (managed services) ────────────────────
+    upstash_redis_url: str = ""       # Managed serverless Redis w/ TLS — overrides redis_url when set
+    skip_signature_verification: bool = False  # NEVER true in production (HMAC enforcement)
+
+    # ── Additional Indian Brokers ───────────────────────────────────────
+    dhan_client_id: str = ""
+    dhan_access_token: str = ""
+    fyers_app_id: str = ""
+    fyers_access_token: str = ""
+
+    # ── Global Feed Providers ───────────────────────────────────────────
+    alpaca_api_key: str = ""
+    alpaca_secret_key: str = ""
+    oanda_api_token: str = ""
+
+    # ── Live Payment Gateways ───────────────────────────────────────────
+    stripe_secret_key: str = ""
+
+    @property
+    def effective_redis_url(self) -> str:
+        """Upstash TLS Redis takes precedence over the plain redis_url."""
+        return self.upstash_redis_url.strip() or self.redis_url
 
     # ── Risk management ──────────────────────────────────────────────
     max_position_size: int = 100

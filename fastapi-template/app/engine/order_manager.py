@@ -378,6 +378,17 @@ class OrderManager:
 
         self.realized_pnl += pnl
 
+        # ── TradeThrone Auto-Pilot Risk Guard hook ───────────────────
+        # Feed closed-trade P&L into the engine risk manager so the
+        # auto-pilot can trip the kill-switch on loss streaks/drawdown.
+        # Defensive: risk_manager may not be wired in standalone usage.
+        _rm = getattr(self, "risk_manager", None)
+        if _rm is not None and hasattr(_rm, "record_trade_result"):
+            try:
+                _rm.record_trade_result(pnl)
+            except Exception as exc:  # never break trade flow
+                logger.debug("Auto-pilot risk feed skipped: %s", exc)
+
         # Move from active to closed
         self.active_positions.pop(position.symbol, None)
         self.closed_positions.append(position)

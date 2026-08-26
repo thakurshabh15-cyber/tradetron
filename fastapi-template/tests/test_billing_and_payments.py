@@ -138,7 +138,7 @@ async def test_billing_and_payments_suite():
         import json
         payload_bytes = json.dumps(webhook_payload).encode()
         import hmac, hashlib
-        sig = hmac.new(b"rzp_test_tradetron_webhook_secret", payload_bytes, hashlib.sha256).hexdigest()
+        sig = hmac.new(b"rzp_test_tradethrone_webhook_secret", payload_bytes, hashlib.sha256).hexdigest()
 
         webhook_res = await client.post(
             "/api/billing/webhook/razorpay",

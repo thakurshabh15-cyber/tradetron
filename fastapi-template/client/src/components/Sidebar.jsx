@@ -8,34 +8,71 @@ import {
   History,
   Settings as SettingsIcon,
   Activity,
-  Zap,
   User,
   LogOut,
   ShieldCheck,
   Menu,
   X,
-  Radio,
   Users,
   Server,
   CreditCard,
+  Lock,
   Workflow,
+  FlaskConical,
+  LineChart,
+  Wallet,
+  Radar,
+  FileText,
+  BadgeCheck,
+  Globe2,
+  Crown,
 } from "lucide-react";
 import AuthModal from "./AuthModal";
 import { useAuthStore } from "../stores/useAuthStore";
 
-const links = [
-  { to: "/", icon: LayoutDashboard, label: "Dashboard" },
-  { to: "/copy-trading", icon: Users, label: "Copy Trading" },
-  { to: "/marketplace", icon: Store, label: "Marketplace" },
-  { to: "/watchlist", icon: Eye, label: "Watchlist & Alerts" },
-  { to: "/strategies", icon: Brain, label: "Strategies" },
-  { to: "/history", icon: History, label: "Trade History" },
-  { to: "/settings", icon: SettingsIcon, label: "Profile & Settings" },
-  { to: "/broker-sessions", icon: Server, label: "Broker Sessions" },
-  { to: "/pricing", icon: CreditCard, label: "Pricing & Plans" },
-  { to: "/visual-builder", icon: Workflow, label: "Visual Options Builder" },
-  { to: "/admin", icon: ShieldCheck, label: "Admin Sentinel" },
+// Lifecycle information architecture (BUILD > VALIDATE > SIMULATE > DEPLOY > CONTROL > LEARN)
+const NAV_GROUPS = [
+  { header: "COMMAND", items: [
+    { to: "/", icon: LayoutDashboard, label: "Command Center" },
+    { to: "/markets", icon: Globe2, label: "Markets" },
+    { to: "/portfolio", icon: Wallet, label: "Portfolio" },
+    { to: "/execution", icon: Radar, label: "Live Execution" },
+  ] },
+  { header: "BUILD", items: [
+    { to: "/strategies", icon: Brain, label: "Strategies" },
+    { to: "/quant-lab", icon: FlaskConical, label: "AI Strategy Builder" },
+    { to: "/visual-builder", icon: Workflow, label: "Visual Options Builder" },
+  ] },
+  { header: "VALIDATE", items: [
+    { to: "/backtest", icon: LineChart, label: "Truthful Backtest" },
+    { to: "/reality-mode", icon: Activity, label: "Reality Mode" },
+  ] },
+  { header: "DISCOVER", items: [
+    { to: "/marketplace", icon: Store, label: "Marketplace" },
+    { to: "/copy-trading", icon: Users, label: "Copy Trading" },
+  ] },
+  { header: "CONTROL", items: [
+    { to: "/execution#risk", icon: ShieldCheck, label: "Risk Center" },
+    { to: "/broker-sessions", icon: Server, label: "Broker Sessions" },
+    { to: "/watchlist", icon: Eye, label: "Watchlist & Alerts" },
+  ] },
+  { header: "ANALYZE", items: [
+    { to: "/history", icon: History, label: "Trade History" },
+    { to: "/trade-journal", icon: FileText, label: "AI Trade Journal" },
+  ] },
+  { header: "SYSTEM", items: [
+    { to: "/pricing", icon: CreditCard, label: "Pricing & Plans" },
+    { to: "/kyc", icon: BadgeCheck, label: "KYC Center" },
+    { to: "/settings", icon: SettingsIcon, label: "Profile & Settings" },
+    { to: "/admin", icon: Lock, label: "Admin Sentinel" },
+  ] },
 ];
+
+// Flat render list with section-header markers interleaved
+const links = NAV_GROUPS.flatMap((g) => [
+  { header: g.header },
+  ...g.items,
+]);
 
 export default function Sidebar({ onOpenKYC, kycStatus = "NOT_SUBMITTED" }) {
   const navigate = useNavigate();
@@ -49,7 +86,7 @@ export default function Sidebar({ onOpenKYC, kycStatus = "NOT_SUBMITTED" }) {
 
   useEffect(() => {
     initializeAuth();
-  }, []);
+  }, [initializeAuth]);
 
   const handleLogout = async () => {
     await logout();
@@ -62,10 +99,12 @@ export default function Sidebar({ onOpenKYC, kycStatus = "NOT_SUBMITTED" }) {
       {/* ── MOBILE TOP NAVIGATION BAR (Visible < lg) ────────────────── */}
       <header className="md:hidden fixed top-0 left-0 right-0 z-40 h-14 bg-surface-950/90 border-b border-slate-800/80 backdrop-blur-md px-4 flex items-center justify-between">
         <div className="flex items-center gap-2.5">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-brand-purple to-brand-violet shadow-sm shadow-brand-purple/20">
-            <Zap size={16} className="text-white" />
+                    <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 via-brand-purple to-cyan-400 p-0.5 shadow-none">
+            <div className="flex h-full w-full items-center justify-center rounded-lg bg-surface-900">
+              <Crown size={16} className="text-white" />
+            </div>
           </div>
-          <span className="font-display font-bold text-sm text-white tracking-tight">Tradetron</span>
+          <span className="font-display font-bold text-sm text-white tracking-tight">TradeThrone</span>
         </div>
 
         <div className="flex items-center gap-2">
@@ -82,7 +121,7 @@ export default function Sidebar({ onOpenKYC, kycStatus = "NOT_SUBMITTED" }) {
               </button>
               <button
                 onClick={handleLogout}
-                aria-label="Log out of Tradetron"
+                aria-label="Log out of TradeThrone"
                 className="flex min-h-[44px] items-center gap-1.5 rounded-xl border border-rose-500/50 bg-rose-500/15 px-2.5 text-xs font-bold text-rose-300 transition-colors hover:bg-rose-500/25"
               >
                 <LogOut size={16} />
@@ -109,49 +148,61 @@ export default function Sidebar({ onOpenKYC, kycStatus = "NOT_SUBMITTED" }) {
 
       {/* ── MOBILE SLIDE-OVER DRAWER (Visible when opened on mobile) ── */}
       {mobileDrawerOpen && (
-        <div className="md:hidden fixed inset-0 z-50 flex">
+        <div className="md:hidden fixed inset-0 z-[60] flex">
           {/* Backdrop */}
           <div
             onClick={() => setMobileDrawerOpen(false)}
-            className="fixed inset-0 bg-black/80 backdrop-blur-sm animate-fade-in"
+            className="fixed inset-0 z-[50] bg-black/80 backdrop-blur-sm animate-fade-in"
           />
 
           {/* Drawer Content */}
-          <div className="relative flex flex-col w-72 max-w-full bg-surface-900 border-r border-slate-800 p-5 z-10 shadow-2xl animate-slide-in-right">
-            <div className="flex items-center justify-between pb-4 border-b border-slate-800">
-              <div className="flex items-center gap-2.5">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-violet text-white">
-                  <Zap size={16} />
+          <div className="relative z-[60] flex h-screen w-72 max-w-full flex-col gap-4 overflow-y-auto bg-surface-900 border-r border-slate-800 p-5 shadow-2xl animate-slide-in-right">
+            <div className="flex items-center justify-between gap-3 border-b border-slate-800 pb-4">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <div className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 via-brand-purple to-cyan-400 p-0.5 shadow-none">
+                  <div className="flex h-full w-full items-center justify-center rounded-lg bg-surface-900">
+                    <Crown size={16} className="text-white" />
+                  </div>
                 </div>
-                <h2 className="font-display font-bold text-sm text-white">Tradetron Mobile</h2>
+                <h2 className="truncate font-display text-sm font-bold text-white">TradeThrone Mobile</h2>
               </div>
               <button
                 onClick={() => setMobileDrawerOpen(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-white"
+                aria-label="Close navigation drawer"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-slate-700/60 bg-surface-800 text-slate-400 transition-colors hover:bg-surface-700 hover:text-white active:scale-95"
               >
                 <X size={18} />
               </button>
             </div>
 
             {/* Links */}
-            <nav className="flex-1 space-y-1 py-4 overflow-y-auto">
-              {links.map(({ to, icon: Icon, label }) => (
-                <NavLink
-                  key={to}
-                  to={to}
-                  onClick={() => setMobileDrawerOpen(false)}
-                  className={({ isActive }) =>
-                    `flex items-center gap-3 rounded-xl px-3.5 py-3 text-xs font-semibold transition-all min-h-[44px] ${
-                      isActive
-                        ? "bg-brand-purple/15 text-brand-purple border border-brand-purple/25 shadow-sm"
-                        : "text-slate-400 hover:bg-surface-800 hover:text-white"
-                    }`
-                  }
-                >
-                  <Icon size={18} />
-                  <span>{label}</span>
-                </NavLink>
-              ))}
+            <nav className="flex-1 space-y-1 overflow-y-auto pt-1">
+              {links.map((item) =>
+                item.header ? (
+                  <p
+                    key={item.header}
+                    className="px-3.5 pb-1 pt-3 text-[9px] font-bold uppercase tracking-[0.18em] text-slate-600"
+                  >
+                    {item.header}
+                  </p>
+                ) : (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    onClick={() => setMobileDrawerOpen(false)}
+                    className={({ isActive }) =>
+                      `flex items-center gap-3 rounded-xl px-3.5 py-3 text-xs font-semibold transition-all min-h-[44px] ${
+                        isActive
+                          ? "bg-brand-purple/15 text-brand-purple border border-brand-purple/25 shadow-sm"
+                          : "text-slate-400 hover:bg-surface-800 hover:text-white"
+                      }`
+                    }
+                  >
+                    <item.icon size={18} />
+                    <span>{item.label}</span>
+                  </NavLink>
+                )
+              )}
             </nav>
 
             {/* User Auth Section */}
@@ -169,7 +220,7 @@ export default function Sidebar({ onOpenKYC, kycStatus = "NOT_SUBMITTED" }) {
                   </div>
                   <button
                     onClick={handleLogout}
-                    aria-label="Log out of Tradetron"
+                    aria-label="Log out of TradeThrone"
                     className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 text-xs font-bold text-rose-300 transition-colors hover:bg-rose-500/20 hover:text-rose-200"
                   >
                     <LogOut size={16} />
@@ -195,39 +246,52 @@ export default function Sidebar({ onOpenKYC, kycStatus = "NOT_SUBMITTED" }) {
 
       {/* ── DESKTOP FIXED SIDEBAR (Visible >= lg) ────────────────────── */}
       <aside className="hidden md:flex fixed left-0 top-0 z-30 h-screen w-64 flex-col border-r border-slate-800/80 bg-surface-900/60 backdrop-blur-md">
-        {/* Brand Header */}
-        <div className="flex items-center gap-3 border-b border-slate-800/80 px-5 py-5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-brand-violet via-brand-purple to-brand-indigo shadow-md shadow-brand-purple/30">
-            <Zap size={18} className="text-white" />
+                {/* Brand Header — TradeThrone Crown + PRO TRADING DESK */}
+        <div className="flex items-center gap-3 border-b border-slate-800/80 px-5 py-4.5">
+          <div className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 via-brand-purple to-cyan-400 p-0.5 shadow-none">
+            <div className="flex h-full w-full items-center justify-center rounded-lg bg-surface-900">
+              <Crown size={20} className="text-white" />
+            </div>
+            <span className="absolute -bottom-0.5 left-1/2 -translate-x-1/2 block h-0.5 w-5 rounded-full bg-gradient-to-r from-violet-500 via-brand-purple to-cyan-400 shadow-[0_0_10px_rgba(132,204,255,0.6)]"></span>
           </div>
-          <div>
+          <div className="flex flex-col">
             <h1 className="text-base font-display font-bold text-white tracking-tight">
-              Tradetron
+              TradeThrone
             </h1>
-            <p className="text-[10px] font-mono text-slate-500 tracking-wider uppercase">
-              Pro Execution Desk
+            <p className="text-[9px] font-mono text-slate-500 tracking-[0.25em] uppercase">
+              PRO TRADING DESK
             </p>
           </div>
         </div>
 
         {/* Navigation */}
         <nav className="flex-1 space-y-1.5 px-3 py-4 overflow-y-auto">
-          {links.map(({ to, icon: Icon, label }) => (
-            <NavLink
-              key={to}
-              to={to}
-              className={({ isActive }) =>
-                `flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-xs font-semibold transition-all duration-150 min-h-[40px] ${
-                  isActive
-                    ? "bg-brand-purple/15 text-brand-purple border border-brand-purple/30 shadow-sm shadow-brand-purple/10 font-bold"
-                    : "text-slate-400 hover:bg-surface-800/80 hover:text-white"
-                }`
-              }
-            >
-              <Icon size={17} />
-              <span>{label}</span>
-            </NavLink>
-          ))}
+          {links.map((item) =>
+            item.header ? (
+              <p
+                key={item.header}
+                className="px-3.5 pb-1 pt-4 text-[9px] font-bold uppercase tracking-[0.18em] text-slate-600 first:pt-0"
+              >
+                {item.header}
+              </p>
+            ) : (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.to === "/"}
+                className={({ isActive }) =>
+                  `flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-xs font-semibold transition-all duration-150 min-h-[40px] ${
+                    isActive
+                      ? "bg-brand-purple/15 text-brand-purple border border-brand-purple/30 shadow-sm shadow-brand-purple/10 font-bold"
+                      : "text-slate-400 hover:bg-surface-800/80 hover:text-white"
+                  }`
+                }
+              >
+                <item.icon size={17} />
+                <span>{item.label}</span>
+              </NavLink>
+            )
+          )}
         </nav>
 
         {/* User Account / Auth Section */}

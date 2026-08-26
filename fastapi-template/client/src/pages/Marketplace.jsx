@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Search, Filter, Play, Star, TrendingUp, ShieldCheck, Users, RefreshCw, ChevronLeft, ChevronRight, Zap } from "lucide-react";
+import { Search, Filter, Play, Star, Users, RefreshCw, ChevronLeft, ChevronRight } from "lucide-react";
 import DeploymentModal from "../components/DeploymentModal";
 import { useDebounce } from "../hooks/useDebounce";
 import { API_BASE } from "../config";

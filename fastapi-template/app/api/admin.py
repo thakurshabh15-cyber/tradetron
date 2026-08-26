@@ -6,12 +6,14 @@ strategy risk oversight, revenue metrics, and filterable audit trails.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, desc, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user
@@ -25,11 +27,12 @@ from app.models.billing import InvoiceRecord, PaymentRecord, SubscriptionRecord
 from app.models.broker_account import BrokerAccountRecord
 from app.models.marketplace import StrategyDeploymentRecord
 from app.models.trading import OrderRecord, PositionRecord, StrategyRecord
-from app.models.user import UserRecord
+from app.models.user import RevokedTokenRecord, UserRecord
 from app.models.broker_account import BrokerSessionLogRecord
 from app.models.copy_trading import CopyFollowerRecord, CopyGroupRecord
 from app.models.notification import NotificationPreferenceRecord
 from app.models.visual_strategy import VisualStrategyRecord
+from app.models.watchlist import PriceAlertRecord, WatchlistRecord
 
 logger = get_logger("api.admin")
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -294,42 +297,54 @@ async def delete_user(
         raise HTTPException(status_code=404, detail="User not found")
 
     target_email = target.email
-    # Delete dependent records explicitly because SQLite deployments may not enable FK cascades.
-    group_ids = await db.scalars(select(CopyGroupRecord.id).where(CopyGroupRecord.master_user_id == user_id))
-    group_ids = list(group_ids)
-    if group_ids:
-        await db.execute(delete(CopyFollowerRecord).where(CopyFollowerRecord.group_id.in_(group_ids)))
-        await db.execute(delete(CopyGroupRecord).where(CopyGroupRecord.id.in_(group_ids)))
-    await db.execute(delete(CopyFollowerRecord).where(CopyFollowerRecord.follower_user_id == user_id))
-    for model in (
-        BrokerSessionLogRecord,
-        BrokerAccountRecord,
-        InvoiceRecord,
-        PaymentRecord,
-        SubscriptionRecord,
-        NotificationPreferenceRecord,
-        VisualStrategyRecord,
-        OrderRecord,
-        PositionRecord,
-        TradeRecord,
-        StrategyRecord,
-    ):
-        user_column = getattr(model, "user_id", None)
-        if user_column is not None:
-            await db.execute(delete(model).where(user_column == user_id))
+    try:
+        # Delete dependent records explicitly because SQLite deployments may not enable FK cascades.
+        group_ids = list(await db.scalars(select(CopyGroupRecord.id).where(CopyGroupRecord.master_user_id == user_id)))
+        if group_ids:
+            await db.execute(delete(CopyFollowerRecord).where(CopyFollowerRecord.group_id.in_(group_ids)))
+            await db.execute(delete(CopyGroupRecord).where(CopyGroupRecord.id.in_(group_ids)))
+        await db.execute(delete(CopyFollowerRecord).where(CopyFollowerRecord.follower_user_id == user_id))
+        for model in (
+            BrokerSessionLogRecord,
+            BrokerAccountRecord,
+            InvoiceRecord,
+            PaymentRecord,
+            SubscriptionRecord,
+            NotificationPreferenceRecord,
+            VisualStrategyRecord,
+            WatchlistRecord,
+            PriceAlertRecord,
+            RevokedTokenRecord,
+            AuditLogRecord,
+            OrderRecord,
+            PositionRecord,
+            TradeRecord,
+            StrategyRecord,
+        ):
+            user_column = getattr(model, "user_id", None)
+            if user_column is not None:
+                await db.execute(delete(model).where(user_column == user_id))
 
-    await db.delete(target)
-    await db.commit()
+        # Keep the purge audit event, attributed to the administrator, in this same transaction.
+        db.add(AuditLogRecord(
+            user_id=admin.id,
+            action="USER_ACCOUNT_PURGED",
+            resource_type="USER",
+            resource_id=user_id,
+            status="SUCCESS",
+            details_json=json.dumps({"target_email": target_email}, separators=(",", ":")),
+        ))
+        await db.delete(target)
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        logger.exception("Integrity error purging user %s by admin %s", user_id, admin.id)
+        raise HTTPException(status_code=409, detail="User cannot be deleted because linked records remain") from exc
+    except Exception:
+        await db.rollback()
+        logger.exception("Unexpected error purging user %s by admin %s", user_id, admin.id)
+        raise HTTPException(status_code=500, detail="Failed to permanently delete user")
 
-    await log_audit_event(
-        db=db,
-        action="USER_ACCOUNT_PURGED",
-        resource_type="USER",
-        user_id=admin.id,
-        resource_id=user_id,
-        status="SUCCESS",
-        details={"target_email": target_email},
-    )
     return {"success": True, "user_id": user_id, "message": "User account permanently deleted"}
 
 
