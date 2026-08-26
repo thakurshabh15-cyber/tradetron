@@ -8,6 +8,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { authFetch } from "../services/apiClient";
+import { useToast } from "./Toast";
 
 // ── Dynamic broker configuration with per-broker credential field requirements ──
 const BROKER_CONFIG = {
@@ -34,9 +35,9 @@ const BROKER_CONFIG = {
     desc: "High-speed SmartAPI publisher login & TOTP authentication.",
     oauthSupported: true,
     manualFields: [
-      { key: "client_id", label: "Client Code", placeholder: "e.g. S123456", required: true },
+      { key: "client_id", label: "Client Code / Account ID", placeholder: "e.g. A123456", required: true },
+      { key: "api_secret", label: "Password / MPIN", type: "password", placeholder: "Your Angel One MPIN", required: true },
       { key: "api_key", label: "API Key", placeholder: "SmartAPI Key", required: true },
-      { key: "api_secret", label: "MPIN / Password", type: "password", placeholder: "Your Angel One MPIN", required: true },
       { key: "totp_secret", label: "TOTP Secret Key", placeholder: "Base32 key from Authenticator", required: true,
         description: "Auto-generates 6-digit TOTP for login (RFC 6238)" },
     ],
@@ -87,6 +88,7 @@ export default function BrokerConnectModal({ isOpen, onClose, onLinkedSuccess })
   const [error, setError] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
   const [oauthStep, setOauthStep] = useState("init");
+  const toast = useToast();
 
   const brokerCfg = BROKER_CONFIG[selectedBroker] || BROKER_CONFIG.ZERODHA;
   if (!isOpen) return null;
@@ -97,6 +99,17 @@ export default function BrokerConnectModal({ isOpen, onClose, onLinkedSuccess })
 
   // Step 1: Open Broker OAuth Authorization URL in new tab
   const handleLaunchBrokerAuth = async () => {
+    // Guard: never open an invalid broker popup for Angel One when the API key
+    // is missing or still the placeholder sentinel. Show a clear warning instead.
+    if (selectedBroker === "ANGEL_ONE") {
+      const apiKey = (credentials.api_key || "").trim();
+      if (!apiKey || apiKey === "YOUR_ANGEL_API_KEY") {
+        const msg = "Please enter your Angel One API Key in settings first";
+        setError(msg);
+        toast.error(msg);
+        return;
+      }
+    }
     setLoading(true);
     setError(null);
     try {
@@ -254,6 +267,12 @@ export default function BrokerConnectModal({ isOpen, onClose, onLinkedSuccess })
               onClick={() => {
                 setSelectedBroker(b.id);
                 setOauthStep("init");
+                // Auto-show the "API Key & Secret" credential fields for brokers
+                // that support manual entry (Angel One, Dhan, Upstox Pro, Binance)
+                // so the fields appear immediately without manual tab switching.
+                if ((BROKER_CONFIG[b.id]?.manualFields || []).length > 0) {
+                  setAuthMode("manual");
+                }
               }}
               className={`p-3 rounded-xl text-left border transition-all ${
                 selectedBroker === b.id
@@ -362,7 +381,19 @@ export default function BrokerConnectModal({ isOpen, onClose, onLinkedSuccess })
               </form>
             )}
           </div>
-        ) : brokerCfg.oauthSupported ? (
+        ) : brokerCfg.manualFields && brokerCfg.manualFields.length > 0 ? (
+          <form onSubmit={handleManualConnect} className="space-y-3">
+            {renderManualFields()}
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full mt-2 py-2.5 px-4 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs transition-all flex items-center justify-center gap-1.5 shadow-md shadow-cyan-500/20 disabled:opacity-50"
+            >
+              <Key size={14} />
+              {loading ? "Encrypting & Linking..." : "Save Encrypted Broker Account"}
+            </button>
+          </form>
+        ) : (
           <div className="space-y-4">
             <div className="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 text-xs text-slate-300 space-y-2">
               <div className="flex items-center gap-2 font-semibold text-white">
@@ -374,18 +405,6 @@ export default function BrokerConnectModal({ isOpen, onClose, onLinkedSuccess })
               </p>
             </div>
           </div>
-        ) : (
-          <form onSubmit={handleManualConnect} className="space-y-3">
-            {renderManualFields()}
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full mt-2 py-2.5 px-4 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs transition-all flex items-center justify-center gap-1.5 shadow-md shadow-cyan-500/20 disabled:opacity-50"
-            >
-              <Key size={14} />
-              {loading ? "Encrypting & Linking..." : "Save Encrypted Broker Account"}
-            </button>
-              </form>
         )}
       </div>
   );
