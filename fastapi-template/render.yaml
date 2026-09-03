@@ -6,6 +6,13 @@ services:
     runtime: python
     region: oregon
     plan: starter
+    # ROOT CAUSE FIX (Phase 5B): the FastAPI app lives at fastapi-template/app,
+    # not at the git repo root (which contains other projects and a decoy
+    # main.py). Without rootDir, Render runs `uvicorn app.main:app` from the
+    # repo root, `app.main` fails to import, the service never boots, and
+    # Render's edge returns HTTP 404 "x-render-routing: no-server" on every
+    # endpoint. rootDir pins the build/run working directory to the backend.
+    rootDir: fastapi-template
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'
     healthCheckPath: /api/health
