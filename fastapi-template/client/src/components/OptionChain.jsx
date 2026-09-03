@@ -12,6 +12,16 @@ const INDEX_TABS = [
 const fmt = (v, d = 2) =>
   v == null || isNaN(v) ? "–" : Number(v).toLocaleString("en-IN", { maximumFractionDigits: d });
 
+/** Returns a Tailwind class that flashes green/red when a strike's LTP ticks up/down. */
+const flashCls = (type, strike, ltp, prevLtpRef) => {
+  const key = `${type}_${strike}`;
+  const prev = prevLtpRef?.current?.[key];
+  if (prev == null || ltp == null || prev === ltp) return "";
+  const direction = ltp > prev ? "text-emerald-300 animate-pulse" : "text-rose-300 animate-pulse";
+  if (prevLtpRef?.current) prevLtpRef.current[key] = ltp;
+  return direction;
+};
+
 function OptionChain({ symbol = "NIFTY50" }) {
   const [activeSymbol, setActiveSymbol] = useState(symbol);
   const [chain, setChain] = useState(null);
@@ -207,7 +217,7 @@ function OptionChain({ symbol = "NIFTY50" }) {
                     </td>
                     <td className={`pr-3 text-right text-slate-300${shade(ceItm)}`}>{fmt(r.CE.volume)}</td>
                     <td className={`pr-3 text-right text-fuchsia-300${shade(ceItm)}`}>{fmt(r.CE.iv_pct)}</td>
-                    <td className={`pr-3 text-right font-bold${shade(ceItm)} ${flashCls("CE", r.strike, r.CE.ltp)}`}>
+                    <td className={`pr-3 text-right font-bold${shade(ceItm)} ${flashCls("CE", r.strike, r.CE.ltp, prevLtpRef)}`}>
                       {fmt(r.CE.ltp)}
                       <span className="ml-1 text-[9px] text-slate-500 font-normal">?{fmt(r.CE.delta)}</span>
                     </td>
@@ -217,7 +227,7 @@ function OptionChain({ symbol = "NIFTY50" }) {
                       {r.is_atm && <div className="text-[8px] text-cyan-500 tracking-widest">ATM</div>}
                     </td>
 
-                    <td className={`py-1.5 pl-3 text-left font-bold${shade(peItm)} ${flashCls("PE", r.strike, r.PE.ltp)}`}>
+                    <td className={`py-1.5 pl-3 text-left font-bold${shade(peItm)} ${flashCls("PE", r.strike, r.PE.ltp, prevLtpRef)}`}>
                       {fmt(r.PE.ltp)}
                       <span className="ml-1 text-[9px] text-slate-500 font-normal">?{fmt(r.PE.delta)}</span>
                     </td>
@@ -226,7 +236,7 @@ function OptionChain({ symbol = "NIFTY50" }) {
                     <td className={`pl-3 text-left${shade(peItm)} ${r.PE.chg_oi >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                       {r.PE.chg_oi >= 0 ? "+" : ""}{fmt(r.PE.chg_oi)}
                     </td>
-                    <td className="py-1.5 pl-2 text-left relative${shade(peItm)}">
+                    <td className={`py-1.5 pl-2 text-left relative${shade(peItm)}`}>
                       <span
                         className="absolute right-1 top-1/2 -translate-y-1/2 h-[5px] rounded bg-amber-500/35"
                         style={{ width: `${Math.max(4, (r.PE.oi / maxOi) * 52)}%` }}

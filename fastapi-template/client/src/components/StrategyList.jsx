@@ -8,6 +8,7 @@ function StrategyListComponent({
   strategies = [],
   onToggle,
   onDelete,
+  isAdmin = false,
 }) {
   const [filterMode, setFilterMode] = useState("ALL"); // 'ALL' | 'LIVE' | 'PAPER'
   const [killSwitchLoading, setKillSwitchLoading] = useState(false);
@@ -111,16 +112,18 @@ function StrategyListComponent({
             </button>
           </div>
 
-          {/* Emergency Kill Switch Button */}
-          <button
-            onClick={() => setKillConfirmOpen(true)}
-            disabled={killSwitchLoading}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-loss-500/20 text-loss-400 border border-loss-500/40 hover:bg-loss-500/30 transition-all shadow-sm active:scale-95"
-            title="Emergency Panic Button: Immediately pause all running strategies"
-          >
-            <AlertOctagon size={13} className="text-loss-400" />
-            {killSwitchLoading ? "Halting..." : "Kill-Switch"}
-          </button>
+          {/* Emergency Kill Switch Button — platform control, admin only */}
+          {isAdmin && (
+            <button
+              onClick={() => setKillConfirmOpen(true)}
+              disabled={killSwitchLoading}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-loss-500/20 text-loss-400 border border-loss-500/40 hover:bg-loss-500/30 transition-all shadow-sm active:scale-95"
+              title="Emergency Panic Button: Immediately pause all running strategies (Admin only)"
+            >
+              <AlertOctagon size={13} className="text-loss-400" />
+              {killSwitchLoading ? "Halting..." : "Kill-Switch"}
+            </button>
+          )}
         </div>
       </div>
 

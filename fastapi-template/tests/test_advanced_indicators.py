@@ -5,6 +5,25 @@ from app.engine.strategy_evaluator import StrategyEvaluator
 from app.engine.order_manager import Position, Side
 
 
+def test_evaluator_accepts_symbolic_operators():
+    """Legacy strategies persisted with raw operators (>, <, >=, <=, =) must still trigger."""
+    evaluator = StrategyEvaluator()
+    symbol = "AAPL"
+    prices = [100.0, 101.5, 102.0, 101.0, 103.5, 105.0, 104.2, 106.0, 107.5, 106.8]
+    for p in prices:
+        evaluator.update_price(symbol, p)
+
+    # PRICE > 105 gives gt semantics; last price is 106.8 so it must fire.
+    assert evaluator.evaluate("s1", symbol, [{"indicator": "PRICE", "operator": ">", "value": 105.0}])
+    # PRICE < 106.8 with current price 106.8 must NOT fire.
+    assert not evaluator.evaluate("s2", symbol, [{"indicator": "PRICE", "operator": "<", "value": 106.8}])
+    # PRICE >= 106.8 must fire.
+    assert evaluator.evaluate("s3", symbol, [{"indicator": "PRICE", "operator": ">=", "value": 106.8}])
+    # PRICE = 106.8 (eq alias) with rel tolerance must fire.
+    assert evaluator.evaluate("s4", symbol, [{"indicator": "PRICE", "operator": "=", "value": 106.8}])
+    assert evaluator.evaluate("s5", symbol, [{"indicator": "PRICE", "operator": "==", "value": 106.8}])
+
+
 def test_indicator_calculations():
     """Verify SMA, EMA, RSI, MACD, Bollinger Bands, and ATR calculations."""
     evaluator = StrategyEvaluator()

@@ -37,6 +37,7 @@ class UnifiedMarketDataManager:
         equity_provider = IndianEquityMarketDataProvider(
             api_key=settings.angel_api_key if equity_live else None,
             client_code=settings.angel_client_code if equity_live else None,
+            use_live_feed=equity_live,
         )
         crypto_provider = CryptoMarketDataProvider(use_live_feed=crypto_live)
         forex_provider = ForexMarketDataProvider(use_live_feed=forex_live)
@@ -50,6 +51,7 @@ class UnifiedMarketDataManager:
         }
         self._quotes: dict[str, NormalizedTick] = {}
         self._broker = None
+        self.last_candle_source: str = "REAL"
 
         # Wire callback from each provider into unified processor
         for provider in set(self._providers.values()):
@@ -159,13 +161,13 @@ class UnifiedMarketDataManager:
                 quotes.append(NormalizedTick(
                     symbol=s, price=p, bid=p*0.999, ask=p*1.001, open=p, high=p*1.005, low=p*0.995, close=p,
                     change=0.0, change_pct=0.0, volume=5000, asset_class=self.classify_symbol(s),
-                    feed_mode=DataFeedMode.PUBLIC_EXCHANGE_STREAM, data_source="Market Data Hub", timestamp=now
+                    feed_mode=DataFeedMode.DEMO_SIMULATED, data_source="Simulated (warming up)", timestamp=now
                 ))
             for s, p in list(_CRYPTO_SEED_PRICES.items())[:4]:
                 quotes.append(NormalizedTick(
                     symbol=s, price=p, bid=p*0.999, ask=p*1.001, open=p, high=p*1.005, low=p*0.995, close=p,
                     change=0.0, change_pct=0.0, volume=12000, asset_class=AssetClass.CRYPTO,
-                    feed_mode=DataFeedMode.PUBLIC_EXCHANGE_STREAM, data_source="Binance Public Stream", timestamp=now
+                    feed_mode=DataFeedMode.DEMO_SIMULATED, data_source="Simulated (warming up)", timestamp=now
                 ))
 
         if asset_class_filter and asset_class_filter.upper() != "ALL":
@@ -173,16 +175,31 @@ class UnifiedMarketDataManager:
         return [q.to_dict() for q in quotes]
 
     def get_providers_status(self) -> list[dict[str, Any]]:
-        """Return connectivity and mode health metrics for each market provider."""
+        """Return connectivity, mode and honest health per market provider."""
         result = []
         for provider in set(self._providers.values()):
+            is_active = bool(getattr(provider, "_is_running", False))
+            if not is_active:
+                status = "STOPPED"
+            elif provider.feed_mode == DataFeedMode.DEMO_SIMULATED:
+                status = "DEMO"
+            elif getattr(provider, "last_sync_error", None):
+                status = "DEGRADED"
+            else:
+                status = "HEALTHY"
             result.append({
                 "provider_name": provider.name,
                 "asset_class": provider.asset_class.value,
                 "feed_mode": provider.feed_mode.value,
                 "data_source": getattr(provider, "data_source", "Standard Feed"),
-                "is_active": getattr(provider, "_is_running", False),
+                "is_active": is_active,
                 "subscribed_symbols_count": len(provider._subscribers),
+                "status": status,
+                "last_sync_error": getattr(provider, "last_sync_error", None),
+                "last_sync_success": (
+                    getattr(provider, "last_sync_success", None).isoformat()
+                    if getattr(provider, "last_sync_success", None) else None
+                ),
             })
         return result
 
@@ -195,13 +212,18 @@ class UnifiedMarketDataManager:
         provider = self._providers.get(asset_class)
 
         if provider and hasattr(provider, "get_historical_candles"):
-            return await provider.get_historical_candles(clean_sym, timeframe, limit)
+            candles = await provider.get_historical_candles(clean_sym, timeframe, limit)
+            self.last_candle_source = getattr(provider, "last_candle_source", "REAL")
+            return candles
 
         # Fallback to Indian Equity provider
         eq_provider = self._providers.get(AssetClass.EQUITY)
         if eq_provider and hasattr(eq_provider, "get_historical_candles"):
-            return await eq_provider.get_historical_candles(clean_sym, timeframe, limit)
+            candles = await eq_provider.get_historical_candles(clean_sym, timeframe, limit)
+            self.last_candle_source = getattr(eq_provider, "last_candle_source", "REAL")
+            return candles
 
+        self.last_candle_source = "UNAVAILABLE"
         return []
 
 

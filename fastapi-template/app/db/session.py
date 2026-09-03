@@ -27,6 +27,34 @@ from app.core.logging import get_logger
 
 logger = get_logger("db")
 
+logger = get_logger("db")
+
+
+def _resolve_admin_bootstrap_password() -> str:
+    """Return the bootstrap admin password for first-boot seeding.
+
+    Uses ADMIN_DEFAULT_PASSWORD from the environment when configured; otherwise
+    generates a strong random password. NEVER falls back to a hardcoded value —
+    a static known credential in source is an exploitable default-credential
+    vulnerability (CWE-798).
+    """
+    from app.config import settings as _cfg
+
+    configured = (_cfg.default_admin_password or "").strip()
+    if configured:
+        return configured
+
+    import secrets
+    import string
+
+    alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
+    generated = "".join(secrets.choice(alphabet) for _ in range(24))
+    logger.warning(
+        "No ADMIN_DEFAULT_PASSWORD configured — generated a random bootstrap admin"
+        " password. It is printed ONCE below; rotate it after first login."
+    )
+    logger.info("Generated bootstrap admin password: %s", generated)
+    return generated
 
 def normalize_database_url(raw_url: str) -> str:
     """Normalize raw database URLs from various cloud hosts for SQLAlchemy AsyncEngine."""
@@ -64,11 +92,31 @@ IS_SQLITE = NORMALIZED_DB_URL.startswith("sqlite")
 def create_engine_instance() -> AsyncEngine:
     """Create and configure AsyncEngine with optimized parameters per database dialect."""
     if IS_SQLITE:
-        return create_async_engine(
+        engine = create_async_engine(
             NORMALIZED_DB_URL,
             echo=False,
-            connect_args={"check_same_thread": False},
+            connect_args={"check_same_thread": False, "timeout": 30},
         )
+
+        # SQLite concurrency hardening (safe for dev/demo; required for the
+        # multi-session test suite): WAL lets readers proceed while a writer
+        # commits, and a generous busy_timeout converts transient lock
+        # contention into a wait instead of an immediate
+        # "database is locked" OperationalError.
+        from sqlalchemy import event
+
+        @event.listens_for(engine.sync_engine, "connect")
+        def _sqlite_pragmas(dbapi_connection, connection_record):  # noqa: ANN001
+            cursor = dbapi_connection.cursor()
+            try:
+                cursor.execute("PRAGMA journal_mode=WAL")
+                cursor.execute("PRAGMA busy_timeout=30000")
+            except Exception:  # pragma: no cover - pragma failures are non-fatal
+                pass
+            finally:
+                cursor.close()
+
+        return engine
     else:
         # PostgreSQL with asyncpg connection pooling
         return create_async_engine(
@@ -335,9 +383,12 @@ async def init_db() -> None:
             admin_user = (await session.execute(admin_stmt)).scalar_one_or_none()
             if not admin_user:
                 from app.core.security import hash_password
+                from app.config import settings as _cfg
+
+                password = _resolve_admin_bootstrap_password()
                 new_admin = UserRecord(
                     email="admin@tradetron.io",
-                    hashed_password=hash_password("Admin@TradeThrone2026!"),
+                    hashed_password=hash_password(password),
                     full_name="TradeThrone Platform Admin",
                     role="admin",
                     kyc_status="VERIFIED",
@@ -346,7 +397,11 @@ async def init_db() -> None:
                 )
                 session.add(new_admin)
                 await session.commit()
-                logger.info("Default Admin User created: admin@tradetron.io (password: Admin@TradeThrone2026!)")
+                logger.info(
+                    "Default Admin User created: admin@tradetron.io with a %s bootstrap password"
+                    " (set ADMIN_DEFAULT_PASSWORD env var or change it after first login).",
+                    "configured" if _cfg.default_admin_password else "generated",
+                )
 
             # Seed Super-Admin using configured default credentials
             from app.config import settings as _cfg
@@ -355,9 +410,11 @@ async def init_db() -> None:
             demo_user = (await session.execute(demo_stmt)).scalar_one_or_none()
             if not demo_user:
                 from app.core.security import hash_password
+
+                password = _resolve_admin_bootstrap_password()
                 session.add(UserRecord(
                     email=_admin_email,
-                    hashed_password=hash_password(_cfg.default_admin_password),
+                    hashed_password=hash_password(password),
                     full_name="TradeThrone Super-Admin",
                     role="admin",
                     kyc_status="VERIFIED",
@@ -365,16 +422,18 @@ async def init_db() -> None:
                     is_verified=True,
                 ))
                 await session.commit()
-                logger.info("Super-Admin User created: %s", _admin_email)
+                logger.info("Super-Admin User created: %s with a %s bootstrap password", _admin_email, "configured" if _cfg.default_admin_password else "generated")
 
             # Back-compat: also seed the older demo admin address if it doesn't exist
             legacy_demo_stmt = select(UserRecord).where(UserRecord.email == "admin@tradetron.com")
             legacy_demo_user = (await session.execute(legacy_demo_stmt)).scalar_one_or_none()
             if not legacy_demo_user:
                 from app.core.security import hash_password
+
+                password = _resolve_admin_bootstrap_password()
                 session.add(UserRecord(
                     email="admin@tradetron.com",
-                    hashed_password=hash_password("Admin@TradeThrone2026!"),
+                    hashed_password=hash_password(password),
                     full_name="TradeThrone Demo Admin",
                     role="admin",
                     kyc_status="VERIFIED",
@@ -382,7 +441,7 @@ async def init_db() -> None:
                     is_verified=True,
                 ))
                 await session.commit()
-                logger.info("Legacy Demo Admin created: admin@tradetron.com")
+                logger.info("Legacy Demo Admin created: admin@tradetron.com with a %s bootstrap password", "configured" if _cfg.default_admin_password else "generated")
 
             # Seed Watchlist if DB is empty
             existing_watchlist = (await session.execute(select(WatchlistRecord))).scalars().all()

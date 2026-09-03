@@ -18,22 +18,9 @@ import {
   XCircle,
   AlertTriangle,
   RefreshCw,
-  Copy,
   Eye,
 } from "lucide-react";
 import { API_BASE } from "../config";
-
-const DEFAULT_ADMIN_EMAIL = "admin@tradethrone.com";
-const DEFAULT_ADMIN_PASSWORD = "Admin@TradeThrone2026!";
-
-const copyToClipboard = async (text) => {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    return false;
-  }
-};
 
 export default function Admin() {
   const [adminToken, setAdminToken] = useState(localStorage.getItem("tradetron_admin_token") || "");
@@ -306,56 +293,25 @@ export default function Admin() {
             </div>
           )}
 
-          {/* Default Admin Credentials Notice — quick-copy card */}
+          {/* Admin Credentials Notice — no static credentials shipped to clients */}
           <div className="mb-6 p-4 rounded-2xl bg-gradient-to-r from-violet-950/60 via-slate-900 to-indigo-950/60 border border-violet-500/30">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-[11px] font-bold text-violet-300 uppercase tracking-widest">
-                Default Admin Credentials
+                Admin Access
               </h3>
               <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-violet-500/20 text-violet-300 border border-violet-500/30">
-                SEED
+                SECURE
               </span>
             </div>
-            <div className="space-y-2.5">
-              <div className="flex items-center gap-2">
-                <label className="text-[10px] font-semibold text-slate-400 min-w-[60px]">
-                  Email
-                </label>
-                <code className="flex-1 text-[11px] text-white font-mono bg-slate-950 px-2 py-1 rounded border border-slate-800 break-all">
-                  {DEFAULT_ADMIN_EMAIL}
-                </code>
-                <button
-                  onClick={async () => {
-                    const ok = await copyToClipboard(DEFAULT_ADMIN_EMAIL);
-                    toast.success("Email copied!", { description: ok ? DEFAULT_ADMIN_EMAIL : "Copy failed" });
-                  }}
-                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white text-xs"
-                  title="Copy email"
-                >
-                  <Copy size={13} />
-                </button>
-              </div>
-              <div className="flex items-center gap-2">
-                <label className="text-[10px] font-semibold text-slate-400 min-w-[60px]">
-                  Password
-                </label>
-                <code className="flex-1 text-[11px] text-white font-mono bg-slate-950 px-2 py-1 rounded border border-slate-800 break-all">
-                  {DEFAULT_ADMIN_PASSWORD}
-                </code>
-                <button
-                  onClick={async () => {
-                    const ok = await copyToClipboard(DEFAULT_ADMIN_PASSWORD);
-                    toast.success("Password copied!", { description: ok ? DEFAULT_ADMIN_PASSWORD : "Copy failed" });
-                  }}
-                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white text-xs"
-                  title="Copy password"
-                >
-                  <Copy size={13} />
-                </button>
-              </div>
-            </div>
+            <p className="text-[11px] text-slate-300 leading-relaxed">
+              Use the admin account provisioned by the platform operator. The bootstrap
+              credentials are never embedded in the client — the operator sets an
+              <code className="text-violet-300 font-mono"> ADMIN_DEFAULT_PASSWORD </code>
+              environment variable (or receives the one-time generated password from the
+              server logs) and must change it after first login.
+            </p>
             <div className="mt-2.5 text-[10px] text-slate-500">
-              These credentials are seeded on first boot. Change them in the System tab after login.
+              If you are not the platform operator, you cannot access this portal.
             </div>
           </div>
 

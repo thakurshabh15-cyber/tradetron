@@ -7,6 +7,19 @@ from app.db.session import init_db
 from app.core.security import _IN_MEMORY_OTP_STORE
 
 
+@pytest.fixture(autouse=True)
+def _force_inmemory_otp(monkeypatch):
+    """These auth-lifecycle tests read generated OTPs from the in-memory store.
+
+    When a live staging Redis is reachable, OTPs (and the OTP-cooldown rate
+    limit) move to Redis, which breaks these tests' assumptions.  Force the
+    in-memory OTP/rate-limit path so the auth lifecycle is deterministic
+    regardless of whether Redis is running.
+    """
+    from app.core import security as _sec
+    monkeypatch.setattr(_sec, "_redis", lambda: None)
+
+
 @pytest.mark.asyncio
 async def test_auth_full_lifecycle():
     """Test register, login, me, otp, oauth, and token refresh."""

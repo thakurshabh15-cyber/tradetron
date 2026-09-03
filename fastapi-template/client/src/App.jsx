@@ -151,6 +151,8 @@ function AppShell() {
   }, []);
 
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const currentUserRole = (useAuthStore((state) => state.user?.role) || "").toUpperCase();
+  const isAdmin = currentUserRole === "ADMIN" || currentUserRole === "SUPERADMIN";
 
   useEffect(() => {
     if (!isAuthenticated) return undefined;
@@ -298,14 +300,16 @@ function AppShell() {
                   </span>
                 </button>
 
-                <button
-                  onClick={() => setIsKillSwitchOpen(true)}
-                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white text-xs font-bold transition-all shadow-md shadow-red-600/30 ml-auto sm:ml-0"
-                  title="Emergency Pause All Strategies"
-                >
-                  <Power size={12} />
-                  <span>KILL</span>
-                </button>
+                {isAdmin && (
+                  <button
+                    onClick={() => setIsKillSwitchOpen(true)}
+                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white text-xs font-bold transition-all shadow-md shadow-red-600/30 ml-auto sm:ml-0"
+                    title="Emergency Pause All Strategies (Admin only)"
+                  >
+                    <Power size={12} />
+                    <span>KILL</span>
+                  </button>
+                )}
               </div>
             </div>
 

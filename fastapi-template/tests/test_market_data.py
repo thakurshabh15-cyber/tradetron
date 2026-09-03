@@ -171,6 +171,73 @@ def test_demo_fallback_ticks_when_credentials_absent():
     assert tick.feed_mode.value == "DEMO_SIMULATED"
     assert "Demo" in tick.data_source or "DEMO" in tick.data_source.upper()
 
+def test_equity_provider_demo_label_without_credentials():
+    """Without live credentials the Indian equity provider must honestly label
+    itself DEMO_SIMULATED — never claim a real NSE/BSE public-exchange stream
+    while actually streaming synthetic micro-ticks."""
+    from app.market_data.providers.indian_equity import IndianEquityMarketDataProvider
+
+    provider = IndianEquityMarketDataProvider()
+    assert provider.feed_mode.value == "DEMO_SIMULATED"
+    assert "Demo" in provider.data_source or "DEMO" in provider.data_source.upper()
+    # Live mode with credentials opt-in is the only way to claim LIVE_BROKER_VENDOR
+    provider_live = IndianEquityMarketDataProvider(api_key="k", client_code="c", use_live_feed=True)
+    assert provider_live.feed_mode.value == "LIVE_BROKER_VENDOR"
+    # Credentials alone (without explicit live opt-in) must NOT go live
+    provider_no_optin = IndianEquityMarketDataProvider(api_key="k", client_code="c")
+    assert provider_no_optin.feed_mode.value == "DEMO_SIMULATED"
+
+
+def test_candles_endpoint_exposes_source():
+    """The candles API must disclose whether candles are REAL exchange data or
+    SIMULATED fallback so clients never mistake synthetic OHLCV for live data."""
+    from httpx import ASGITransport, AsyncClient
+    from app.main import app
+
+    async def run():
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            res = await client.get("/api/market/candles?symbol=BTCUSDT&timeframe=5m&limit=5")
+            assert res.status_code == 200
+            data = res.json()
+            assert "source" in data, "candles response must include a 'source' field"
+            assert data["source"] in {"REAL", "SIMULATED", "UNAVAILABLE"}
+            return data
+
+    data = asyncio.run(run())
+    assert len(data["candles"]) > 0
+
+
+def test_providers_status_reports_honest_health():
+    """Providers/status must reflect actual feed modes (DEMO/STOPPED) rather
+    than a hardcoded HEALTHY banner; each provider carries its own status."""
+    from httpx import ASGITransport, AsyncClient
+    from app.main import app
+
+    async def run():
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            res = await client.get("/api/market-data/providers/status")
+            assert res.status_code == 200
+            data = res.json()
+            assert "status" in data
+            assert data["status"] in {"HEALTHY", "DEGRADED"}
+            providers = data["providers"]
+            assert len(providers) >= 3
+            for p in providers:
+                assert "status" in p, "each provider must carry an honest status"
+                assert p["status"] in {"HEALTHY", "DEGRADED", "DEMO", "STOPPED"}
+                assert "feed_mode" in p
+                assert "data_source" in p
+                assert "last_sync_error" in p
+            # In the default demo config, demo providers never claim real feeds
+            for p in providers:
+                if p["feed_mode"] == "DEMO_SIMULATED":
+                    assert p["status"] in {"DEMO", "STOPPED"}
+            return data
+
+    data = asyncio.run(run())
+    assert data["disclaimer"].lower().find("simul") >= 0
 
 def test_unified_quote_cache_populated_by_simulator():
     """The running app's simulator primes the unified cache; verify the seed

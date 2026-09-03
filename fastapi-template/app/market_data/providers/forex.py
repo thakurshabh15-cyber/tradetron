@@ -40,7 +40,11 @@ class ForexMarketDataProvider(BaseMarketDataProvider):
     Provides live exchange rate ticks and real historical candle data.
     """
 
-    def __init__(self, use_live_feed: bool = True) -> None:
+    def __init__(self, use_live_feed: bool = False) -> None:
+        # This provider uses a simulated random-walk feed regardless of mode.
+        # Default stays False (DEMO_SIMULATED) to avoid misrepresenting simulated
+        # data as a live exchange stream.  See unified_manager.py which always
+        # passes use_live_feed=False for forex.
         feed_mode = DataFeedMode.PUBLIC_EXCHANGE_STREAM if use_live_feed else DataFeedMode.DEMO_SIMULATED
         data_source = "Live Forex Exchange Rates" if use_live_feed else "NSE Currency Derivatives (Demo Feed)"
         super().__init__(name="ForexMarketProvider", asset_class=AssetClass.FOREX, feed_mode=feed_mode)
@@ -51,6 +55,12 @@ class ForexMarketDataProvider(BaseMarketDataProvider):
         self._task: Optional[asyncio.Task] = None
         self._sync_task: Optional[asyncio.Task] = None
         self._max_reconnect_delay = 30.0
+
+        # Real-feed health tracking (only meaningful when use_live_feed=True)
+        self.last_sync_error: Optional[str] = None
+        self.last_sync_success: Optional[datetime] = None
+        # Provenance of the most recent get_historical_candles result
+        self.last_candle_source: str = "REAL"
 
     async def start(self) -> None:
         self._is_running = True
@@ -128,6 +138,7 @@ class ForexMarketDataProvider(BaseMarketDataProvider):
 
         candles = await asyncio.to_thread(_fetch)
         if not candles:
+            self.last_candle_source = "SIMULATED"
             import time
             base_p = self._open_prices.get(clean_sym, _FOREX_SEED_PRICES.get(clean_sym, 83.50))
             now_ts = int(time.time())
@@ -157,10 +168,17 @@ class ForexMarketDataProvider(BaseMarketDataProvider):
 
             logger.info("Generated %d distinct OHLCV baseline candles for Forex %s (%s)", len(candles), clean_sym, tf)
 
+        else:
+            self.last_candle_source = "REAL"
+
         return candles
 
     async def _run_fx_sync(self) -> None:
         """Periodically refresh real spot forex exchange rates."""
+        if self.feed_mode != DataFeedMode.PUBLIC_EXCHANGE_STREAM:
+            # Simulated demo feeds never claim to be live — skip the network
+            # fetch; the free provider frequently cannot serve these symbols.
+            return
         while self._is_running:
             try:
                 def _sync():
@@ -191,11 +209,14 @@ class ForexMarketDataProvider(BaseMarketDataProvider):
                     if prev:
                         prev.price = round(price, 4)
 
+                self.last_sync_error = None
+                self.last_sync_success = datetime.now(timezone.utc)
                 await asyncio.sleep(20.0)
             except asyncio.CancelledError:
                 break
             except Exception as exc:
-                logger.debug("Forex sync background notice: %s", exc)
+                self.last_sync_error = str(exc)
+                logger.warning("Forex sync background notice: %s", exc)
                 await asyncio.sleep(20.0)
 
     async def _run_forex_stream(self) -> None:

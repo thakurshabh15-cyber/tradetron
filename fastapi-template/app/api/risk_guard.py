@@ -6,10 +6,13 @@ reset of the platform-wide trading kill-switch.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from app.api.admin import get_current_admin_user
+from app.api.auth import get_current_user
 from app.core.logging import get_logger
+from app.models.user import UserRecord
 
 logger = get_logger("api.risk_guard")
 
@@ -59,23 +62,38 @@ async def risk_guard_status() -> dict:
     return status
 
 
-@router.post("/config", summary="Tune auto-pilot thresholds")
-async def configure_risk_guard(req: AutopilotConfigRequest) -> dict:
-    """Update consecutive-loss / drawdown limits at runtime."""
+@router.post("/config", summary="Tune auto-pilot thresholds (admin only)")
+async def configure_risk_guard(
+    req: AutopilotConfigRequest,
+    admin: UserRecord = Depends(get_current_admin_user),
+) -> dict:
+    """Update consecutive-loss / drawdown limits at runtime.
+
+    The auto-pilot thresholds are engine-global (they gate the shared trading
+    engine's risk manager), so tuning them is an operator action.
+    """
     rm = _get_risk_manager()
     try:
-        return rm.configure_autopilot(
+        res = rm.configure_autopilot(
             enabled=req.enabled,
             max_consecutive_losses=req.max_consecutive_losses,
             max_daily_drawdown_pct=req.max_daily_drawdown_pct,
         )
+        logger.info("Risk-guard configured by admin %s: %s", admin.email, req)
+        return res
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
 
-@router.post("/reset", summary="Release kill-switch & clear streaks")
-async def reset_risk_guard() -> dict:
-    """Operator override: release an auto/manual kill-switch and restart counters."""
+@router.post("/reset", summary="Release kill-switch & clear streaks (admin only)")
+async def reset_risk_guard(
+    admin: UserRecord = Depends(get_current_admin_user),
+) -> dict:
+    """Operator override: release an auto/manual kill-switch and restart counters.
+
+    Releasing the platform-wide kill-switch re-enables live strategy execution,
+    so only an administrator may perform it.
+    """
     rm = _get_risk_manager()
-    logger.warning("Risk-guard RESET issued via API — kill-switch released")
+    logger.warning("Risk-guard RESET issued via API by admin %s — kill-switch released", admin.email)
     return rm.reset_autopilot()

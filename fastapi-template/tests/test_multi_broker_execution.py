@@ -4,7 +4,7 @@ import asyncio
 import time
 from httpx import ASGITransport, AsyncClient
 from app.main import app
-from app.db.session import init_db
+from app.db.session import SessionLocal, init_db
 from app.brokers.zerodha import ZerodhaKiteBroker
 from app.brokers.binance import BinanceBroker
 from app.engine.risk_manager import RiskManager
@@ -25,6 +25,17 @@ async def test_multi_broker_execution_suite():
         assert reg_res.status_code == 201
         token = reg_res.json()["access_token"]
         headers = {"Authorization": f"Bearer {token}"}
+
+        # The platform-wide kill-switch is admin-only. Promote this user to
+        # admin in the DB (role is re-read from the DB on every authenticated
+        # request, so the existing token remains valid).
+        from sqlalchemy import select as _select
+        from app.models.user import UserRecord as _UserRecord
+
+        async with SessionLocal() as session:
+            u = (await session.execute(_select(_UserRecord).where(_UserRecord.id == reg_res.json()["user"]["id"]))).scalar_one()
+            u.role = "admin"
+            await session.commit()
 
         # 2. Test Zerodha Kite Connect Adapter & OAuth URL (Freely accessible)
         auth_url_res = await client.get("/api/brokers/oauth/authorize?broker=ZERODHA", headers=headers)
@@ -93,11 +104,11 @@ async def test_multi_broker_execution_suite():
         ok_pass, _ = rm.check_margin(available_margin=250000.0, required_margin=120000.0)
         assert ok_pass is True
 
-        # 7. Test Emergency Kill-Switch
+        # 7. Test Emergency Kill-Switch (requires authenticated operator)
         kill_res = await client.post("/api/strategies/kill-switch", json={
             "action": "PAUSE_ALL",
             "reason": "Extreme market circuit volatility",
-        })
+        }, headers=headers)
         assert kill_res.status_code == 200
         assert kill_res.json()["status"] == "HALTED"
 
@@ -110,7 +121,7 @@ async def test_multi_broker_execution_suite():
         assert "Kill-Switch active" in block_reason
 
         # Release Kill-Switch
-        resume_res = await client.post("/api/strategies/kill-switch", json={"action": "RESUME_ALL"})
+        resume_res = await client.post("/api/strategies/kill-switch", json={"action": "RESUME_ALL"}, headers=headers)
         assert resume_res.status_code == 200
         assert resume_res.json()["status"] == "RUNNING"
 

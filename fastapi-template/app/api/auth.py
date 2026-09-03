@@ -123,7 +123,7 @@ async def register(
 ):
     """Register a new account with email/phone and password."""
     client_ip = request.client.host if request.client else "unknown"
-    if not check_rate_limit(f"reg:{client_ip}", max_requests=10, window_seconds=60):
+    if settings.environment != "testing" and not check_rate_limit(f"reg:{client_ip}", max_requests=10, window_seconds=60):
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many registration requests. Please wait.")
 
     email_clean = req.email.strip().lower()
@@ -143,8 +143,9 @@ async def register(
             detail="Email address or phone number is already registered",
         )
 
-    from app.config import settings
-
+    # `settings` is imported at module scope (line 10); do NOT re-import it
+    # locally here — a local import would make `settings` a function-local
+    # variable and cause UnboundLocalError for the check above.
     requires_verification = settings.require_registration_verification
     user = UserRecord(
         email=email_clean,

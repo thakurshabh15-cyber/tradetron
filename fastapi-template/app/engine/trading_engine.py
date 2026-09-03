@@ -17,6 +17,7 @@ from collections import defaultdict, deque
 from decimal import Decimal
 from typing import Any, Optional
 
+from app.brokers import BrokerModeBlockedError, assert_live_dispatch_allowed, get_broker_adapter
 from app.brokers.base import BrokerClient
 from app.brokers.simulated import SimulatedBroker
 from app.core.logging import get_logger
@@ -461,16 +462,27 @@ class TradingEngine:
             from app.brokers.binance import BinanceBroker
             from sqlalchemy import select
 
+            # LIVE orders must always be scoped to an owning user and a broker
+            # account that the SAME user owns.  Falling back to any connected
+            # account in the database would trade with another user's money —
+            # a multi-tenant safety violation — so no such fallback exists.
+            if not user_id:
+                err_msg = "Live execution requires an authenticated owner (user_id missing)"
+                logger.error("[LIVE] Order blocked: %s", err_msg)
+                await self._persist_rejected_order(strategy.get("id"), user_id, broker_account_id, symbol, side_str, quantity, price, mode, err_msg)
+                return
+
             async with SessionLocal() as session:
                 if broker_account_id:
-                    stmt = select(BrokerAccountRecord).where(BrokerAccountRecord.id == broker_account_id)
-                elif user_id:
+                    stmt = select(BrokerAccountRecord).where(
+                        BrokerAccountRecord.id == broker_account_id,
+                        BrokerAccountRecord.user_id == user_id,
+                    )
+                else:
                     stmt = select(BrokerAccountRecord).where(
                         BrokerAccountRecord.user_id == user_id,
                         BrokerAccountRecord.status == "CONNECTED",
                     )
-                else:
-                    stmt = select(BrokerAccountRecord).where(BrokerAccountRecord.status == "CONNECTED")
 
                 res = await session.execute(stmt)
                 broker_rec = res.scalar_one_or_none()
@@ -487,29 +499,27 @@ class TradingEngine:
                 await self._persist_rejected_order(strategy.get("id"), user_id, broker_account_id, symbol, side_str, quantity, price, mode, err_msg)
                 return
 
-            # Instantiate broker client
-            b_name = broker_rec.broker_name.upper()
-            if b_name == "ZERODHA":
-                target_broker = ZerodhaKiteBroker(
-                    api_key=broker_rec.get_api_key(),
-                    api_secret=broker_rec.get_api_secret(),
-                    access_token=broker_rec.get_access_token(),
-                )
-            elif b_name == "UPSTOX":
-                target_broker = UpstoxBroker(
-                    api_key=broker_rec.get_api_key(),
-                    api_secret=broker_rec.get_api_secret(),
-                    access_token=broker_rec.get_access_token(),
-                )
-            elif b_name == "ANGEL_ONE":
-                target_broker = AngelOneBroker()
-            elif b_name == "BINANCE":
-                target_broker = BinanceBroker(
-                    api_key=broker_rec.get_api_key(),
-                    api_secret=broker_rec.get_api_secret(),
-                )
+            # Instantiate broker client with decrypted credentials
+            target_broker = get_broker_adapter(broker_rec)
 
-            # Pre-trade live broker margin check
+            # ── PHASE-3 LIVE/Paper separation guard ──────────────────────
+            # Even with a connected broker, LIVE execution must be gated by
+            # BROKER_MODE=live.  If not live, reject the order (never dispatch
+            # blind against real funds in a simulated/scoped deployment).
+            try:
+                assert_live_dispatch_allowed()
+            except BrokerModeBlockedError as guard_exc:
+                logger.error("[LIVE] Order blocked by broker-mode guard: %s", guard_exc)
+                await self._persist_rejected_order(
+                    strategy.get("id"), user_id, broker_account_id,
+                    symbol, side_str, quantity, price, mode, str(guard_exc),
+                )
+                return
+
+            # Pre-trade live broker margin check.
+            # FAIL-SAFETY: if margin verification cannot be completed (broker
+            # API failure, timeout, malformed response) the order is REJECTED
+            # rather than dispatched blind against live funds.
             try:
                 margins = await target_broker.get_margins()
                 avail_cash = float(margins.get("available_cash") or 0.0)
@@ -520,7 +530,10 @@ class TradingEngine:
                     await self._persist_rejected_order(strategy.get("id"), user_id, broker_account_id, symbol, side_str, quantity, price, mode, margin_reason)
                     return
             except Exception as m_exc:
-                logger.warning("[LIVE] Margin verification warning: %s", m_exc)
+                err_msg = f"Live margin verification failed — order rejected for safety: {m_exc}"
+                logger.error("[LIVE] %s", err_msg)
+                await self._persist_rejected_order(strategy.get("id"), user_id, broker_account_id, symbol, side_str, quantity, price, mode, err_msg)
+                return
 
         # ── 3. Place order via broker ─────────────────────────────────
         try:

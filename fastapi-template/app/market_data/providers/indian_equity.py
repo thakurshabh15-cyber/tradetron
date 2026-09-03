@@ -55,9 +55,20 @@ class IndianEquityMarketDataProvider(BaseMarketDataProvider):
     Fetches real-time prices and historical OHLCV data from real exchange feeds.
     """
 
-    def __init__(self, api_key: Optional[str] = None, client_code: Optional[str] = None) -> None:
-        feed_mode = DataFeedMode.LIVE_BROKER_VENDOR if (api_key and client_code) else DataFeedMode.PUBLIC_EXCHANGE_STREAM
-        data_source = "NSE/BSE Real-Time Feed" if feed_mode == DataFeedMode.PUBLIC_EXCHANGE_STREAM else "Angel One SmartAPI Live"
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        client_code: Optional[str] = None,
+        use_live_feed: bool = False,
+    ) -> None:
+        # Honest feed labelling: only claim a real vendor feed when the operator
+        # explicitly configured a live feed AND provided credentials. Otherwise
+        # the stream is simulated and must be reported as DEMO_SIMULATED rather
+        # than "PUBLIC_EXCHANGE_STREAM" (which previously claimed a real NSE/BSE
+        # feed while streaming synthetic micro-ticks around seed prices).
+        live = use_live_feed and bool(api_key) and bool(client_code)
+        feed_mode = DataFeedMode.LIVE_BROKER_VENDOR if live else DataFeedMode.DEMO_SIMULATED
+        data_source = "Angel One SmartAPI Live" if live else "NSE/BSE Demo Simulated Feed"
         super().__init__(name="IndianEquityProvider", asset_class=AssetClass.EQUITY, feed_mode=feed_mode)
         self.data_source = data_source
         self.api_key = api_key
@@ -69,6 +80,12 @@ class IndianEquityMarketDataProvider(BaseMarketDataProvider):
         self._sync_task: Optional[asyncio.Task] = None
         self._reconnect_attempts = 0
         self._max_reconnect_delay = 30.0
+
+        # Real-feed health tracking (only meaningful in LIVE_BROKER_VENDOR mode)
+        self.last_sync_error: Optional[str] = None
+        self.last_sync_success: Optional[datetime] = None
+        # Provenance of the most recent get_historical_candles result
+        self.last_candle_source: str = "REAL"
 
     async def start(self) -> None:
         self._is_running = True
@@ -152,6 +169,7 @@ class IndianEquityMarketDataProvider(BaseMarketDataProvider):
 
         candles = await asyncio.to_thread(_fetch)
         if not candles:
+            self.last_candle_source = "SIMULATED"
             # Generate high-fidelity continuous OHLCV candles around base anchor price
             import time
             from app.market_data.instruments import instrument_master
@@ -185,10 +203,18 @@ class IndianEquityMarketDataProvider(BaseMarketDataProvider):
 
             logger.info("Generated %d distinct OHLCV baseline candles for %s (%s)", len(candles), clean_sym, tf)
 
+        else:
+            self.last_candle_source = "REAL"
+
         return candles
 
     async def _run_real_price_sync(self) -> None:
         """Periodically sync genuine current market prices from real exchange feed."""
+        if self.feed_mode != DataFeedMode.LIVE_BROKER_VENDOR:
+            # Simulated feeds never claim to be live — skip the pointless
+            # network fetch and the misleading ERROR logs it emits when the
+            # free provider cannot serve these symbols.
+            return
         while self._is_running:
             try:
                 def _sync():
@@ -219,11 +245,14 @@ class IndianEquityMarketDataProvider(BaseMarketDataProvider):
                     if prev:
                         prev.price = round(price, 2)
 
+                self.last_sync_error = None
+                self.last_sync_success = datetime.now(timezone.utc)
                 await asyncio.sleep(15.0)  # Refresh real anchor price every 15s
             except asyncio.CancelledError:
                 break
             except Exception as exc:
-                logger.debug("Exchange price sync background notice: %s", exc)
+                self.last_sync_error = str(exc)
+                logger.warning("Exchange price sync background notice: %s", exc)
                 await asyncio.sleep(15.0)
 
     async def _run_feed_loop(self) -> None:

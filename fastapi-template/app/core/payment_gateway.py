@@ -118,7 +118,18 @@ class RazorpayGateway:
 
     def verify_webhook_signature(self, payload_body: bytes, signature: str) -> bool:
         """Verify webhook signature from X-Razorpay-Signature header."""
-        secret = self.webhook_secret or self.key_secret or "rzp_test_tradetron_webhook_secret"
+        secret = self.webhook_secret or self.key_secret
+        if not secret:
+            # Fail-closed: never verify against a public default secret.
+            # A misconfigured production deployment must reject webhooks
+            # (HTTP 400) rather than silently trust forgeries signed with a
+            # publicly-known constant.
+            if settings.environment == "production":
+                logger.error(
+                    "RAZORPAY_WEBHOOK_SECRET not configured in production — rejecting webhook (fail-closed)."
+                )
+                return False
+            secret = "rzp_test_tradetron_webhook_secret"
         expected_sig = hmac.new(secret.encode(), payload_body, hashlib.sha256).hexdigest()
         return hmac.compare_digest(expected_sig, signature)
 

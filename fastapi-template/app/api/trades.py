@@ -81,7 +81,9 @@ import uuid
 from pydantic import BaseModel, Field
 from typing import Optional, Literal
 from fastapi import HTTPException
+import asyncio
 from app.api.auth import get_current_user
+from app.brokers import BrokerModeBlockedError, get_broker_adapter, assert_live_dispatch_allowed
 from app.models.user import UserRecord
 from app.models.trading import OrderRecord, PositionRecord
 from app.models.broker_account import BrokerAccountRecord
@@ -187,6 +189,52 @@ async def close_position(
     exit_price = _quote_price(quote) or (inst.base_price if inst else pos.entry_price)
 
     is_long = pos.side in ("LONG", "BUY")
+    closing_side_for_broker = "SELL" if is_long else "BUY"
+
+    # ── EXEC-02 Fix: Dispatch real closing order to broker before DB update ──
+    if pos.mode == "LIVE" and pos.broker_account_id:
+        broker_acc_stmt = select(BrokerAccountRecord).where(
+            BrokerAccountRecord.id == pos.broker_account_id
+        )
+        broker_acc_res = await db.execute(broker_acc_stmt)
+        broker_acc = broker_acc_res.scalar_one_or_none()
+        if broker_acc:
+            # ── PHASE-3 LIVE/Paper separation guard ──────────────────────
+            # A LIVE close order must also be gated by BROKER_MODE=live.
+            try:
+                assert_live_dispatch_allowed()
+            except BrokerModeBlockedError as guard_exc:
+                raise HTTPException(
+                    status_code=403,
+                    detail=str(guard_exc),
+                ) from guard_exc
+            try:
+                broker_client = get_broker_adapter(broker_acc)
+                from app.schemas.trading import OrderRequest, Side
+                close_order_req = OrderRequest(
+                    symbol=pos.symbol,
+                    side=Side.SELL if is_long else Side.BUY,
+                    quantity=pos.quantity,
+                    order_type="MARKET",
+                )
+                broker_resp = await broker_client.place_order(close_order_req)
+                filled_price = broker_resp.get("filled_price") or broker_resp.get("price")
+                if filled_price:
+                    exit_price = float(filled_price)
+                logger.info(
+                    "[LIVE] Broker close order dispatched for position %s: %s",
+                    pos.id, broker_resp
+                )
+            except Exception as broker_exc:
+                logger.error(
+                    "[LIVE] Broker close order failed for position %s: %s",
+                    pos.id, broker_exc
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Broker failed to close position on exchange: {broker_exc}"
+                )
+
     delta = (exit_price - pos.entry_price) if is_long else (pos.entry_price - exit_price)
     realized_pnl = round(delta * pos.quantity, 2)
     pnl_pct = round((delta / pos.entry_price) * 100, 2) if pos.entry_price else 0.0
@@ -198,7 +246,7 @@ async def close_position(
     pos.unrealized_pnl = 0.0
 
     # Record offsetting closing trade
-    closing_side = "SELL" if is_long else "BUY"
+    closing_side = closing_side_for_broker
     trade = TradeRecord(
         id=str(uuid.uuid4()),
         order_id=f"EXIT_{int(datetime.now(timezone.utc).timestamp())}",
@@ -288,6 +336,40 @@ async def place_manual_order(
                 detail="No active connected broker account found. Please link your broker before switching to Live Execution.",
             )
         broker_account_id = broker_acc.id
+
+        # ── PHASE-3 LIVE/Paper separation guard ────────────────────────────
+        # Even with a connected broker account, a LIVE order MUST NOT reach a
+        # real broker unless the deployment is explicitly BROKER_MODE=live.
+        try:
+            assert_live_dispatch_allowed()
+        except BrokerModeBlockedError as guard_exc:
+            raise HTTPException(
+                status_code=403,
+                detail=str(guard_exc),
+            ) from guard_exc
+
+        # ── EXEC-01a Fix: Dispatch real entry order to broker ──
+        try:
+            broker_client = get_broker_adapter(broker_acc)
+            from app.schemas.trading import OrderRequest, Side
+            live_order_req = OrderRequest(
+                symbol=clean_sym,
+                side=Side.BUY if req.side == "BUY" else Side.SELL,
+                quantity=req.quantity,
+                order_type=req.order_type,
+                price=executed_price if req.order_type == "LIMIT" else None,
+            )
+            broker_resp = await broker_client.place_order(live_order_req)
+            filled_price = broker_resp.get("filled_price") or broker_resp.get("price")
+            if filled_price:
+                executed_price = round(float(filled_price), 2)
+            logger.info("[LIVE] Manual order dispatched to broker: %s", broker_resp)
+        except Exception as broker_exc:
+            logger.error("[LIVE] Broker order placement failed: %s", broker_exc)
+            raise HTTPException(
+                status_code=502,
+                detail=f"Broker rejected order: {broker_exc}"
+            )
 
     # 3. Create persistent OrderRecord
     order_id = f"ORD_{int(datetime.now(timezone.utc).timestamp())}_{str(uuid.uuid4())[:8]}"
@@ -469,9 +551,44 @@ async def execute_dma_order(
             raise HTTPException(status_code=403, detail="LIVE DMA requires a CONNECTED broker account.")
         broker_account_id = acc_row.id
 
-    # 4. Latency-instrumented dispatch
+    # 4. Latency-instrumented dispatch (real broker for LIVE)
     t_dispatch = perf_counter()
-    broker_order_ref = f"DMA_{clean_sym}_{int(t_dispatch * 1000)}" if req.mode == "LIVE" else None
+    broker_order_ref = None
+    if req.mode == "LIVE" and acc_row:
+        # ── PHASE-3 LIVE/Paper separation guard ──────────────────────────
+        # Even with a connected broker, a LIVE DMA order must be gated by
+        # BROKER_MODE=live.
+        try:
+            assert_live_dispatch_allowed()
+        except BrokerModeBlockedError as guard_exc:
+            raise HTTPException(
+                status_code=403,
+                detail=str(guard_exc),
+            ) from guard_exc
+
+        # ── EXEC-01b Fix: Dispatch real DMA order to broker ──
+        try:
+            broker_client = get_broker_adapter(acc_row)
+            from app.schemas.trading import OrderRequest, Side
+            dma_order_req = OrderRequest(
+                symbol=clean_sym,
+                side=Side.BUY if req.side == "BUY" else Side.SELL,
+                quantity=quantity,
+                order_type=req.order_type,
+                price=executed_price if req.order_type == "LIMIT" else None,
+            )
+            broker_resp = await broker_client.place_order(dma_order_req)
+            broker_order_ref = broker_resp.get("order_id") or broker_resp.get("broker_order_id")
+            filled_price = broker_resp.get("filled_price") or broker_resp.get("price")
+            if filled_price:
+                executed_price = round(float(filled_price), 2)
+            logger.info("[LIVE] DMA order dispatched to broker: %s", broker_resp)
+        except Exception as broker_exc:
+            logger.error("[LIVE] DMA broker dispatch failed: %s", broker_exc)
+            raise HTTPException(
+                status_code=502,
+                detail=f"Broker rejected DMA order: {broker_exc}"
+            )
     dispatch_latency_ms = round((perf_counter() - t_dispatch) * 1000, 3)
     total_latency_ms = round((perf_counter() - t_start) * 1000, 3)
 

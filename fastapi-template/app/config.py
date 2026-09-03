@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent  # fastapi-template/
@@ -22,11 +23,25 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 15  # Short-lived access token lifetime (production: 1440)
 
     # ── Broker credentials (Angel One) ───────────────────────────────
-    angel_api_key: str = ""
-    angel_client_id: str = ""
-    angel_pin: str = ""
-    angel_totp_key: str = ""
+    angel_api_key: str = Field("", validation_alias=AliasChoices("angel_api_key", "ANGEL_API_KEY"))
+    angel_client_id: str = Field("", validation_alias=AliasChoices("angel_client_id", "ANGEL_CLIENT_ID", "angel_client_code", "ANGEL_CLIENT_CODE"))
+    angel_pin: str = Field("", validation_alias=AliasChoices("angel_pin", "ANGEL_PIN", "angel_password", "ANGEL_PASSWORD"))
+    angel_totp_key: str = Field("", validation_alias=AliasChoices("angel_totp_key", "ANGEL_TOTP_KEY", "angel_totp_secret", "ANGEL_TOTP_SECRET"))
     broker_mode: str = "simulated"  # "simulated" | "live"
+    environment: str = "development"  # "development" | "testing" | "production"
+
+
+    @property
+    def angel_client_code(self) -> str:
+        return self.angel_client_id
+
+    @property
+    def angel_password(self) -> str:
+        return self.angel_pin
+
+    @property
+    def angel_totp_secret(self) -> str:
+        return self.angel_totp_key
 
     # ── Broker credentials (Zerodha Kite) ────────────────────────────
     zerodha_api_key: str = ""
@@ -43,7 +58,11 @@ class Settings(BaseSettings):
 
     # ── Default Super-Admin account (seeded on first boot) ─────────────
     default_admin_email: str = "admin@tradethrone.com"
-    default_admin_password: str = "Admin@TradeThrone2026!"
+    # Bootstrap password for the seeded admin. Leave EMPTY (never hardcode a
+    # runtime credential in source) — on first boot the seeder then generates
+    # a strong random password and prints it ONCE to the logs. Operators can
+    # instead set ADMIN_DEFAULT_PASSWORD in their environment to choose one.
+    default_admin_password: str = ""
 
     # ── Monitoring & Alerting ────────────────────────────────────────
     sentry_dsn: str = ""
@@ -88,8 +107,7 @@ class Settings(BaseSettings):
     allowed_origins: str = "*"  # Comma-separated list or "*"
     database_url: str = f"sqlite+aiosqlite:///{BASE_DIR / 'trading.db'}"
     log_level: str = "INFO"
-    environment: str = "production"  # "development" | "production"
-    
+
     # ── Redis ──────────────────────────────────────────────────────────
     redis_url: str = "redis://localhost:6379/0"
     
@@ -152,3 +170,17 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# ── Production fail-fast guards ──────────────────────────────────────────────
+# Refuse to boot a production deployment with insecure/missing secrets rather
+# than silently running with predictable credentials.
+if settings.environment == "production":
+    if not settings.jwt_secret or len(settings.jwt_secret) < 32:
+        raise RuntimeError(
+            "ENVIRONMENT=production requires a strong JWT_SECRET (>= 32 random "
+            "characters). Set JWT_SECRET in the environment before booting."
+        )
+    if settings.skip_signature_verification:
+        raise RuntimeError(
+            "SKIP_SIGNATURE_VERIFICATION must never be true in production."
+        )

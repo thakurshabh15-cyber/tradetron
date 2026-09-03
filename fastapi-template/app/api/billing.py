@@ -13,6 +13,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user
+from app.config import settings
 from app.core.audit import log_audit_event
 from app.core.logging import get_logger
 from app.core.payment_gateway import razorpay_gateway
@@ -229,6 +230,37 @@ async def verify_payment(
     amount = plan.price_yearly if is_yearly else plan.price_monthly
     duration_days = 365 if is_yearly else 30
 
+    # ── Payment/plan integrity gate ─────────────────────────────────────
+    # The client supplies plan_name/billing_cycle in the verify request, so
+    # cross-check them against the pending PaymentRecord created at
+    # create-order time.  Without this gate a user could pay for a cheap plan
+    # and call verify-payment claiming an expensive plan.
+    order_stmt = select(PaymentRecord).where(
+        PaymentRecord.order_id == req.razorpay_order_id,
+        PaymentRecord.user_id == user.id,
+    )
+    order_rec = (await db.execute(order_stmt)).scalar_one_or_none()
+    if not order_rec:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Unknown Razorpay order — call /api/billing/create-order first "
+                "and verify the same order you paid for"
+            ),
+        )
+    if order_rec.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Payment order does not belong to this account")
+    expected_amount = order_rec.amount or 0.0
+    if expected_amount > 0 and abs(expected_amount - amount) > 0.01:
+        logger.warning(
+            "Payment plan/amount mismatch for user %s: order %s was created for %.2f but verify claims %s (%.2f)",
+            user.email, req.razorpay_order_id, expected_amount, plan_name_norm, amount,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="Plan/billing-cycle does not match the order that was created and paid for",
+        )
+
     now = datetime.now(timezone.utc)
     end_date = now + timedelta(days=duration_days)
 
@@ -396,7 +428,13 @@ async def razorpay_webhook(
         raise HTTPException(status_code=400, detail="Missing X-Razorpay-Signature header")
 
     is_valid = razorpay_gateway.verify_webhook_signature(body_bytes, x_razorpay_signature)
-    if not is_valid and not x_razorpay_signature.startswith("mock_webhook_sig"):
+    # Fail-closed HMAC enforcement.  The historical "mock_webhook_sig*" prefix
+    # bypass allowed ANY caller who knew the public repo string to forge
+    # payment.captured events and upgrade themselves for free.  The bypass is
+    # now only honoured outside production (local dev / test suites); in
+    # production every webhook MUST carry a valid HMAC signature.
+    mock_bypass_allowed = settings.environment != "production"
+    if not is_valid and not (mock_bypass_allowed and x_razorpay_signature.startswith("mock_webhook_sig")):
         logger.error("Razorpay webhook signature verification failed")
         raise HTTPException(status_code=400, detail="Invalid webhook signature")
 

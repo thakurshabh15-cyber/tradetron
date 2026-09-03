@@ -420,22 +420,27 @@ def place_tradethrone_order(payload: dict) -> dict:
                 "price": price,
             }
         except Exception as exc:
-            logger.error("Zerodha real order placement failed: %s", exc)
-            logger.warning("Falling back to mock order response")
-            # Fall through to mock response
+            # FAIL-SAFETY: real credentials are configured, so a broker/network
+            # failure must NEVER be masked with a fabricated mock success
+            # response — re-raise so callers can retry/alert instead of
+            # recording a phantom fill against live money.
+            logger.error("Zerodha real order placement FAILED: %s", exc)
+            raise
     else:
         if not has_real_credentials:
-            logger.warning("Zerodha credentials not configured, using mock order response")
+            logger.warning("Zerodha credentials not configured, using SIMULATED order response")
         if KiteConnect is None:
-            logger.warning("kiteconnect package not installed, using mock order response")
+            logger.warning("kiteconnect package not installed, using SIMULATED order response")
     
-    # Mock order ID with timestamp-like format
+    # Mock order ID with timestamp-like format (only reachable when real
+    # credentials are absent)
     import time
     order_id = f"{int(time.time() * 1000) % 100000000:08d}"
     
     return {
         "order_id": order_id,
         "status": "COMPLETE",
+        "simulated": True,
         "symbol": symbol,
     }
 

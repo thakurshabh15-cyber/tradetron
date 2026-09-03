@@ -14,9 +14,13 @@ ENV/
 
 # Environment variables (contains secrets)
 .env
+.env.production
+.env.staging
 
 # Database files
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
 *.sqlite3
 
@@ -37,3 +41,6 @@ client/dist/
 # Celery (legacy — removed)
 celery.db
 celery_results.db
+
+# Separate release project (not part of tradetron)
+OmniRoute-release*/

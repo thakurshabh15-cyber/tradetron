@@ -18,6 +18,20 @@ def set_testing_environment():
     yield
     # Reset to production after tests
     settings.environment = "production"
+
+
+@pytest.fixture(autouse=True, scope="function")
+def reset_broker_mode():
+    """Ensure no test leaks LIVE broker mode into others.
+
+    Tests that intentionally exercise the LIVE broker-dispatch path must set
+    ``settings.broker_mode = "live"`` themselves; this fixture guarantees the
+    safe ``simulated`` default before every test.
+    """
+    from app.config import settings
+
+    settings.broker_mode = "simulated"
+    yield
 @pytest.fixture(scope="session")
 def event_loop():
     """Create event loop for async tests."""

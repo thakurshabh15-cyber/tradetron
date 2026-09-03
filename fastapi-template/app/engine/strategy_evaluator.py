@@ -26,6 +26,20 @@ logger = get_logger("engine.evaluator")
 # Maximum price history kept per symbol for indicator calculation
 _MAX_HISTORY = 1000
 
+# Symbolic operator aliases accepted in stored strategy conditions (legacy data
+# created before normalization persisted raw operators such as ">", ">=", ...).
+# Mirrors the aliases handled by ``visual_strategy.VisualContext._compare`` so
+# DB-loaded conditions behave identically regardless of the form they were
+# saved in.
+_OPERATOR_ALIASES: dict[str, str] = {
+    ">": "gt",
+    "<": "lt",
+    ">=": "gte",
+    "<=": "lte",
+    "=": "eq",
+    "==": "eq",
+}
+
 
 class StrategyEvaluator:
     """Evaluates strategy conditions against incoming market ticks."""
@@ -61,7 +75,8 @@ class StrategyEvaluator:
         """
         for cond in conditions:
             indicator = cond["indicator"].upper()
-            operator = cond["operator"].lower()
+            raw_operator = cond["operator"].lower()
+            operator = _OPERATOR_ALIASES.get(raw_operator, raw_operator)
             threshold = float(cond["value"])
             period = int(cond.get("period", 14))
 

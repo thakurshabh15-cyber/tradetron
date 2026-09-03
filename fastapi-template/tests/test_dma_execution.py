@@ -1,4 +1,4 @@
-﻿"""Institutional DMA execution engine tests.
+"""Institutional DMA execution engine tests.
 
 Covers: dynamic lot auto-correction (NIFTY 65 / BANKNIFTY 30 / SENSEX 20),
 statutory charge engine, margin multipliers, authenticated /execute-dma flow,
@@ -56,6 +56,8 @@ def test_margin_multipliers():
 
 # ── Authenticated API integration ───────────────────────────────────────────
 
+import uuid as _uuid
+
 @pytest.mark.asyncio
 async def test_dma_execute_and_risk_targets_flow():
     from app.db.session import init_db
@@ -63,8 +65,9 @@ async def test_dma_execute_and_risk_targets_flow():
     await init_db()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        unique_email = f"dma_desk_{_uuid.uuid4().hex[:10]}@tradetron.io"
         reg = await client.post("/api/auth/register", json={
-            "email": "dma_desk_898665@tradetron.io",
+            "email": unique_email,
             "password": "SecurePassword123!",
             "full_name": "DMA Desk Tester",
         })

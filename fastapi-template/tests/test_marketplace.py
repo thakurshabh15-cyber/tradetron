@@ -36,7 +36,17 @@ def test_marketplace_suite():
     for item in sym_data["items"]:
         assert "NVDA" in [s.upper() for s in item.get("symbols", [])]
 
-    # 4. Create a strategy to test deploy and publish
+    # 4. Register + authenticate a user, then create a strategy to test deploy and publish
+    import time as _time
+    m_uid = int(_time.time() * 1000) % 1000000
+    reg_res = client.post("/api/auth/register", json={
+        "email": f"marketplace_{m_uid}@tradetron.io",
+        "password": "SecurePassword123!",
+        "full_name": "Marketplace Tester",
+    })
+    assert reg_res.status_code == 201, reg_res.text
+    m_headers = {"Authorization": f"Bearer {reg_res.json()['access_token']}"}
+
     strat_res = client.post(
         "/api/strategies",
         json={
@@ -46,12 +56,13 @@ def test_marketplace_suite():
             "action": {"side": "BUY", "quantity": 10, "order_type": "MARKET"},
             "enabled": True,
         },
+        headers=m_headers,
     )
     assert strat_res.status_code == 201
     created_strat = strat_res.json()
     strat_id = created_strat["id"]
 
-    # 5. Test Deploy Strategy
+    # 5. Test Deploy Strategy (authenticated; PAPER mode needs no broker)
     deploy_res = client.post(
         f"/api/strategies/{strat_id}/deploy",
         json={
@@ -60,6 +71,7 @@ def test_marketplace_suite():
             "multiplier": 2.5,
             "capital_allocated": 15000.0,
         },
+        headers=m_headers,
     )
     assert deploy_res.status_code == 200, deploy_res.text
     deploy_data = deploy_res.json()
@@ -67,8 +79,8 @@ def test_marketplace_suite():
     assert deploy_data["multiplier"] == 2.5
     assert deploy_data["status"] == "RUNNING"
 
-    # 6. Test Pause Strategy
-    pause_res = client.post(f"/api/strategies/{strat_id}/pause")
+    # 6. Test Pause Strategy (authenticated — same user that deployed)
+    pause_res = client.post(f"/api/strategies/{strat_id}/pause", headers=m_headers)
     assert pause_res.status_code == 200, pause_res.text
     pause_data = pause_res.json()
     assert pause_data["success"] is True

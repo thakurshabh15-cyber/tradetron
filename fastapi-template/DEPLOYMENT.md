@@ -7,10 +7,11 @@
 
 ## 0. Pre-Flight Checklist
 
-- [x] `pytest` → **92/92 passed**
+- [x] `pytest` → **156/156 passed** (114 core + 42 Phase 3 staging)
 - [x] `npm run build` → zero-warning `/dist`
 - [x] `/healthz` → `{"status": "healthy", "service": "tradethrone-platform"}`
 - [x] `/readyz` → HTTP 200 when Supabase DB + Upstash Redis reachable
+- [x] Alembic schema baseline verified — `alembic check` reports no drift on a clean DB
 - [x] CORS locked to `https://tradethrone.vercel.app`, `https://tradethron.vercel.app`
 - [x] HMAC webhook verification enforced (`SKIP_SIGNATURE_VERIFICATION=false`)
 - [x] JWT HS256 + configurable `ACCESS_TOKEN_EXPIRE_MINUTES=1440`
@@ -25,7 +26,10 @@
    ```
    DATABASE_URL=postgresql://postgres.<project-ref>:<DB_PASSWORD>@aws-0-<region>.pooler.supabase.com:6543/postgres?sslmode=require
    ```
-   > The app auto-normalizes `postgresql://` → `postgresql+asyncpg://`. Tables are created automatically on boot (`init_db()` in lifespan, idempotent column/seed migrations included).
+   > The app auto-normalizes `postgresql://` → `postgresql+asyncpg://`. **Schema
+   > is managed by Alembic** (introduced in Phase 3). For a new database run
+   > `alembic upgrade head` — do NOT rely on the legacy `init_db()` bootstrapper,
+   > which historically created schema drift. See `STAGING.md` §5 and `alembic/`.
 3. **RLS:** TradeThrone enforces authorization at the API layer via SQLAlchemy session scoping (`get_db` + per-user query filters). If you additionally expose the DB via Supabase client SDKs, enable RLS and add `ENABLE ROW LEVEL SECURITY;` per table with owner-only policies:
    ```sql
    ALTER TABLE users ENABLE ROW LEVEL SECURITY;

@@ -8,10 +8,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.admin import get_current_admin_user
+from app.api.auth import get_current_user
 from app.core.logging import get_logger
 from app.db.session import get_db
 from app.models.marketplace import MarketplaceStrategyRecord, StrategyDeploymentRecord
 from app.models.trading import StrategyRecord
+from app.models.user import UserRecord
 from app.schemas.trading import StrategyCreate, StrategyRead, StrategyUpdate
 
 logger = get_logger("api.strategies")
@@ -291,6 +294,7 @@ async def create_strategy(
 
     record = StrategyRecord(
         name=payload.name,
+        user_id=user_id,
         symbols_json=json.dumps([s.upper() for s in payload.symbols]),
         conditions_json=json.dumps([c.model_dump(mode="json") for c in payload.conditions]),
         action_json=json.dumps(payload.action.model_dump(mode="json")),
@@ -467,6 +471,7 @@ async def get_strategy(
 async def update_strategy(
     strategy_id: str,
     payload: StrategyUpdate,
+    user: UserRecord = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Partially update a strategy."""
@@ -476,6 +481,9 @@ async def update_strategy(
     row = result.scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="Strategy not found")
+
+    if row.user_id and row.user_id != user.id and getattr(user, "role", "").upper() not in ("ADMIN", "SUPERADMIN"):
+        raise HTTPException(status_code=403, detail="Not authorized to modify this strategy")
 
     if payload.name is not None:
         row.name = payload.name
@@ -498,7 +506,7 @@ async def update_strategy(
 
     await db.commit()
     await db.refresh(row)
-    logger.info("Strategy updated: %s (%s)", row.name, row.id)
+    logger.info("Strategy updated: %s (%s) by %s", row.name, row.id, user.email)
 
     from app.main import get_engine
 
@@ -512,6 +520,7 @@ async def update_strategy(
 @router.delete("/{strategy_id}", status_code=204)
 async def delete_strategy(
     strategy_id: str,
+    user: UserRecord = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Delete a strategy."""
@@ -522,9 +531,12 @@ async def delete_strategy(
     if not row:
         raise HTTPException(status_code=404, detail="Strategy not found")
 
+    if row.user_id and row.user_id != user.id and getattr(user, "role", "").upper() not in ("ADMIN", "SUPERADMIN"):
+        raise HTTPException(status_code=403, detail="Not authorized to delete this strategy")
+
     await db.delete(row)
     await db.commit()
-    logger.info("Strategy deleted: %s", strategy_id)
+    logger.info("Strategy deleted: %s by %s", strategy_id, user.email)
 
     from app.main import get_engine
 
@@ -537,6 +549,7 @@ async def delete_strategy(
 async def deploy_strategy(
     strategy_id: str,
     req: DeployStrategyRequest,
+    user: UserRecord = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Deploy a strategy to live engine / broker."""
@@ -546,12 +559,27 @@ async def deploy_strategy(
     strat_name = strat.name if strat else f"Marketplace Strategy ({strategy_id[:8]})"
     mode = req.execution_mode.upper()
 
-    # If Live Mode, ensure an active, non-expired broker account is linked
+    # Only the owner (or an admin) may deploy a strategy they do not own.
+    if strat and strat.user_id and strat.user_id != user.id and getattr(user, "role", "").upper() not in ("ADMIN", "SUPERADMIN"):
+        raise HTTPException(status_code=403, detail="Not authorized to deploy this strategy")
+
+    # If Live Mode, ensure an active, non-expired broker account OWNED BY THE
+    # CALLING USER is linked. Deploying live orders through another user's
+    # broker account is a cross-tenant authorization violation, so the lookup
+    # must always be user-scoped.
     if mode == "LIVE":
         from app.models.broker_account import BrokerAccountRecord
-        b_stmt = select(BrokerAccountRecord).where(BrokerAccountRecord.status == "CONNECTED")
         if req.broker_account_id:
-            b_stmt = select(BrokerAccountRecord).where(BrokerAccountRecord.id == req.broker_account_id)
+            b_stmt = select(BrokerAccountRecord).where(
+                BrokerAccountRecord.id == req.broker_account_id,
+                BrokerAccountRecord.user_id == user.id,
+                BrokerAccountRecord.status == "CONNECTED",
+            )
+        else:
+            b_stmt = select(BrokerAccountRecord).where(
+                BrokerAccountRecord.user_id == user.id,
+                BrokerAccountRecord.status == "CONNECTED",
+            )
         b_res = await db.execute(b_stmt)
         b_acc = b_res.scalars().first()
 
@@ -615,13 +643,20 @@ async def deploy_strategy(
 async def pause_strategy(
     strategy_id: str,
     db: AsyncSession = Depends(get_db),
+    user: UserRecord = Depends(get_current_user),
 ):
-    """Pause strategy execution."""
+    """Pause strategy execution (owner or admin only).
+
+    This is a trading-control endpoint: an unauthenticated caller must never
+    be able to pause another user's live strategy.
+    """
     strat_stmt = select(StrategyRecord).where(StrategyRecord.id == strategy_id)
     res = await db.execute(strat_stmt)
     strat = res.scalar_one_or_none()
 
     if strat:
+        if strat.user_id and strat.user_id != user.id and user.role != "admin":
+            raise HTTPException(status_code=403, detail="Not authorized to pause this strategy")
         strat.enabled = False
         await db.commit()
 
@@ -637,9 +672,16 @@ async def pause_strategy(
 @router.post("/kill-switch")
 async def emergency_kill_switch(
     req: KillSwitchRequest,
+    admin: UserRecord = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Emergency Panic Button: Immediately pause all running strategies and halt trading engine order dispatch."""
+    """Emergency Panic Button: Immediately pause all running strategies and halt trading engine order dispatch.
+
+    This is a PLATFORM-GLOBAL control (halts the shared trading engine and every
+    user's strategies, and RESUME_ALL re-enables them), so it requires admin
+    clearance. Regular users pause their own strategies via the per-strategy
+    pause endpoint.
+    """
     from app.main import get_engine
     from app.core.audit import log_audit_event
     from app.market_data.manager import ws_manager

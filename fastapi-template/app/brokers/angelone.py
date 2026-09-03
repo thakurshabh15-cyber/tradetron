@@ -29,6 +29,16 @@ except ImportError:
 
 logger = get_logger("broker.angelone")
 
+# Upper bound for every synchronous SmartAPI SDK call offloaded to a thread.
+# Without this, a hung broker API call (network partition, SDK stall) blocks
+# order dispatch and event-loop workers indefinitely.
+DISPATCH_TIMEOUT_SECONDS = 30.0
+
+
+async def _sdk_call(fn, *args, timeout: float = DISPATCH_TIMEOUT_SECONDS):
+    """Run a synchronous SDK call in a worker thread with a hard timeout."""
+    return await asyncio.wait_for(asyncio.to_thread(fn, *args), timeout=timeout)
+
 
 class AngelOneBroker(BrokerClient):
     """Production broker adapter for Angel One (SmartAPI)."""
@@ -129,7 +139,7 @@ class AngelOneBroker(BrokerClient):
 
         totp = pyotp.TOTP(self.totp_key).now()
 
-        self._session = await asyncio.to_thread(
+        self._session = await _sdk_call(
             self._client.generateSession,
             self.client_id,
             self.pin,
@@ -162,7 +172,7 @@ class AngelOneBroker(BrokerClient):
             "quantity": str(order.quantity),
         }
 
-        response = await asyncio.to_thread(self._client.placeOrder, payload)
+        response = await _sdk_call(self._client.placeOrder, payload)
 
         if not response:
             raise RuntimeError(f"Angel One order failed for {order.symbol}")
@@ -185,7 +195,7 @@ class AngelOneBroker(BrokerClient):
     async def _resolve_symbol_token(self, symbol: str) -> str:
         """Resolve trading symbol to Angel One's instrument token via searchScrip."""
         try:
-            result = await asyncio.to_thread(
+            result = await _sdk_call(
                 self._client.searchScrip, "NSE", symbol
             )
             if result and result.get("data"):
@@ -222,13 +232,13 @@ class AngelOneBroker(BrokerClient):
         if price is not None:
             params["price"] = str(price)
 
-        result = await asyncio.to_thread(self._client.modifyOrder, params)
+        result = await _sdk_call(self._client.modifyOrder, params)
         return {"status": "MODIFIED", "broker_order_id": broker_order_id, "raw": result}
 
     async def get_order_status(self, broker_order_id: str) -> dict[str, Any]:
         """Retrieve execution status for a specific order on Angel One."""
         await self.connect()
-        order_book = await asyncio.to_thread(self._client.orderBook)
+        order_book = await _sdk_call(self._client.orderBook)
         if order_book and order_book.get("data"):
             for o in order_book["data"]:
                 if str(o.get("orderid")) == str(broker_order_id):
@@ -242,14 +252,14 @@ class AngelOneBroker(BrokerClient):
 
     async def cancel_order(self, broker_order_id: str) -> dict[str, Any]:
         await self.connect()
-        result = await asyncio.to_thread(
+        result = await _sdk_call(
             self._client.cancelOrder, broker_order_id, "NORMAL"
         )
         return {"status": "CANCELLED", "broker_order_id": broker_order_id, "raw": result}
 
     async def get_positions(self) -> list[dict[str, Any]]:
         await self.connect()
-        result = await asyncio.to_thread(self._client.position)
+        result = await _sdk_call(self._client.position)
         if not result or not result.get("data"):
             return []
         return result["data"]
@@ -258,7 +268,7 @@ class AngelOneBroker(BrokerClient):
         """Retrieve available cash and margin collateral from Angel One."""
         await self.connect()
         try:
-            res = await asyncio.to_thread(self._client.rmsLimit)
+            res = await _sdk_call(self._client.rmsLimit)
             if res and res.get("data"):
                 data = res["data"]
                 return {
@@ -274,7 +284,7 @@ class AngelOneBroker(BrokerClient):
     async def get_holdings(self) -> list[dict[str, Any]]:
         await self.connect()
         try:
-            res = await asyncio.to_thread(self._client.holding)
+            res = await _sdk_call(self._client.holding)
             if res and res.get("data"):
                 return res["data"]
         except Exception as exc:
@@ -392,24 +402,28 @@ def place_tradethrone_order(payload: dict) -> dict:
                 "broker": "angelone",
             }
         except Exception as exc:
-            logger.error("Angel One real order placement failed: %s", exc)
-            logger.warning("Falling back to mock order response")
-            # Fall through to mock response
+            # FAIL-SAFETY: real credentials are configured, so a broker/network
+            # failure must NEVER be masked with a fabricated mock success
+            # response.  Re-raise so the caller can retry/alert instead of
+            # recording a phantom fill against live money.
+            logger.error("Angel One real order placement FAILED: %s", exc)
+            raise
     else:
         if not has_real_credentials:
-            logger.warning("Angel One credentials not fully configured, using mock order response")
+            logger.warning("Angel One credentials not fully configured, using SIMULATED order response")
         if SmartConnect is None:
-            logger.warning("SmartApi package not installed, using mock order response")
+            logger.warning("SmartApi package not installed, using SIMULATED order response")
         if pyotp is None:
-            logger.warning("pyotp package not installed, using mock order response")
+            logger.warning("pyotp package not installed, using SIMULATED order response")
     
-    # Mock order response
+    # Mock order response (only reachable when real credentials are absent)
     import time
     order_id = f"ANGEL{int(time.time() * 1000) % 100000000:08d}"
     
     return {
         "order_id": order_id,
         "status": "COMPLETE",
+        "simulated": True,
         "symbol": symbol,
         "broker": "angelone",
     }

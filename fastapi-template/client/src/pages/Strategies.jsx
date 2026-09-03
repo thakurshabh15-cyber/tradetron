@@ -4,11 +4,14 @@ import StrategyList from "../components/StrategyList";
 import StrategyWizardScreen from "../components/StrategyWizardScreen";
 import StrategyConfiguratorScreen from "../components/StrategyConfiguratorScreen";
 import { useApi } from "../hooks/useApi";
+import { useAuthStore } from "../stores/useAuthStore";
 import { Sliders, Wand2 } from "lucide-react";
 
 export default function Strategies() {
   const [activeTab, setActiveTab] = useState("builder"); // 'builder' | 'wizard' | 'config'
   const [selectedStrategyForConfig, setSelectedStrategyForConfig] = useState(null);
+  const currentUserRole = (useAuthStore((state) => state.user?.role) || "").toUpperCase();
+  const isAdmin = currentUserRole === "ADMIN" || currentUserRole === "SUPERADMIN";
 
   const {
     data: strategies,
@@ -103,6 +106,7 @@ export default function Strategies() {
         strategies={strategies || []}
         onToggle={handleToggle}
         onDelete={handleDelete}
+        isAdmin={isAdmin}
         onConfigure={(strat) => {
           setSelectedStrategyForConfig(strat);
           setActiveTab("config");

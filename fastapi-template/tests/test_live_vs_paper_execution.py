@@ -19,6 +19,19 @@ async def test_live_vs_paper_mode_strategy_lifecycle():
     await init_db()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 0. Register + authenticate a user (deploy is an authenticated action)
+        import time as _time
+        uid = int(_time.time() * 1000) % 1000000
+        reg_res = await client.post("/api/auth/register", json={
+            "email": f"live_mode_{uid}@tradetron.io",
+            "password": "SecurePassword123!",
+            "full_name": "Live Mode Tester",
+        })
+        assert reg_res.status_code == 201
+        token = reg_res.json()["access_token"]
+        owner_id = reg_res.json()["user"]["id"]
+        headers = {"Authorization": f"Bearer {token}"}
+
         # 1. Create a Paper Mode strategy
         paper_res = await client.post(
             "/api/strategies",
@@ -33,13 +46,15 @@ async def test_live_vs_paper_mode_strategy_lifecycle():
                 "execution_mode": "PAPER",
                 "capital_allocated": 25000.0,
             },
+            headers=headers,
         )
         assert paper_res.status_code == 201
         paper_strat = paper_res.json()
         assert paper_strat["execution_mode"] == "PAPER"
         assert paper_strat["enabled"] is True
 
-        # 2. Verify Deploying to LIVE without a connected broker returns HTTP 400
+        # 2. Verify Deploying to LIVE without a broker connected FOR THIS USER
+        #    returns HTTP 400 (other users' brokers must never satisfy this gate)
         live_deploy_res = await client.post(
             f"/api/strategies/{paper_strat['id']}/deploy",
             json={
@@ -48,29 +63,18 @@ async def test_live_vs_paper_mode_strategy_lifecycle():
                 "multiplier": 1.0,
                 "capital_allocated": 50000.0,
             },
+            headers=headers,
         )
         # Should fail with 400 because no valid connected unexpired broker exists for this deployment
         assert live_deploy_res.status_code == 400
         detail = live_deploy_res.json()["detail"].lower()
         assert "connected broker" in detail or "expired" in detail
 
-        # 3. Connect a mock broker account in DB
-        from app.models.user import UserRecord
-        import uuid
-
+        # 3. Connect a mock broker account in DB owned by the authenticated user
         async with SessionLocal() as session:
             async with session.begin():
-                user_rec = UserRecord(
-                    id=str(uuid.uuid4()),
-                    email=f"tester_{uuid.uuid4().hex[:6]}@tradetron.io",
-                    hashed_password="hashed_pw_test",
-                    full_name="Live Mode Tester",
-                )
-                session.add(user_rec)
-                await session.flush()
-
                 broker_rec = BrokerAccountRecord(
-                    user_id=user_rec.id,
+                    user_id=owner_id,
                     broker_name="ZERODHA",
                     status="CONNECTED",
                 )
@@ -93,6 +97,7 @@ async def test_live_vs_paper_mode_strategy_lifecycle():
                 "multiplier": 1.0,
                 "capital_allocated": 50000.0,
             },
+            headers=headers,
         )
         assert live_deploy_res2.status_code == 200
         assert live_deploy_res2.json()["execution_mode"] == "LIVE"
@@ -117,6 +122,13 @@ async def test_live_order_execution_and_margin_rejection():
     tick_q = asyncio.Queue()
     mock_sim_broker = SimulatedBroker()
     engine = TradingEngine(broker=mock_sim_broker, tick_queue=tick_q)
+
+    # This test intentionally exercises the LIVE broker-dispatch path (mocked
+    # Zerodha) so it must opt into BROKER_MODE=live.  The autouse
+    # ``reset_broker_mode`` conftest fixture restores the safe default before
+    # every other test.
+    from app.config import settings as _settings
+    _settings.broker_mode = "live"
 
     # 1. Connect a live Zerodha broker in DB
     async with SessionLocal() as session:
@@ -200,9 +212,32 @@ async def test_live_order_execution_and_margin_rejection():
 @pytest.mark.asyncio
 async def test_emergency_kill_switch_immediate_block():
     """Test that activating the emergency kill switch immediately stops all live order flow."""
+    import time
     await init_db()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Authenticated operator required for kill-switch
+        uid = int(time.time() * 1000) % 1000000
+        reg_res = await client.post("/api/auth/register", json={
+            "email": f"killswitch_{uid}@tradetron.io",
+            "password": "SecurePassword123!",
+            "full_name": "Kill Switch Operator",
+        })
+        assert reg_res.status_code == 201
+        token = reg_res.json()["access_token"]
+        headers = {"Authorization": f"Bearer {token}"}
+
+        # The platform-wide kill-switch is admin-only. Promote this user to
+        # admin in the DB (role is re-read from the DB on every authenticated
+        # request, so the existing token remains valid).
+        from sqlalchemy import select as _select
+        from app.models.user import UserRecord as _UserRecord
+
+        async with SessionLocal() as session:
+            u = (await session.execute(_select(_UserRecord).where(_UserRecord.id == reg_res.json()["user"]["id"]))).scalar_one()
+            u.role = "admin"
+            await session.commit()
+
         # Trigger kill switch
         kill_res = await client.post(
             "/api/strategies/kill-switch",
@@ -210,6 +245,7 @@ async def test_emergency_kill_switch_immediate_block():
                 "action": "PAUSE_ALL",
                 "reason": "Flash Crash Detected — Emergency Freeze",
             },
+            headers=headers,
         )
         assert kill_res.status_code == 200
         assert kill_res.json()["status"] == "HALTED"
