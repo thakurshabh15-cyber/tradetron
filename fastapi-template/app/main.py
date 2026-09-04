@@ -229,6 +229,19 @@ async def healthz():
     return {"status": "healthy", "service": "tradethrone-platform"}
 
 
+def _sanitize_error(exc: Exception) -> str:
+    """First 200 chars of an error with any configured URL redacted.
+
+    Prevents connection strings / credentials leaking into the readiness
+    response body (the error surface most likely to be scraped by monitors).
+    """
+    message = str(exc)
+    for configured in (settings.database_url, settings.effective_redis_url):
+        if configured:
+            message = message.replace(configured, "<redacted>")
+    return message[:200]
+
+
 @app.get("/readyz", tags=["health"])
 async def readyz():
     """Readiness probe — verifies PostgreSQL (Supabase) and Redis (Upstash).
@@ -252,23 +265,28 @@ async def readyz():
             await conn.execute(text("SELECT 1"))
         checks["database"] = True
     except Exception as exc:
-        errors["database"] = str(exc)[:200]
+        errors["database"] = _sanitize_error(exc)
 
     # 2. Cache (Upstash Redis TLS / local Redis)
-    try:
-        client = aioredis.from_url(
-            settings.effective_redis_url,
-            socket_connect_timeout=1.5,
-            socket_timeout=1.5,
-            decode_responses=True,
-        )
+    if not settings.effective_redis_url:
+        # Deterministic diagnostic: no silent localhost fallback when the
+        # operator explicitly left Redis unconfigured.
+        errors["cache"] = "Redis not configured: set UPSTASH_REDIS_URL or REDIS_URL."
+    else:
         try:
-            await client.ping()
-            checks["cache"] = True
-        finally:
-            await client.aclose()
-    except Exception as exc:
-        errors["cache"] = str(exc)[:200]
+            client = aioredis.from_url(
+                settings.effective_redis_url,
+                socket_connect_timeout=1.5,
+                socket_timeout=1.5,
+                decode_responses=True,
+            )
+            try:
+                await client.ping()
+                checks["cache"] = True
+            finally:
+                await client.aclose()
+        except Exception as exc:
+            errors["cache"] = _sanitize_error(exc)
 
     cache_required = settings.environment == "production"
     ready = checks["database"] and (checks["cache"] or not cache_required)

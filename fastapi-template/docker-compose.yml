@@ -8,7 +8,7 @@ services:
     environment:
       POSTGRES_DB: tradetron
       POSTGRES_USER: tradetron
-      POSTGRES_PASSWORD: tradetron_secure_password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tradetron_secure_password}
     ports:
       - "5432:5432"
     volumes:
@@ -30,8 +30,13 @@ services:
         condition: service_healthy
     environment:
       PORT: 8080
-      DATABASE_URL: postgresql://tradetron:tradetron_secure_password@postgres:5432/tradetron
-      JWT_SECRET: dev_super_secret_jwt_key_change_in_production_123456789
+      # LOCAL-DEV ONLY defaults. Compose never sets ENVIRONMENT, so the
+      # development path (localhost Postgres, dev-only JWT) applies. The
+      # production boot guard (ENVIRONMENT=production) rejects the dev JWT
+      # fallback because it is < 32 chars — never run this compose file with
+      # ENVIRONMENT=production.
+      DATABASE_URL: postgresql://tradetron:${POSTGRES_PASSWORD:-tradetron_secure_password}@postgres:5432/tradetron
+      JWT_SECRET: ${JWT_SECRET:-dev-only-jwt-change-me}
       FRONTEND_URL: http://localhost:5173
       ALLOWED_ORIGINS: "*"
       BROKER_MODE: simulated

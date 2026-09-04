@@ -56,7 +56,7 @@ class WebhookQueue:
     """Redis Streams based webhook queue with priority lanes"""
     
     def __init__(self, redis_url: str | None = None):
-        self.redis_url = redis_url or settings.redis_url or "redis://localhost:6379/0"
+        self.redis_url = redis_url or settings.effective_redis_url or "redis://localhost:6379/0"
         self._redis: Redis | None = None
         self._consumer_groups: dict[str, str] = {}
         self._initialized = False

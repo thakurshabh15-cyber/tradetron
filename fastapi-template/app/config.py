@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent  # fastapi-template/
@@ -148,6 +148,57 @@ class Settings(BaseSettings):
         """Upstash TLS Redis takes precedence over the plain redis_url."""
         return self.upstash_redis_url.strip() or self.redis_url
 
+    @staticmethod
+    def _validate_redis_url(url: str) -> None:
+        """Reject malformed Redis connection URLs (wrong scheme / no host)."""
+        from urllib.parse import urlsplit
+
+        parsed = urlsplit(url)
+        if parsed.scheme not in ("redis", "rediss") or not parsed.hostname:
+            raise ValueError(
+                "Invalid Redis URL: scheme must be 'redis' or 'rediss' and a "
+                f"host must be present (got scheme={parsed.scheme!r})."
+            )
+
+    @model_validator(mode="after")
+    def _validate_production_boot(self) -> "Settings":
+        """Deterministic production boot validation (fail-fast, never silent).
+
+        ``ENVIRONMENT=production`` must NEVER boot on local/dev defaults.  The
+        app refuses to start with a clear diagnostic rather than silently using
+        localhost Redis, local SQLite, or a weak JWT secret.  Development and
+        testing environments keep their safe local defaults untouched.
+        """
+        if self.environment == "production":
+            if not self.jwt_secret or len(self.jwt_secret) < 32:
+                raise ValueError(
+                    "ENVIRONMENT=production requires a strong JWT_SECRET "
+                    "(>= 32 random characters). Set JWT_SECRET in the "
+                    "environment before booting."
+                )
+            if self.skip_signature_verification:
+                raise ValueError(
+                    "SKIP_SIGNATURE_VERIFICATION must never be true in production."
+                )
+            db_url = self.database_url.strip()
+            if not db_url or db_url.startswith("sqlite"):
+                raise ValueError(
+                    "ENVIRONMENT=production requires DATABASE_URL pointing at a "
+                    "hosted PostgreSQL instance (e.g. postgresql://…). Refusing "
+                    "to boot production on local SQLite."
+                )
+            upstash = self.upstash_redis_url.strip()
+            redis = self.redis_url.strip()
+            if not upstash and (not redis or redis == "redis://localhost:6379/0"):
+                raise ValueError(
+                    "ENVIRONMENT=production requires an explicit Redis URL — set "
+                    "UPSTASH_REDIS_URL (preferred, e.g. a managed Upstash "
+                    "rediss://… endpoint) or a non-localhost REDIS_URL. Refusing "
+                    "to silently fall back to localhost Redis in production."
+                )
+            self._validate_redis_url(upstash or redis)
+        return self
+
     # ── Risk management ──────────────────────────────────────────────
     max_position_size: int = 100
     max_daily_loss: float = 10_000.0
@@ -179,18 +230,6 @@ class Settings(BaseSettings):
         return [s.strip().upper() for s in self.sim_symbols.split(",") if s.strip()]
 
 
+# The production boot guards live in Settings._validate_production_boot
+# (model_validator) so they also apply to any explicitly constructed Settings.
 settings = Settings()
-
-# ── Production fail-fast guards ──────────────────────────────────────────────
-# Refuse to boot a production deployment with insecure/missing secrets rather
-# than silently running with predictable credentials.
-if settings.environment == "production":
-    if not settings.jwt_secret or len(settings.jwt_secret) < 32:
-        raise RuntimeError(
-            "ENVIRONMENT=production requires a strong JWT_SECRET (>= 32 random "
-            "characters). Set JWT_SECRET in the environment before booting."
-        )
-    if settings.skip_signature_verification:
-        raise RuntimeError(
-            "SKIP_SIGNATURE_VERIFICATION must never be true in production."
-        )
