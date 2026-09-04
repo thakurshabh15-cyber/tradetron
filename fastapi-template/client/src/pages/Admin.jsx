@@ -766,7 +766,7 @@ export default function Admin() {
                 <div className="text-[11px] text-slate-500 mt-1">Latency: {systemHealth.providers.indian_equity_smartapi.latency_ms}ms • Rate: {systemHealth.providers.indian_equity_smartapi.tick_rate_sec} ticks/sec</div>
               </div>
               <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800">
-                <span className="text-xs text-slate-400">Binance Crypto WebSocket</span>
+                <span className="text-xs text-slate-400">Crypto Market Feed</span>
                 <div className="text-lg font-bold font-mono text-cyan-400 mt-1">{systemHealth.providers.crypto_binance.status}</div>
                 <div className="text-[11px] text-slate-500 mt-1">Latency: {systemHealth.providers.crypto_binance.latency_ms}ms • Rate: {systemHealth.providers.crypto_binance.tick_rate_sec} ticks/sec</div>
               </div>

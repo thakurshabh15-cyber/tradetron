@@ -1,67 +1,123 @@
-"""Crypto Market Data Provider — Real Binance Public WebSocket + Demo Fallback.
+"""Crypto Market Data Provider — CoinGecko Public REST API + Demo Fallback.
 
-When feed_mode_crypto=live: Connects to Binance's free public WebSocket stream
-(wss://stream.binance.com:9443/ws) for real-time crypto prices. No API key required.
+When feed_mode_crypto=live: Polls CoinGecko's free public REST API every ~30 s
+for real-time crypto prices.  No API key required.
 
-When feed_mode_crypto=demo: Generates simulated ticks clearly labeled DEMO_SIMULATED.
+  GET https://api.coingecko.com/api/v3/simple/price
+      ?ids=bitcoin,ethereum,solana,binancecoin,ripple
+      &vs_currencies=usd&include_24hr_vol=true&include_24hr_change=true
+      &include_last_updated_at=true
+
+CoinGecko free-tier rate limit ≈ 10-30 req/min; we poll at 30 s intervals
+(≈ 2 req/min), well within limits.
+
+When feed_mode_crypto=demo: Generates simulated ticks clearly labeled
+DEMO_SIMULATED.
+
+NOTE: The previous Binance WebSocket + REST implementation was removed because
+Binance blocks Render infrastructure with HTTP 451 ("Unavailable For Legal
+Reasons").  CoinGecko has no such restrictions and works from all cloud
+providers without credentials.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import random
+import time
 from datetime import datetime, timezone
 from typing import Any, Optional
+
+import httpx
 
 from app.core.logging import get_logger
 from app.market_data.base import AssetClass, BaseMarketDataProvider, DataFeedMode, NormalizedTick
 
 logger = get_logger("market.crypto")
 
+# ── CoinGecko symbol mapping ────────────────────────────────────────────────
+# CoinGecko uses its own IDs (lowercase) — we map our USDT-denominated symbols
+# to the CoinGecko id + the fiat/vs currency we want.
+_COINGECKO_MAP: dict[str, dict[str, str]] = {
+    "BTCUSDT":  {"id": "bitcoin",      "vs": "usd"},
+    "ETHUSDT":  {"id": "ethereum",     "vs": "usd"},
+    "SOLUSDT":  {"id": "solana",       "vs": "usd"},
+    "BNBUSDT":  {"id": "binancecoin",  "vs": "usd"},
+    "XRPUSDT":  {"id": "ripple",       "vs": "usd"},
+    "BTCINR":   {"id": "bitcoin",      "vs": "inr"},
+    "ETHINR":   {"id": "ethereum",     "vs": "inr"},
+    "MATICINR": {"id": "matic-network", "vs": "inr"},
+}
+
+# Approximate spread (fraction) per symbol — CoinGecko does not provide bid/ask
+_SPREAD: dict[str, float] = {
+    "BTCUSDT": 0.0001,
+    "ETHUSDT": 0.0002,
+    "SOLUSDT": 0.0004,
+    "BNBUSDT": 0.0003,
+    "XRPUSDT": 0.0005,
+    "BTCINR":  0.0002,
+    "ETHINR":  0.0003,
+    "MATICINR": 0.0006,
+}
+
+# ── CoinGecko API constants ──────────────────────────────────────────────────
+_COINGECKO_BASE = "https://api.coingecko.com/api/v3"
+
+# Polling interval in seconds.  CoinGecko free-tier ≈ 10-30 req/min;
+# at 30 s intervals we make ≈ 2 req/min, well within limits.
+_POLL_INTERVAL = 30.0
+
+# Approximate USD/INR seed prices for demo mode and cold-start fallback.
 _CRYPTO_SEED_PRICES: dict[str, float] = {
     "BTCUSDT": 64250.00,
     "ETHUSDT": 3480.50,
     "SOLUSDT": 154.20,
     "BNBUSDT": 585.60,
     "XRPUSDT": 0.5840,
-    "MATICINR": 48.50,
-    "BTCINR": 5450000.00,
-    "ETHINR": 295000.00,
-}
-
-# Map our symbols to Binance stream names (lowercase, no separator)
-_BINANCE_STREAM_MAP: dict[str, str] = {
-    "BTCUSDT": "btcusdt",
-    "ETHUSDT": "ethusdt",
-    "SOLUSDT": "solusdt",
-    "BNBUSDT": "bnbusdt",
-    "XRPUSDT": "xrpusdt",
+    "BTCINR": 5_350_000.0,
+    "ETHINR": 290_000.0,
+    "MATICINR": 60.0,
 }
 
 
 class CryptoMarketDataProvider(BaseMarketDataProvider):
-    """Real-time Crypto provider with Binance public WebSocket and demo fallback."""
+    """Real-time Crypto provider backed by CoinGecko public REST API + demo fallback."""
 
     def __init__(self, use_live_feed: bool = False) -> None:
-        feed_mode = DataFeedMode.PUBLIC_EXCHANGE_STREAM if use_live_feed else DataFeedMode.DEMO_SIMULATED
-        data_source = "Binance Public WebSocket (Live)" if use_live_feed else "Crypto Market Stream (Demo Simulated)"
-        super().__init__(name="CryptoMarketProvider", asset_class=AssetClass.CRYPTO, feed_mode=feed_mode)
+        feed_mode = (
+            DataFeedMode.PUBLIC_EXCHANGE_STREAM if use_live_feed
+            else DataFeedMode.DEMO_SIMULATED
+        )
+        data_source = (
+            "CoinGecko Public API (Live)" if use_live_feed
+            else "Crypto Market Stream (Demo Simulated)"
+        )
+        super().__init__(
+            name="CryptoMarketProvider",
+            asset_class=AssetClass.CRYPTO,
+            feed_mode=feed_mode,
+        )
         self.data_source = data_source
         self._use_live = use_live_feed
 
         self._quotes: dict[str, NormalizedTick] = {}
         self._open_prices: dict[str, float] = {}
         self._task: Optional[asyncio.Task] = None
+        self.last_sync_error: Optional[str] = None
+        self.last_sync_success: Optional[datetime] = None
         self._max_reconnect_delay = 30.0
 
     async def start(self) -> None:
         self._is_running = True
         if self._use_live:
-            self._task = asyncio.create_task(self._run_binance_ws())
+            self._task = asyncio.create_task(self._run_live_poll())
         else:
             self._task = asyncio.create_task(self._run_demo_stream())
-        logger.info("Crypto Market Data Provider active [%s] - Mode: %s", self.data_source, self.feed_mode.value)
+        logger.info(
+            "Crypto Market Data Provider active [%s] - Mode: %s",
+            self.data_source, self.feed_mode.value,
+        )
 
     async def stop(self) -> None:
         self._is_running = False
@@ -91,205 +147,220 @@ class CryptoMarketDataProvider(BaseMarketDataProvider):
     async def get_historical_candles(
         self, symbol: str, timeframe: str = "5m", limit: int = 100
     ) -> list[dict[str, Any]]:
-        """Fetch real historical OHLCV klines from Binance Public API."""
+        """Fetch OHLCV candles from CoinGecko public API.
+
+        CoinGecko ``/coins/{id}/ohlc`` returns arrays of
+        ``[timestamp_ms, open, high, low, close]``.  Volume is not provided
+        by this endpoint and is set to 0.
+        """
         clean_sym = symbol.upper().strip()
-        if not clean_sym.endswith("USDT") and not clean_sym.endswith("INR") and not clean_sym.endswith("BUSD"):
-            clean_sym = f"{clean_sym}USDT"
+        mapping = _COINGECKO_MAP.get(clean_sym)
+        if mapping is None:
+            logger.warning("No CoinGecko mapping for %s — cannot fetch candles", clean_sym)
+            return []
 
-        # Normalize timeframe for Binance (1m, 5m, 15m, 1h, 1d)
-        interval = timeframe.lower()
-        if interval == "1d":
-            interval = "1d"
+        coin_id = mapping["id"]
+        vs = mapping["vs"]
 
-        url = f"https://api.binance.com/api/v3/klines?symbol={clean_sym}&interval={interval}&limit={min(limit, 500)}"
+        # CoinGecko OHLC: days param — 1 = 30-min candles, 7 = 4h, 30+ = daily
+        url = f"{_COINGECKO_BASE}/coins/{coin_id}/ohlc?vs_currency={vs}&days=1"
 
         try:
-            import httpx
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.get(url)
                 if resp.status_code == 200:
-                    raw_klines = resp.json()
-                    candles = []
-                    for k in raw_klines:
-                        # k: [open_time, open, high, low, close, volume, ...]
+                    raw = resp.json()
+                    candles: list[dict[str, Any]] = []
+                    for entry in raw:
+                        if not isinstance(entry, list) or len(entry) < 5:
+                            continue
                         candles.append({
-                            "time": int(k[0] / 1000),
-                            "open": float(k[1]),
-                            "high": float(k[2]),
-                            "low": float(k[3]),
-                            "close": float(k[4]),
-                            "volume": float(k[5]),
+                            "time": int(entry[0] / 1000),
+                            "open": float(entry[1]),
+                            "high": float(entry[2]),
+                            "low": float(entry[3]),
+                            "close": float(entry[4]),
+                            "volume": 0,
                         })
-                    logger.info("Fetched %d real Binance candles for %s (%s)", len(candles), clean_sym, interval)
+                    logger.info(
+                        "Fetched %d CoinGecko candles for %s (%s)",
+                        len(candles), clean_sym, vs,
+                    )
                     return candles
                 else:
-                    logger.warning("Binance Kline API returned %d: %s", resp.status_code, resp.text)
+                    logger.warning(
+                        "CoinGecko OHLC returned %d for %s: %s",
+                        resp.status_code, coin_id, resp.text[:200],
+                    )
         except Exception as exc:
-            logger.error("Failed to fetch Binance historical candles for %s: %s", clean_sym, exc)
+            logger.error("CoinGecko OHLC fetch failed for %s: %s", coin_id, exc)
 
         return []
 
-    # ── REAL: Binance Public WebSocket Stream ────────────────────────────────
-    async def _run_binance_ws(self) -> None:
-        """Connect to Binance combined stream for real-time mini ticker data.
+    # ── LIVE: CoinGecko REST polling loop ───────────────────────────────────
 
-        Uses the free public endpoint — no API key required.
-        Streams: !miniTicker@arr (all symbols) or individual <symbol>@ticker
+    async def _run_live_poll(self) -> None:
+        """Poll CoinGecko ``simple/price`` for subscribed symbols.
+
+        Builds a batch request for all subscribed symbols in a single HTTP call.
+        On failure, back off exponentially up to ``_max_reconnect_delay`` seconds.
+        On success, reset the backoff.
         """
         reconnect_delay = 1.0
 
         while self._is_running:
             try:
-                import websockets  # type: ignore[import-untyped]
-            except ImportError:
-                logger.error(
-                    "websockets package not installed — cannot connect to Binance. "
-                    "Install with: pip install websockets. Falling back to demo mode."
-                )
-                await self._run_demo_stream()
-                return
-
-            # Build combined stream URL for subscribed Binance-supported symbols
-            binance_streams = []
-            for sym in list(self._subscribers):
-                stream_name = _BINANCE_STREAM_MAP.get(sym)
-                if stream_name:
-                    binance_streams.append(f"{stream_name}@ticker")
-
-            if not binance_streams:
-                # No Binance-supported symbols subscribed, use demo for all
-                logger.info("No Binance-supported symbols subscribed, using demo stream for INR pairs")
-                await self._run_demo_stream()
-                return
-
-            url = f"wss://stream.binance.com:9443/stream?streams={'/'.join(binance_streams)}"
-            logger.info("Connecting to Binance WebSocket: %s", url)
-
-            try:
-                async with websockets.connect(url, ping_interval=20, ping_timeout=10) as ws:
-                    logger.info("Binance WebSocket connected — streaming %d symbols", len(binance_streams))
-                    reconnect_delay = 1.0
-
-                    # Also start a background task for INR pairs that Binance doesn't cover
-                    inr_symbols = [s for s in self._subscribers if s not in _BINANCE_STREAM_MAP]
-                    inr_task = None
-                    if inr_symbols:
-                        inr_task = asyncio.create_task(self._run_demo_for_symbols(inr_symbols))
-
-                    try:
-                        async for raw_msg in ws:
-                            if not self._is_running:
-                                break
-                            try:
-                                msg = json.loads(raw_msg)
-                                data = msg.get("data", msg)
-                                await self._process_binance_ticker(data)
-                            except (json.JSONDecodeError, KeyError, TypeError) as e:
-                                logger.debug("Skipping malformed Binance message: %s", e)
-                    finally:
-                        if inr_task:
-                            inr_task.cancel()
-                            try:
-                                await inr_task
-                            except asyncio.CancelledError:
-                                pass
-
+                await self._poll_coingecko_prices()
+                self.last_sync_success = datetime.now(timezone.utc)
+                self.last_sync_error = None
+                reconnect_delay = 1.0
             except asyncio.CancelledError:
                 break
             except Exception as exc:
-                logger.error("Binance WebSocket error: %s. Reconnecting in %.1fs...", exc, reconnect_delay)
+                self.last_sync_error = str(exc)[:200]
+                logger.error(
+                    "CoinGecko live poll error: %s. Reconnecting in %.1fs...",
+                    exc, reconnect_delay,
+                )
                 await asyncio.sleep(reconnect_delay)
                 reconnect_delay = min(reconnect_delay * 2, self._max_reconnect_delay)
+                continue
 
-    async def _process_binance_ticker(self, data: dict[str, Any]) -> None:
-        """Process a Binance 24hr ticker event into a NormalizedTick."""
-        # Binance ticker fields: s=symbol, c=close, o=open, h=high, l=low, v=volume, b=bestBid, a=bestAsk
-        symbol = data.get("s", "").upper()
-        if symbol not in self._subscribers:
+            await asyncio.sleep(_POLL_INTERVAL)
+
+    async def _poll_coingecko_prices(self) -> None:
+        """Single CoinGecko batch-price request for all subscribed symbols."""
+        # Separate symbols into CoinGecko-supported and unmapped
+        cg_ids: dict[str, str] = {}  # coingecko_id -> our symbol
+        unmapped: list[str] = []
+
+        for sym in list(self._subscribers):
+            mapping = _COINGECKO_MAP.get(sym)
+            if mapping:
+                cg_ids[mapping["id"]] = sym
+            else:
+                unmapped.append(sym)
+
+        if not cg_ids:
+            if not self._quotes:
+                await self._emit_demo_for_symbols(list(self._subscribers) or ["BTCUSDT"])
             return
 
-        try:
-            price = float(data.get("c", 0))
-            open_p = float(data.get("o", price))
-            high = float(data.get("h", price))
-            low = float(data.get("l", price))
-            bid = float(data.get("b", price))
-            ask = float(data.get("a", price))
-            volume = int(float(data.get("v", 0)))
-            change = price - open_p
-            change_pct = (change / open_p * 100) if open_p else 0.0
-        except (ValueError, TypeError):
-            return
+        # Group by vs_currency for separate API calls
+        vs_groups: dict[str, list[str]] = {}
+        for cg_id, sym in cg_ids.items():
+            vs = _COINGECKO_MAP[sym]["vs"]
+            vs_groups.setdefault(vs, []).append(cg_id)
 
-        # Store the opening price on first tick
-        if symbol not in self._open_prices or self._open_prices[symbol] == _CRYPTO_SEED_PRICES.get(symbol, 0):
-            self._open_prices[symbol] = open_p
+        all_prices: dict[str, dict[str, Any]] = {}
 
-        tick = NormalizedTick(
-            symbol=symbol,
-            price=price,
-            bid=bid,
-            ask=ask,
-            open=open_p,
-            high=high,
-            low=low,
-            close=price,
-            change=round(change, 4) if price < 1 else round(change, 2),
-            change_pct=round(change_pct, 2),
-            volume=volume,
-            asset_class=AssetClass.CRYPTO,
-            feed_mode=DataFeedMode.PUBLIC_EXCHANGE_STREAM,
-            data_source="Binance Public WebSocket (Live)",
-            timestamp=datetime.now(timezone.utc).isoformat(),
-        )
+        for vs_currency, coin_ids in vs_groups.items():
+            ids_str = ",".join(coin_ids)
+            url = (
+                f"{_COINGECKO_BASE}/simple/price"
+                f"?ids={ids_str}"
+                f"&vs_currencies={vs_currency}"
+                f"&include_24hr_vol=true"
+                f"&include_24hr_change=true"
+                f"&include_last_updated_at=true"
+            )
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                data = resp.json()
+                all_prices.update(data)
 
-        self._quotes[symbol] = tick
-        await self._emit_tick(tick)
+        # Process each CoinGecko result into a NormalizedTick
+        for cg_id, sym in cg_ids.items():
+            coin_data = all_prices.get(cg_id)
+            if coin_data is None:
+                logger.debug("CoinGecko returned no data for %s (%s)", cg_id, sym)
+                continue
 
-    # ── DEMO: Simulated stream for symbols without live coverage ────────────
-    async def _run_demo_for_symbols(self, symbols: list[str]) -> None:
-        """Run demo simulation only for specific symbols (e.g. INR pairs)."""
-        try:
-            while self._is_running:
-                for symbol in symbols:
-                    prev_quote = self._quotes.get(symbol)
-                    open_p = self._open_prices.get(symbol, _CRYPTO_SEED_PRICES.get(symbol, 100.0))
-                    prev_price = prev_quote.price if prev_quote else open_p
+            vs = _COINGECKO_MAP[sym]["vs"]
+            price = coin_data.get(vs)
+            if price is None:
+                continue
 
-                    pct_move = random.gauss(0.0002, 0.003)
-                    new_price = max(0.0001, prev_price * (1.0 + pct_move))
+            volume_24h = coin_data.get(f"{vs}_24h_vol", 0)
+            change_pct_24h = coin_data.get(f"{vs}_24h_change", 0.0)
+            updated_at = coin_data.get("last_updated_at", int(time.time()))
 
-                    spread = max(0.0001, new_price * 0.0005)
-                    bid = new_price - spread / 2
-                    ask = new_price + spread / 2
-                    change = new_price - open_p
-                    change_pct = (change / open_p) * 100 if open_p else 0.0
-                    vol = random.randint(500, 100_000)
+            open_price = price / (1 + change_pct_24h / 100) if change_pct_24h else price
+            spread_frac = _SPREAD.get(sym, 0.0005)
+            spread = price * spread_frac
+            bid = price - spread / 2
+            ask = price + spread / 2
+            change = price - open_price
 
-                    tick = NormalizedTick(
-                        symbol=symbol,
-                        price=new_price,
-                        bid=bid,
-                        ask=ask,
-                        open=open_p,
-                        high=max(new_price, prev_quote.high if prev_quote else new_price),
-                        low=min(new_price, prev_quote.low if prev_quote else new_price),
-                        close=open_p,
-                        change=change,
-                        change_pct=change_pct,
-                        volume=vol,
-                        asset_class=AssetClass.CRYPTO,
-                        feed_mode=DataFeedMode.DEMO_SIMULATED,
-                        data_source="Crypto Market Stream (Demo Simulated)",
-                        timestamp=datetime.now(timezone.utc).isoformat(),
-                    )
+            try:
+                ts = datetime.fromtimestamp(updated_at, tz=timezone.utc).isoformat()
+            except (OSError, ValueError):
+                ts = datetime.now(timezone.utc).isoformat()
 
-                    self._quotes[symbol] = tick
-                    await self._emit_tick(tick)
+            tick = NormalizedTick(
+                symbol=sym,
+                price=round(price, 4) if price < 1 else round(price, 2),
+                bid=round(bid, 4) if bid < 1 else round(bid, 2),
+                ask=round(ask, 4) if ask < 1 else round(ask, 2),
+                open=round(open_price, 4) if open_price < 1 else round(open_price, 2),
+                high=round(price * 1.001, 4) if price < 1 else round(price * 1.001, 2),
+                low=round(price * 0.999, 4) if price < 1 else round(price * 0.999, 2),
+                close=round(price, 4) if price < 1 else round(price, 2),
+                change=round(change, 4) if abs(change) < 1 else round(change, 2),
+                change_pct=round(change_pct_24h, 2),
+                volume=int(volume_24h) if volume_24h else 0,
+                asset_class=AssetClass.CRYPTO,
+                feed_mode=DataFeedMode.PUBLIC_EXCHANGE_STREAM,
+                data_source="CoinGecko Public API (Live)",
+                timestamp=ts,
+            )
 
-                await asyncio.sleep(1.0)
-        except asyncio.CancelledError:
-            pass
+            self._quotes[sym] = tick
+            await self._emit_tick(tick)
+
+        if unmapped:
+            await self._emit_demo_for_symbols(unmapped)
+
+    # ── DEMO helper: single tick per symbol ─────────────────────────────────
+
+    async def _emit_demo_for_symbols(self, symbols: list[str]) -> None:
+        """Generate one demo tick per listed symbol (used for unmapped pairs)."""
+        for symbol in symbols:
+            prev_quote = self._quotes.get(symbol)
+            open_p = self._open_prices.get(symbol, _CRYPTO_SEED_PRICES.get(symbol, 100.0))
+            prev_price = prev_quote.price if prev_quote else open_p
+
+            pct_move = random.gauss(0.0002, 0.003)
+            new_price = max(0.0001, prev_price * (1.0 + pct_move))
+
+            spread = max(0.0001, new_price * 0.0005)
+            bid = new_price - spread / 2
+            ask = new_price + spread / 2
+            change = new_price - open_p
+            change_pct = (change / open_p) * 100 if open_p else 0.0
+            vol = random.randint(500, 100_000)
+
+            tick = NormalizedTick(
+                symbol=symbol,
+                price=new_price,
+                bid=bid,
+                ask=ask,
+                open=open_p,
+                high=max(new_price, prev_quote.high if prev_quote else new_price),
+                low=min(new_price, prev_quote.low if prev_quote else new_price),
+                close=open_p,
+                change=change,
+                change_pct=change_pct,
+                volume=vol,
+                asset_class=AssetClass.CRYPTO,
+                feed_mode=DataFeedMode.DEMO_SIMULATED,
+                data_source="Crypto Market Stream (Demo Simulated)",
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+
+            self._quotes[symbol] = tick
+            await self._emit_tick(tick)
 
     async def _run_demo_stream(self) -> None:
         """Full demo stream for all subscribed symbols."""

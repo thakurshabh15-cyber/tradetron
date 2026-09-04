@@ -49,7 +49,7 @@ services:
       # be committed/applied. Add the real value in Render, then re-deploy and
       # confirm /readyz reports cache=true.
       # ── Phase 5D REAL MARKET DATA (crypto) ────────────────────────────────
-      # Enables the public Binance WebSocket (no credentials). Real crypto ticks
+      # Enables CoinGecko public REST API (no credentials). Real crypto ticks
       # are labeled LIVE/STALE by data_status; equities/forex/commodity remain
       # DEMO. This is MARKET DATA ONLY — BROKER_MODE stays simulated so no
       # real-money order can ever be dispatched.

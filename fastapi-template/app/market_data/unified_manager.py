@@ -60,7 +60,7 @@ class UnifiedMarketDataManager:
         logger.info(
             "Market Data Hub configured — Equity: %s, Crypto: %s, Forex: %s",
             "LIVE" if equity_live else "DEMO",
-            "LIVE (Binance WS)" if crypto_live else "DEMO",
+            "LIVE (CoinGecko)" if crypto_live else "DEMO",
             "DEMO (always)",
         )
 

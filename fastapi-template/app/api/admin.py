@@ -780,7 +780,7 @@ async def get_system_health(
             },
             "crypto": {
                 "mode": settings.feed_mode_crypto.upper(),
-                "status": "LIVE (Binance WS)" if settings.feed_mode_crypto == "live" else "DEMO_SIMULATED",
+                "status": "LIVE (CoinGecko)" if settings.feed_mode_crypto == "live" else "DEMO_SIMULATED",
             },
             "forex": {
                 "mode": "DEMO",

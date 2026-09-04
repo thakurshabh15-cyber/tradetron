@@ -24,7 +24,7 @@ def _tick(seconds_ago: float, feed_mode=DataFeedMode.LIVE_BROKER_VENDOR,
         open=60000.0, high=60100.0, low=59900.0, close=60000.0,
         change=0.0, change_pct=0.0, volume=100.0,
         asset_class=asset_class, feed_mode=feed_mode,
-        data_source="Binance Public WS", timestamp=ts,
+        data_source="CoinGecko Public API", timestamp=ts,
     )
 
 

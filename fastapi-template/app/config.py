@@ -161,7 +161,7 @@ class Settings(BaseSettings):
     # Max age (seconds) before a *real* tick is considered STALE and must no
     # longer be presented as live. Keyed by asset-class region; the generic
     # default applies to symbols with no explicit region.
-    data_freshness_crypto: float = 30.0   # Binance real ticker cadence
+    data_freshness_crypto: float = 30.0   # CoinGecko polling cadence (30 s)
     data_freshness_equity: float = 15.0
     data_freshness_forex: float = 60.0
     data_freshness_commodity: float = 60.0

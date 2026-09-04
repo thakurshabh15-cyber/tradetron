@@ -64,7 +64,7 @@ Vercel (SPA + serverless)
 Render backend (uvicorn app.main:app)  — https://tradetron-8jkz.onrender.com
    ├─ PostgreSQL (Supabase / managed Render DB)   → /readyz database=true
    ├─ Redis/Upstash (TLS)                         → /readyz cache=BLOCKED (see §6)
-   ├─ Market-data providers (crypto=Binance WS, equity/forex=DEMO)
+   ├─ Market-data providers (crypto=CoinGecko REST, equity/forex=DEMO)
    ├─ WebSocket manager (market:<SYMBOL>, market:stream)
    └─ Webhook queue / rate limiter / OTP store (Redis-backed when available)
 ```
@@ -156,7 +156,7 @@ live host (was `tradethrone.onrender.com`).
 
 | Asset class | Provider | Feed mode (current) | LIVE feed path | Demo fallback |
 | :--- | :--- | :--- | :--- | :--- |
-| CRYPTO | `CryptoMarketDataProvider` | `demo` (live pending deploy) | Binance public WS (`PUBLIC_EXCHANGE_STREAM`) — credential-free | `DEMO_SIMULATED` |
+| CRYPTO | `CryptoMarketDataProvider` | `demo` (live pending deploy) | CoinGecko public REST (`PUBLIC_EXCHANGE_STREAM`) — credential-free | `DEMO_SIMULATED` |
 | EQUITY | `IndianEquityMarketDataProvider` | `demo` (needs Angel One creds) | Angel One WS when `feed_mode_equity=live` + creds | `DEMO_SIMULATED` |
 | FNO | above | demo | above | above |
 | COMMODITY | above | demo | above | above |

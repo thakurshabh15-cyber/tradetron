@@ -46,11 +46,15 @@ and never lets synthetic demo data masquerade as live quotes.
 
 ## 4. Real-data integration notes
 
-The crypto provider already has a **credential-free** Binance public WebSocket +
-REST klines implementation (verified reachable from this environment). Enable the
+The crypto provider uses a **credential-free** CoinGecko public REST API
+implementation. Enable the
 real feed by setting `feed_mode_crypto=live`; real ticks are then reported
 `data_status="LIVE"`/`"STALE"` while the default `demo` mode reports
 `data_status="DEMO"` — the UI reflects whichever is actually in use.
+
+> NOTE: The previous Binance public WebSocket + REST klines implementation was
+> removed because Binance blocks Render infrastructure with HTTP 451. CoinGecko
+> has no such restrictions.
 
 > Deployment blocker remains: the backend at `tradethrone.onrender.com` is
 > unreachable (404). Phase 5 backend logic is fully testable locally; frontend
