@@ -372,13 +372,20 @@ def place_tradethrone_order(payload: dict) -> dict:
     
     logger.info(
         "Placing TradeThrone order: signal=%s symbol=%s action=%s quantity=%d price=%.2f exchange=%s order_type=%s product=%s",
-        signal, symbol, action, quantity, price, exchange, order_type
+        signal, symbol, action, quantity, price, exchange, order_type, product
     )
     
     # Check if we have real credentials and KiteConnect is available
     has_real_credentials = bool(settings.zerodha_api_key) and bool(settings.zerodha_access_token)
     
     if has_real_credentials and KiteConnect is not None:
+        # SAFETY GATE (P1): never touch a real broker unless BROKER_MODE=live is
+        # set.  This closes the historical gap where real credentials alone were
+        # sufficient to reach the live broker even in simulated mode.  Raises
+        # ``BrokerModeBlockedError`` before any SDK/network operation.
+        from app.brokers import assert_live_dispatch_allowed
+        assert_live_dispatch_allowed()
+
         try:
             # Initialize KiteConnect with API key and access token
             kite = KiteConnect(api_key=settings.zerodha_api_key)

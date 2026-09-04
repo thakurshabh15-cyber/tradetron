@@ -334,6 +334,13 @@ def place_tradethrone_order(payload: dict) -> dict:
     )
     
     if has_real_credentials and SmartConnect is not None and pyotp is not None:
+        # SAFETY GATE (P1): never touch a real broker unless BROKER_MODE=live is
+        # set.  This closes the historical gap where real credentials alone were
+        # sufficient to reach the live broker even in simulated mode.  Raises
+        # ``BrokerModeBlockedError`` before any SDK/network operation.
+        from app.brokers import assert_live_dispatch_allowed
+        assert_live_dispatch_allowed()
+
         try:
             # Initialize SmartConnect
             client = SmartConnect(api_key=settings.angel_api_key)

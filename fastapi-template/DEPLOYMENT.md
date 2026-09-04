@@ -24,7 +24,7 @@
 2. **Connection Pooler** (mandatory for ASGI/serverless workloads):
    `Project Settings → Database → Connection Pooling → Transaction mode (port 6543)`.
    ```
-   DATABASE_URL=postgresql://postgres.<project-ref>:<DB_PASSWORD>@aws-0-<region>.pooler.supabase.com:6543/postgres?sslmode=require
+   DATABASE_URL=<paste your Supabase connection pooler URL here>
    ```
    > The app auto-normalizes `postgresql://` → `postgresql+asyncpg://`. **Schema
    > is managed by Alembic** (introduced in Phase 3). For a new database run
@@ -44,7 +44,7 @@
 1. Create Redis DB at <https://upstash.com> (same region as backend).
 2. Copy the **TLS endpoint** (must start with `rediss://`):
    ```
-   UPSTASH_REDIS_URL=rediss://default:<PASSWORD>@<your-db>.upstash.io:6379
+   UPSTASH_REDIS_URL=<paste your Upstash TLS endpoint here>
    ```
 3. Used by: webhook queue (Redis Streams), rate limiting, idempotency store, readiness probe.
 

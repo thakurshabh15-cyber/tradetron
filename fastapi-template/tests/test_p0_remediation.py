@@ -39,12 +39,16 @@ GIT_ROOT = REPO_ROOT.parent
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _prod_settings(**overrides) -> Settings:
+    # URL fixtures are assembled from parts so this test module's own source
+    # never literally contains the ``user:pass@host`` patterns the P0 scanner is
+    # designed to detect in tracked source.
     base = dict(
         environment="production",
         jwt_secret="p" * 40,
         skip_signature_verification=False,
-        database_url="postgresql://tradetron_user:test_password@db.example.internal:5432/tradetron",
-        upstash_redis_url="rediss://test_user:test_password@eu1.test-redis.example:6379/0",
+        webhook_local_mode=False,
+        database_url="postgresql://" + "tradetron_user:test_password" + "@db.example.internal:5432/tradetron",
+        upstash_redis_url="rediss://" + "test_user:test_password" + "@eu1.test-redis.example:6379/0",
         broker_mode="simulated",
     )
     base.update(overrides)
@@ -120,10 +124,13 @@ def test_production_boot_refuses_missing_redis_in_subprocess():
         **os.environ,
         "ENVIRONMENT": "production",
         "JWT_SECRET": "j" * 40,
-        "DATABASE_URL": "postgresql://u:test_password@db.example.internal/tradetron",
+        "DATABASE_URL": "postgresql://" + "u:test_password" + "@db.example.internal/tradetron",
         "UPSTASH_REDIS_URL": "",
         "REDIS_URL": "",
         "BROKER_MODE": "simulated",
+        # WEBHOOK_LOCAL_MODE is validated away in production configs; the
+        # fixture builds an otherwise-complete production boot.
+        "WEBHOOK_LOCAL_MODE": "false",
     }
     result = subprocess.run(
         [sys.executable, "-c", "import app.config"],
@@ -139,10 +146,11 @@ def test_production_boot_succeeds_with_full_config_in_subprocess():
         **os.environ,
         "ENVIRONMENT": "production",
         "JWT_SECRET": "j" * 40,
-        "DATABASE_URL": "postgresql://u:test_password@db.example.internal/tradetron",
-        "UPSTASH_REDIS_URL": "rediss://u:test_password@redis.example.internal:6379/0",
+        "DATABASE_URL": "postgresql://" + "u:test_password" + "@db.example.internal/tradetron",
+        "UPSTASH_REDIS_URL": "rediss://" + "u:test_password" + "@redis.example.internal:6379/0",
         "REDIS_URL": "",
         "BROKER_MODE": "simulated",
+        "WEBHOOK_LOCAL_MODE": "false",
     }
     result = subprocess.run(
         [sys.executable, "-c",
@@ -180,12 +188,23 @@ def test_live_dispatch_guard_blocks_outside_live_mode():
 GENERIC_SECRET_RX = {
     "coingecko_key": re.compile(r"CG-[A-Za-z0-9]{20,}"),
     "angel_key_id": re.compile(r"AACE[0-9]{6,}"),
+    # NOTE: both alternatives use [-_] separator character classes so this
+    # file's own source never literally spells the credential tokens the
+    # scanner below detects (previously the dev-prefixed placeholder literal
+    # made the P0 scanner trip over this file's own source).
     "jwt_known": re.compile(
-        r"(?:super[-_]secret[-_]jwt[-_]key|dev_super_secret_jwt_key)"
+        r"(?:super[-_]secret[-_]jwt[-_]key|dev[-_]super[-_]secret[-_]jwt[-_]key)"
     ),
     "claude_key": re.compile(r"sk-ant-[A-Za-z0-9_-]{20,}"),
     "aws_key": re.compile(r"AKIA[0-9A-Z]{16}"),
-    "private_key": re.compile(r"-----BEGIN .*PRIVATE KEY-----"),
+    # The BEGIN marker is assembled from separate literals
+    # (``"-----BEGIN" + " "``) so the scanner never matches this file's own
+    # source while still matching real private keys (the runtime pattern
+    # preserves the original ``.*`` so PEM/OpenSSH and PKCS#8 formats remain
+    # detected).
+    "private_key": re.compile(
+        "-----BEGIN" + " " + r".*" + "PRIVATE KEY-----"
+    ),
 }
 
 URL_CREDS_RX = re.compile(
@@ -231,6 +250,53 @@ def test_no_real_credentials_in_tracked_source():
                 )
 
 
+def test_scanner_detects_genuine_credential_fixtures():
+    """The P0 scanner must still detect genuine credential-like values.
+
+    Fixtures are assembled at runtime so this module's own source never
+    literally contains the very patterns the scanner is designed to find.
+    """
+    dev_jwt = "dev_" + "_".join(["super", "secret", "jwt", "key"])
+    super_jwt = "_".join(["super", "secret", "jwt", "key"])
+    pem_begin = "-----BEGIN" + " "
+    pem_end = "PRIVATE KEY-----"
+
+    samples = {
+        "coingecko_key": ["CG-" + "A" * 22],
+        "angel_key_id": ["AACE" + "12345678"],
+        "jwt_known": [dev_jwt, super_jwt],
+        "claude_key": ["sk-ant-" + "b" * 24],
+        "aws_key": ["AKIA" + "ABCDEFGHIJKLMNOP"],
+        "private_key": [pem_begin + "RSA" + " " + pem_end, pem_begin + pem_end],
+    }
+    for name, fixtures in samples.items():
+        for fixture in fixtures:
+            assert GENERIC_SECRET_RX[name].search(fixture), (
+                f"{name} must detect fixture {fixture!r}"
+            )
+
+    url_fixture = "rediss://" + "user:pass" + "@fixture.example.internal:6379/0"
+    assert URL_CREDS_RX.search(url_fixture) is not None, (
+        "URL_CREDS_RX must detect a credential-bearing fixture URL"
+    )
+
+
+def test_scanner_does_not_flag_this_module_source():
+    """Regression: the scanner must not trip over its own test module.
+
+    The old self-referential literals (JWT placeholder, credential-bearing
+    Redis/Postgres fixture URLs) have been removed; the scanner must run
+    clean over this file.
+    """
+    text = Path(__file__).read_text(encoding="utf-8", errors="replace")
+    for name, rx in GENERIC_SECRET_RX.items():
+        assert not rx.search(text), f"{name} self-matched in {Path(__file__).name}"
+    for m in URL_CREDS_RX.finditer(text):
+        assert m.group("host") in _ALLOWED_URL_HOSTS, (
+            f"credential-bearing URL self-matched with host={m.group('host')!r}"
+        )
+
+
 def test_example_env_files_are_placeholders_only():
     for rel in (
         ".env.example",
@@ -265,7 +331,10 @@ def test_docker_compose_uses_env_interpolation_not_literals():
     text = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     assert "${JWT_SECRET:-" in text or "${JWT_SECRET:?" in text, \
         "JWT_SECRET must be env-interpolated in docker-compose.yml"
-    assert "dev_super_secret_jwt_key" not in text
+    # The dev-prefixed token is assembled at runtime; never spell the literal
+    # so the secret scanner (which runs over this same file) stays clean.
+    dev_jwt = "dev_" + "_".join(["super", "secret", "jwt", "key"])
+    assert dev_jwt not in text
     assert "${POSTGRES_PASSWORD:-" in text
 
 
@@ -280,10 +349,14 @@ def test_webhook_queue_honours_effective_redis_url():
     original_redis = settings.redis_url
     try:
         settings.upstash_redis_url = ""
-        settings.redis_url = "redis://cache.example.internal:6379/0"
-        assert WebhookQueue().redis_url == "redis://cache.example.internal:6379/0"
-        settings.upstash_redis_url = "rediss://u:p@up.example.internal:6379/0"
-        assert WebhookQueue().redis_url == settings.upstash_redis_url
+        # URL fixtures are assembled from parts so the P0 scanner (which runs
+        # over this very file) does not flag this test module's own source.
+        cache_url = "redis://cache.example.internal:6379" + "/0"
+        settings.redis_url = cache_url
+        assert WebhookQueue().redis_url == cache_url
+        upstash_url = "rediss://" + "u:p" + "@up.example.internal:6379" + "/0"
+        settings.upstash_redis_url = upstash_url
+        assert WebhookQueue().redis_url == upstash_url
     finally:
         settings.upstash_redis_url = original_upstash
         settings.redis_url = original_redis

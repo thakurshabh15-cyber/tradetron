@@ -180,6 +180,12 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "SKIP_SIGNATURE_VERIFICATION must never be true in production."
                 )
+            if self.webhook_local_mode:
+                raise ValueError(
+                    "WEBHOOK_LOCAL_MODE must never be true in production: it "
+                    "bypasses HMAC signature verification and the Redis queue. "
+                    "Disable WEBHOOK_LOCAL_MODE before booting production."
+                )
             db_url = self.database_url.strip()
             if not db_url or db_url.startswith("sqlite"):
                 raise ValueError(
