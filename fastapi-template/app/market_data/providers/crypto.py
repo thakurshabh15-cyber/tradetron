@@ -1,6 +1,6 @@
 """Crypto Market Data Provider — CoinGecko Public REST API + Demo Fallback.
 
-When feed_mode_crypto=live: Polls CoinGecko's free public REST API every ~30 s
+When feed_mode_crypto=live: Polls CoinGecko's free public REST API every ~60 s
 for real-time crypto prices.  No API key required.
 
   GET https://api.coingecko.com/api/v3/simple/price
@@ -8,8 +8,12 @@ for real-time crypto prices.  No API key required.
       &vs_currencies=usd&include_24hr_vol=true&include_24hr_change=true
       &include_last_updated_at=true
 
-CoinGecko free-tier rate limit ≈ 10-30 req/min; we poll at 30 s intervals
-(≈ 2 req/min), well within limits.
+CoinGecko free-tier rate limit ≈ 10-30 req/min from cloud IPs; we poll at 60 s
+intervals (≈ 1 req/min) and cache OHLC candle responses for 5 minutes to stay
+well within limits.
+
+When 429 (Too Many Requests) is returned, we respect the server's Retry-After
+header before retrying, with a minimum 10 s floor.
 
 When feed_mode_crypto=demo: Generates simulated ticks clearly labeled
 DEMO_SIMULATED.
@@ -64,9 +68,40 @@ _SPREAD: dict[str, float] = {
 # ── CoinGecko API constants ──────────────────────────────────────────────────
 _COINGECKO_BASE = "https://api.coingecko.com/api/v3"
 
-# Polling interval in seconds.  CoinGecko free-tier ≈ 10-30 req/min;
-# at 30 s intervals we make ≈ 2 req/min, well within limits.
-_POLL_INTERVAL = 30.0
+# Polling interval in seconds.  CoinGecko free-tier ≈ 10-30 req/min from
+# cloud IPs; at 60 s intervals we make ≈ 1 req/min, well within limits.
+# (Previous 30 s interval combined with uncached candle requests caused 429s.)
+_POLL_INTERVAL = 60.0
+
+# TTL for the in-memory OHLC candle cache (seconds).  Prevents repeated
+# CoinGecko requests when the frontend auto-refreshes candle charts.
+_CANDLE_CACHE_TTL = 300.0  # 5 minutes
+
+# ── CoinGecko global rate-limit guard ─────────────────────────────────────────
+# Minimum seconds between ANY CoinGecko HTTP request (poll OR candle).
+# Prevents the on-demand candle endpoint from overwhelming the free tier
+# while the poll loop is active, and vice versa.
+_last_coingecko_request_epoch: float = 0.0
+_MIN_REQUEST_GAP: float = 2.0  # 2 s gap → max ~30 req/min (well within free tier)
+
+
+async def _acquire_coingecko_slot() -> None:
+    """Block until at least ``_MIN_REQUEST_GAP`` seconds have elapsed since the
+    last CoinGecko HTTP request.
+
+    Uses the *reservation* pattern: the epoch is updated **before** sleeping
+    so that concurrent callers observe the reserved future slot and queue
+    behind it without needing an ``asyncio.Lock``.
+    """
+    global _last_coingecko_request_epoch
+    now = time.time()
+    wait = _MIN_REQUEST_GAP - (now - _last_coingecko_request_epoch)
+    if wait > 0:
+        _last_coingecko_request_epoch = now + wait  # reserve future slot
+        await asyncio.sleep(wait)
+    else:
+        _last_coingecko_request_epoch = now
+
 
 # Approximate USD/INR seed prices for demo mode and cold-start fallback.
 _CRYPTO_SEED_PRICES: dict[str, float] = {
@@ -107,6 +142,11 @@ class CryptoMarketDataProvider(BaseMarketDataProvider):
         self.last_sync_error: Optional[str] = None
         self.last_sync_success: Optional[datetime] = None
         self._max_reconnect_delay = 30.0
+
+        # In-memory cache for OHLC candle responses.  Keyed by "SYMBOL:timeframe",
+        # stores (epoch_seconds, candle_list).  Avoids duplicate CoinGecko requests
+        # when the frontend auto-refreshes charts.
+        self._candle_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
     async def start(self) -> None:
         self._is_running = True
@@ -159,6 +199,16 @@ class CryptoMarketDataProvider(BaseMarketDataProvider):
             logger.warning("No CoinGecko mapping for %s — cannot fetch candles", clean_sym)
             return []
 
+        # ── Serve from cache when fresh ───────────────────────────────────────
+        cache_key = f"{clean_sym}:{timeframe}"
+        now = time.time()
+        cached = self._candle_cache.get(cache_key)
+        if cached is not None:
+            cached_time, cached_candles = cached
+            if now - cached_time < _CANDLE_CACHE_TTL:
+                logger.debug("CoinGecko candle cache HIT for %s (%.0fs old)", cache_key, now - cached_time)
+                return cached_candles
+
         coin_id = mapping["id"]
         vs = mapping["vs"]
 
@@ -166,6 +216,7 @@ class CryptoMarketDataProvider(BaseMarketDataProvider):
         url = f"{_COINGECKO_BASE}/coins/{coin_id}/ohlc?vs_currency={vs}&days=1"
 
         try:
+            await _acquire_coingecko_slot()
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.get(url)
                 if resp.status_code == 200:
@@ -186,7 +237,13 @@ class CryptoMarketDataProvider(BaseMarketDataProvider):
                         "Fetched %d CoinGecko candles for %s (%s)",
                         len(candles), clean_sym, vs,
                     )
+                    self._candle_cache[cache_key] = (time.time(), candles)
                     return candles
+                elif resp.status_code == 429:
+                    logger.warning(
+                        "CoinGecko OHLC rate-limited (429) for %s — serving stale cache if available",
+                        coin_id,
+                    )
                 else:
                     logger.warning(
                         "CoinGecko OHLC returned %d for %s: %s",
@@ -194,6 +251,11 @@ class CryptoMarketDataProvider(BaseMarketDataProvider):
                     )
         except Exception as exc:
             logger.error("CoinGecko OHLC fetch failed for %s: %s", coin_id, exc)
+
+        # Fall back to stale cache on error (if available)
+        if cached is not None:
+            logger.info("CoinGecko OHLC cache fallback for %s (%.0fs old)", cache_key, now - cached[0])
+            return cached[1]
 
         return []
 
@@ -204,6 +266,7 @@ class CryptoMarketDataProvider(BaseMarketDataProvider):
 
         Builds a batch request for all subscribed symbols in a single HTTP call.
         On failure, back off exponentially up to ``_max_reconnect_delay`` seconds.
+        On HTTP 429, respect the server's ``Retry-After`` header.
         On success, reset the backoff.
         """
         reconnect_delay = 1.0
@@ -216,6 +279,39 @@ class CryptoMarketDataProvider(BaseMarketDataProvider):
                 reconnect_delay = 1.0
             except asyncio.CancelledError:
                 break
+            except httpx.HTTPStatusError as exc:
+                # ── 429 Too Many Requests — respect Retry-After ────────────
+                if exc.response is not None and exc.response.status_code == 429:
+                    retry_after_header = exc.response.headers.get("Retry-After")
+                    try:
+                        server_wait = float(retry_after_header) if retry_after_header else 0
+                    except (ValueError, TypeError):
+                        server_wait = 0
+                    wait = max(server_wait, reconnect_delay, 10.0)  # floor 10s for 429
+                    self.last_sync_error = (
+                        f"429 Too Many Requests (server Retry-After={retry_after_header!r}, "
+                        f"waiting {wait:.0f}s)"
+                    )
+                    logger.warning(
+                        "CoinGecko 429 rate-limited. Retry-After=%s, sleeping %.1fs...",
+                        retry_after_header, wait,
+                    )
+                    await asyncio.sleep(wait)
+                    reconnect_delay = min(wait + 5, self._max_reconnect_delay)
+                    # After the 429 cooldown, also respect the normal poll
+                    # interval so we don't immediately hammer the API again.
+                    await asyncio.sleep(_POLL_INTERVAL)
+                    continue
+                # ── Other HTTP errors — standard backoff ───────────────────
+                self.last_sync_error = str(exc)[:200]
+                logger.error(
+                    "CoinGecko HTTP %s: %s. Reconnecting in %.1fs...",
+                    exc.response.status_code if exc.response else "?",
+                    exc, reconnect_delay,
+                )
+                await asyncio.sleep(reconnect_delay)
+                reconnect_delay = min(reconnect_delay * 2, self._max_reconnect_delay)
+                continue
             except Exception as exc:
                 self.last_sync_error = str(exc)[:200]
                 logger.error(
@@ -253,6 +349,7 @@ class CryptoMarketDataProvider(BaseMarketDataProvider):
             vs_groups.setdefault(vs, []).append(cg_id)
 
         all_prices: dict[str, dict[str, Any]] = {}
+        had_429 = False
 
         for vs_currency, coin_ids in vs_groups.items():
             ids_str = ",".join(coin_ids)
@@ -264,11 +361,40 @@ class CryptoMarketDataProvider(BaseMarketDataProvider):
                 f"&include_24hr_change=true"
                 f"&include_last_updated_at=true"
             )
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.get(url)
-                resp.raise_for_status()
-                data = resp.json()
-                all_prices.update(data)
+            await _acquire_coingecko_slot()
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    resp = await client.get(url)
+                    if resp.status_code == 429:
+                        retry_after = resp.headers.get("Retry-After", "")
+                        had_429 = True
+                        self.last_sync_error = (
+                            f"429 Too Many Requests ({vs_currency} batch, "
+                            f"Retry-After={retry_after!r})"
+                        )
+                        logger.warning(
+                            "CoinGecko 429 on %s batch — serving partial results",
+                            vs_currency,
+                        )
+                        continue
+                    resp.raise_for_status()
+                    data = resp.json()
+                    all_prices.update(data)
+            except httpx.HTTPStatusError:
+                raise  # let non-429 HTTP errors propagate normally
+            except Exception as exc:
+                logger.error("CoinGecko request failed for %s: %s", vs_currency, exc)
+                continue
+
+        # If ALL groups got 429 and nothing was collected, raise so the
+        # caller's error handler applies backoff.  Stale ticks are already
+        # preserved in self._quotes; we just need the retry logic.
+        if not all_prices and had_429:
+            raise httpx.HTTPStatusError(
+                "429 Too Many Requests on all CoinGecko batches",
+                request=httpx.Request("GET", _COINGECKO_BASE),
+                response=httpx.Response(429),
+            )
 
         # Process each CoinGecko result into a NormalizedTick
         for cg_id, sym in cg_ids.items():
