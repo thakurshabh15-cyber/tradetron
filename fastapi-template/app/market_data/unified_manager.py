@@ -123,6 +123,7 @@ class UnifiedMarketDataManager:
         """Process incoming standardized tick: cache, enqueue to trading engine, and broadcast."""
         self._quotes[tick.symbol] = tick
         tick_dict = tick.to_dict()
+        enriched = self._with_freshness(tick.to_dict())
 
         # 1. Enqueue to Trading Engine for signal evaluation & SL/TP triggers
         if self._tick_queue:
@@ -133,14 +134,78 @@ class UnifiedMarketDataManager:
             self._broker.update_price(tick.symbol, tick.price)
 
         # 3. Broadcast to symbol-specific channel (e.g. market:RELIANCE)
-        await ws_manager.broadcast(f"market:{tick.symbol}", tick_dict)
+        await ws_manager.broadcast(f"market:{tick.symbol}", enriched)
         # 4. Broadcast to global ticker tape stream
-        await ws_manager.broadcast("market:stream", tick_dict)
+        await ws_manager.broadcast("market:stream", enriched)
 
     def get_quote(self, symbol: str) -> Optional[dict[str, Any]]:
-        """Retrieve standardized quote for a single symbol."""
+        """Retrieve standardized quote for a single symbol (with freshness metadata)."""
         tick = self._quotes.get(symbol.upper().strip())
-        return tick.to_dict() if tick else None
+        if tick is None:
+            return None
+        q = tick.to_dict()
+        return self._with_freshness(q)
+
+    @staticmethod
+    def _freshness_window_for(asset_class: Optional[AssetClass]) -> float:
+        from app.config import settings
+
+        if asset_class in (AssetClass.CRYPTO,):
+            return settings.data_freshness_crypto
+        if asset_class in (AssetClass.EQUITY, AssetClass.FNO):
+            return settings.data_freshness_equity
+        if asset_class == AssetClass.FOREX:
+            return settings.data_freshness_forex
+        if asset_class == AssetClass.COMMODITY:
+            return settings.data_freshness_commodity
+        return settings.data_freshness_default
+
+    @classmethod
+    def _with_freshness(cls, q: dict[str, Any]) -> dict[str, Any]:
+        """Attach honest freshness metadata (data_status / is_stale / age_seconds)."""
+        from datetime import datetime, timezone
+
+        feed_mode = q.get("feed_mode")
+        ts = q.get("timestamp")
+        is_demo = feed_mode == "DEMO_SIMULATED"
+
+        if not ts:
+            q["data_status"] = "DEMO" if is_demo else "UNKNOWN"
+            q["is_stale"] = None
+            q["age_seconds"] = None
+            return q
+
+        try:
+            tick_ts = datetime.fromisoformat(ts)
+        except (TypeError, ValueError):
+            tick_ts = None
+
+        if tick_ts is not None and tick_ts.tzinfo is None:
+            tick_ts = tick_ts.replace(tzinfo=timezone.utc)
+
+        q["age_seconds"] = None
+        q["is_stale"] = None
+
+        if is_demo:
+            # Simulated feed — never claim a real freshness guarantee.
+            q["data_status"] = "DEMO"
+            return q
+
+        if tick_ts is None:
+            # Real feed with an unparsable timestamp — fail closed (stale).
+            q["data_status"] = "STALE"
+            q["is_stale"] = True
+            return q
+
+        age = (datetime.now(timezone.utc) - tick_ts).total_seconds()
+        q["age_seconds"] = round(age, 1)
+
+        asset_class = AssetClass(q["asset_class"]) if q.get("asset_class") else None
+        window = cls._freshness_window_for(asset_class)
+        stale = age > window
+        q["is_stale"] = stale
+        q["data_status"] = "STALE" if stale else "LIVE"
+        return q
 
     def get_snapshot(self, asset_class_filter: Optional[str] = None) -> list[dict[str, Any]]:
         """Retrieve snapshot quotes with optional asset-class filtering."""
@@ -172,7 +237,28 @@ class UnifiedMarketDataManager:
 
         if asset_class_filter and asset_class_filter.upper() != "ALL":
             quotes = [q for q in quotes if q.asset_class.value == asset_class_filter.upper()]
-        return [q.to_dict() for q in quotes]
+        return [self._with_freshness(q.to_dict()) for q in quotes]
+
+    def _count_stale_for(self, provider) -> int:
+        """Count symbols whose current tick is older than the freshness window.
+
+        Only meaningful for non-demo (real/published) feeds; demo providers
+        never claim freshness and therefore report 0 stale real symbols.
+        """
+        if provider.feed_mode == DataFeedMode.DEMO_SIMULATED:
+            return 0
+        sub_quotes = getattr(provider, "_quotes", {}) or {}
+        count = 0
+        for sym in getattr(provider, "_subscribers", []):
+            q = sub_quotes.get(sym)
+            if q is None:
+                quote = self._quotes.get(sym)
+                if quote is not None and quote.is_stale(self._freshness_window_for(quote.asset_class)):
+                    count += 1
+                continue
+            if q.is_stale(self._freshness_window_for(q.asset_class)):
+                count += 1
+        return count
 
     def get_providers_status(self) -> list[dict[str, Any]]:
         """Return connectivity, mode and honest health per market provider."""
@@ -200,6 +286,7 @@ class UnifiedMarketDataManager:
                     getattr(provider, "last_sync_success", None).isoformat()
                     if getattr(provider, "last_sync_success", None) else None
                 ),
+                "stale_symbols_count": self._count_stale_for(provider),
             })
         return result
 

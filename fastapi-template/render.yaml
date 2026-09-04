@@ -25,12 +25,36 @@ services:
           property: connectionString
       - key: JWT_SECRET
         generateValue: true
+      - key: ENVIRONMENT
+        value: production
       - key: FRONTEND_URL
-        value: http://localhost:5173
+        value: https://tradethrone.vercel.app
+      # Phase 5D: lock CORS to the exact production frontends. `*` is invalid
+      # with allow_credentials=True and must never ship in production; the app
+      # also auto-locks to these domains when ENVIRONMENT=production.
       - key: ALLOWED_ORIGINS
-        value: "*"
+        value: https://tradethrone.vercel.app,https://tradethron.vercel.app
       - key: BROKER_MODE
         value: simulated
+      # ── Phase 5D CACHE (REQUIRED — BLOCKED on external infrastructure) ────
+      # /readyz reports cache=false because no Redis URL is set, so the app
+      # falls back to redis://localhost:6379 (connection refused on Render).
+      # To reach cache=true, an operator MUST add a managed TLS Redis endpoint
+      # (e.g. Upstash rediss://…) as an environment variable named
+      # `UPSTASH_REDIS_URL` in the Render dashboard. Settings.effective_redis_url
+      # prefers it over the plain redis_url.
+      #
+      # NOTE: No UPSTASH_REDIS_URL value is committed here on purpose — the
+      # previous placeholder (rediss://REPLACE_WITH_UPSTASH_TLS_URL) must never
+      # be committed/applied. Add the real value in Render, then re-deploy and
+      # confirm /readyz reports cache=true.
+      # ── Phase 5D REAL MARKET DATA (crypto) ────────────────────────────────
+      # Enables the public Binance WebSocket (no credentials). Real crypto ticks
+      # are labeled LIVE/STALE by data_status; equities/forex/commodity remain
+      # DEMO. This is MARKET DATA ONLY — BROKER_MODE stays simulated so no
+      # real-money order can ever be dispatched.
+      - key: FEED_MODE_CRYPTO
+        value: live
       - key: LOG_LEVEL
         value: INFO
 

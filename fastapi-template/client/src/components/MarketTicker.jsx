@@ -2,6 +2,44 @@ import React, { useEffect, useRef, useState } from "react";
 import { useMarketStore } from "../stores/useMarketStore";
 import { TrendingUp, TrendingDown, Shield } from "lucide-react";
 
+function DataStatusBadge({ data }) {
+  // Honest provenance badge derived from backend metadata.
+  const status = data?.data_status;
+  const isDemo = data?.feed_mode === "DEMO_SIMULATED" || status === "DEMO";
+  const isStale =
+    status === "STALE" ||
+    (!status && data?.is_stale) ||
+    (status !== "DEMO" && data?.is_stale === true && !isDemo);
+
+  let label = "LIVE";
+  let cls = "bg-emerald-500/15 text-emerald-300 border-emerald-500/30";
+  if (isStale && !isDemo) {
+    label = "STALE";
+    cls = "bg-amber-500/15 text-amber-300 border-amber-500/40";
+  } else if (isDemo) {
+    label = "DEMO";
+    cls = "bg-sky-500/15 text-sky-300 border-sky-500/30";
+  } else if (status === "UNKNOWN") {
+    label = "UNKNOWN";
+    cls = "bg-slate-700/40 text-slate-400 border-slate-600";
+  }
+
+  return (
+    <span
+      title={
+        isDemo
+          ? "Simulated data — not real market prices"
+          : isStale
+          ? "Feed aged beyond freshness window — prices may be delayed"
+          : "Real feed — receiving live quotes"
+      }
+      className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-px rounded border ${cls}`}
+    >
+      {label}
+    </span>
+  );
+}
+
 function MarketTickerComponent({ symbol, initialData, isSelected, onSelect }) {
   // Selective Zustand subscription for this symbol only
   const liveQuote = useMarketStore((state) => state.quotes[String(symbol).toUpperCase().trim()]);
@@ -101,12 +139,13 @@ function MarketTickerComponent({ symbol, initialData, isSelected, onSelect }) {
 
       {/* Data Source & Volume */}
       <div className="mt-1 flex items-center justify-between text-[9px] text-slate-500">
-        <div className="flex items-center gap-1">
-          <Shield size={10} className="text-cyan-400/80" />
-          <span className="truncate max-w-[110px]">{data.data_source || "Live Pipeline Feed"}</span>
+        <div className="flex items-center gap-1 min-w-0">
+          <Shield size={10} className="text-cyan-400/80 shrink-0" />
+          <span className="truncate">{data.data_source || "Live Pipeline Feed"}</span>
+          <DataStatusBadge data={data} />
         </div>
         {data.volume ? (
-          <span className="font-mono text-slate-400">Vol: {Number(data.volume).toLocaleString()}</span>
+          <span className="font-mono text-slate-400 shrink-0">Vol: {Number(data.volume).toLocaleString()}</span>
         ) : null}
       </div>
     </div>

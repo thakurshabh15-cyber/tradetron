@@ -39,7 +39,7 @@ export default async function handler(req, res) {
 
     // ── Server-Side Sensitive Credential Ingestion ───────────────────────────
     // Secrets are ONLY accessed server-side and never leaked in client bundle
-    const BACKEND_URL = process.env.BACKEND_INTERNAL_URL || process.env.VITE_API_URL || "https://tradethrone.onrender.com";
+    const BACKEND_URL = process.env.BACKEND_INTERNAL_URL || process.env.VITE_API_URL || "https://tradetron-8jkz.onrender.com";
     const SERVER_API_SECRET = process.env.TRADING_API_SECRET || process.env.JWT_SECRET || "";
     const ZERODHA_API_KEY = process.env.ZERODHA_API_KEY || "";
     const ANGEL_API_KEY = process.env.ANGEL_API_KEY || "";

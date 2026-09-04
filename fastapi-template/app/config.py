@@ -157,6 +157,16 @@ class Settings(BaseSettings):
     sim_symbols: str = "AAPL,MSFT,NVDA,GOOGL,AMZN"
     sim_tick_interval: float = 0.5  # seconds between simulated ticks (500ms live cadence)
 
+    # ── Market data freshness ──────────────────────────────────────────
+    # Max age (seconds) before a *real* tick is considered STALE and must no
+    # longer be presented as live. Keyed by asset-class region; the generic
+    # default applies to symbols with no explicit region.
+    data_freshness_crypto: float = 30.0   # Binance real ticker cadence
+    data_freshness_equity: float = 15.0
+    data_freshness_forex: float = 60.0
+    data_freshness_commodity: float = 60.0
+    data_freshness_default: float = 30.0
+
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",
         env_file_encoding="utf-8",

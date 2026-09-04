@@ -85,19 +85,21 @@ def test_no_env_selection_based_on_environment_var():
 
 # ── 2. Prod-secret env files are git-ignored and untracked ───────────────────
 
-def test_production_env_staged_for_deletion_and_gitignored():
-    """'.env.production' must be staged for deletion and git-ignored.
+def test_production_env_removed_and_gitignored():
+    """'.env.production' must no longer be tracked and must be git-ignored.
 
     The file was accidentally committed in the past (placeholder-only content,
-    see the history test below). This verifies the remediation status: it is
-    staged 'D' (deleted) in the index and covered by .gitignore so it cannot be
-    re-added on a future commit.
+    see the history test below). Commit ``35c2477`` removed it from tracking.
+    This test verifies that (a) it is NOT in the tracked tree and (b) it IS
+    covered by ``.gitignore`` so it cannot be re-added on a future commit.
     """
-    status = _git("status --short")
-    assert re.search(r"^D\s+.*\.env\.production\s*$", status, re.MULTILINE), (
-        ".env.production is not staged for deletion:\n" + status
-    )
-    # Once the staged deletion is committed, nothing re-adds it: it is ignored.
+    tracked = _git("ls-tree -r --name-only HEAD")
+    # Must NOT appear as an exact tracked path.  We guard against the substring
+    # false-match where ``.env.production.example`` contains ``.env.production``.
+    for line in tracked.splitlines():
+        assert line.strip() != "fastapi-template/.env.production", (
+            ".env.production is still tracked in HEAD:\n" + tracked
+        )
     gitignore = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8")
     assert ".env.production" in gitignore
 
@@ -253,21 +255,28 @@ def _git(args: str) -> str:
     ).stdout
 
 
+_PROD_ENV_TRACKED_PATH = "fastapi-template/.env.production"
+
+
 def _git_blob_production_env() -> str | None:
-    """Return the committed '.env.production' contents, if present in history."""
-    # Normalise path to the repo-root-relative form (e.g. fastapi-template/...).
-    rel = str(REPO_ROOT.relative_to(Path(_GIT_ROOT))).replace("\\", "/")
+    """Return the committed '.env.production' contents, if present in history.
+
+    The file was tracked up to commit ``4502f2a`` and removed in ``35c2477``.
+    We first look at HEAD; because a literal path substring match would false-
+    positive against ``.env.production.example``, we compare exact line tokens.
+    """
     tracked = _git("ls-tree -r --name-only HEAD")
-    if "fastapi-template/.env.production" in tracked:
+    tracked_exact = {line.strip() for line in tracked.splitlines() if line.strip()}
+    if _PROD_ENV_TRACKED_PATH in tracked_exact:
         blob = subprocess.run(
-            ["git", "show", f"HEAD:fastapi-template/.env.production"],
+            ["git", "show", f"HEAD:{_PROD_ENV_TRACKED_PATH}"],
             cwd=_GIT_ROOT, capture_output=True, text=True,
             encoding="utf-8", errors="replace", check=False,
         )
         return blob.stdout if blob.returncode == 0 else None
     # Fall back to the commit known to contain it (4502f2a).
     blob = subprocess.run(
-        ["git", "show", "4502f2a:fastapi-template/.env.production"],
+        ["git", "show", f"4502f2a:{_PROD_ENV_TRACKED_PATH}"],
         cwd=_GIT_ROOT, capture_output=True, text=True,
         encoding="utf-8", errors="replace", check=False,
     )

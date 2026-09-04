@@ -43,6 +43,32 @@ class NormalizedTick:
     data_source: str
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
+    def age_seconds(self, now: Optional[datetime] = None) -> Optional[float]:
+        """Age of this tick in seconds since its reported timestamp (UTC).
+
+        Returns ``None`` when the timestamp cannot be parsed so callers can
+        treat unparsable timestamps as opaque rather than guessing freshness.
+        """
+        now = now or datetime.now(timezone.utc)
+        try:
+            ts = datetime.fromisoformat(self.timestamp)
+        except (TypeError, ValueError):
+            return None
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return (now - ts).total_seconds()
+
+    def is_stale(self, max_age_seconds: float, now: Optional[datetime] = None) -> bool:
+        """Return True when the tick is older than ``max_age_seconds``.
+
+        A tick with an unparsable timestamp is conservatively treated as stale
+        (fail closed) so a broken/absent timestamp is never presented as live.
+        """
+        age = self.age_seconds(now)
+        if age is None:
+            return True
+        return age > max_age_seconds
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "symbol": self.symbol,

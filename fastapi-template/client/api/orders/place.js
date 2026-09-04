@@ -23,7 +23,7 @@ export default async function handler(req, res) {
   const token = authHeader.split(" ")[1];
 
   try {
-    const BACKEND_URL = process.env.BACKEND_INTERNAL_URL || process.env.VITE_API_URL || "https://tradethrone.onrender.com";
+    const BACKEND_URL = process.env.BACKEND_INTERNAL_URL || process.env.VITE_API_URL || "https://tradetron-8jkz.onrender.com";
     const response = await fetch(`${BACKEND_URL.replace(/\/$/, "")}/api/trades/order`, {
       method: "POST",
       headers: {
