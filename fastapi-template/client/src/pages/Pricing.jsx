@@ -5,8 +5,9 @@ import { authFetch } from "../services/apiClient";
 
 const fallbackPlans = [
   { code: "FREE", name: "Free", price_monthly: 0, price_yearly: 0, max_brokers: 1, max_algos: 1, copy_trading_allowed: false },
-  { code: "PRO", name: "Pro", price_monthly: 1999, price_yearly: 19190, max_brokers: 3, max_algos: 5, copy_trading_allowed: true },
-  { code: "INSTITUTIONAL", name: "Institutional", price_monthly: 4999, price_yearly: 47990, max_brokers: 99, max_algos: 99, copy_trading_allowed: true },
+  { code: "PRO", name: "Pro", price_monthly: 7999, price_yearly: 76790, max_brokers: 3, max_algos: 5, copy_trading_allowed: true },
+  { code: "CREATOR", name: "Creator", price_monthly: 14999, price_yearly: 143990, max_brokers: 10, max_algos: 25, copy_trading_allowed: true },
+  { code: "INSTITUTIONAL", name: "Institutional", price_monthly: 24999, price_yearly: 239990, max_brokers: 99, max_algos: 99, copy_trading_allowed: true },
 ];
 
 export default function Pricing() {

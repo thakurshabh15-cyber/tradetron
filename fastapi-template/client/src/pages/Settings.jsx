@@ -779,7 +779,7 @@ export default function Settings() {
             >
               Annual Billing
               <span className="px-2 py-0.5 text-[10px] bg-emerald-500/20 text-emerald-400 rounded-full font-bold">
-                Save 17%
+                Save 20%
               </span>
             </span>
           </div>

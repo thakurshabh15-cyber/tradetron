@@ -142,7 +142,16 @@ class ZerodhaKiteBroker(BrokerClient):
             }
 
     async def connect(self) -> None:
-        """Validate KiteConnect session is active."""
+        """Validate KiteConnect session is active.
+
+        BROKER_MODE safety: session validation calls the real Kite API, so it
+        is hard-blocked unless ``BROKER_MODE=live``.  The guard fires before
+        any SDK construction or network work (the ``profile`` call).
+        """
+        from app.brokers import assert_live_broker_connect_allowed
+
+        assert_live_broker_connect_allowed()
+
         self._ensure_kite()
         if not self.access_token:
             raise RuntimeError(
@@ -159,7 +168,15 @@ class ZerodhaKiteBroker(BrokerClient):
                 raise RuntimeError(f"Zerodha connection failed — token may be expired: {exc}")
 
     async def place_order(self, order: OrderRequest) -> dict[str, Any]:
-        """Submit a real order to Zerodha Kite."""
+        """Submit a real order to Zerodha Kite.
+
+        P2-10 defense-in-depth: the class-level method is gated itself, so a
+        real order can never reach Zerodha while ``BROKER_MODE != live`` —
+        even if called directly, bypassing ``OrderManager`` / the API layer.
+        The gate fires before any SDK or network operation.
+        """
+        from app.brokers import assert_live_dispatch_allowed
+        assert_live_dispatch_allowed()
         await self.connect()
 
         exchange = "NFO" if "NIFTY" in order.symbol else "NSE"

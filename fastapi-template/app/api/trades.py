@@ -3,63 +3,107 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.auth import get_current_user, get_optional_current_user
 from app.core.logging import get_logger
 from app.db.session import get_db
 from app.models.trading import TradeRecord
-from app.schemas.trading import TradeRead, TradeStats
+from app.models.user import UserRecord
+from app.schemas.trading import TradePublicRead, TradeRead, TradeStats
 
 logger = get_logger("api.trades")
 
 router = APIRouter(prefix="/api/trades", tags=["trades"])
 
 
-@router.get("", response_model=list[TradeRead])
+@router.get("")
 async def list_trades(
     symbol: str | None = Query(None, description="Filter by symbol"),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
+    user: Optional[UserRecord] = Depends(get_optional_current_user),
 ):
-    """Return paginated trade history, newest first."""
+    """Return paginated trade history, newest first.
+
+    Two contractual views depending on authentication state:
+
+    * **Authenticated** — server-derived ``user.id`` scopes results to the
+      caller's own trades.  Full ``TradeRead`` fields returned (``order_id``,
+      ``strategy_name``, ``pnl``).
+    * **Anonymous** — global public trade tape returned as ``TradePublicRead``
+      (``id``, ``symbol``, ``side``, ``quantity``, ``price``, ``executed_at``
+      only).  ``pnl``, ``order_id`` and ``strategy_name`` are never exposed.
+
+    Client-supplied ``user_id`` query parameters are silently ignored.
+    """
     stmt = select(TradeRecord).order_by(desc(TradeRecord.executed_at))
+
+    if user is not None:
+        stmt = stmt.where(TradeRecord.user_id == user.id)
 
     if symbol:
         stmt = stmt.where(TradeRecord.symbol == symbol.upper())
 
     stmt = stmt.offset(offset).limit(limit)
     result = await db.execute(stmt)
+    rows = result.scalars().all()
+
+    if user is not None:
+        return [
+            TradeRead(
+                id=r.id,
+                order_id=r.order_id,
+                strategy_name=r.strategy_name,
+                symbol=r.symbol,
+                side=r.side,
+                quantity=r.quantity,
+                price=Decimal(str(r.price)),
+                pnl=Decimal(str(r.pnl)) if r.pnl is not None else None,
+                executed_at=r.executed_at,
+            )
+            for r in rows
+        ]
 
     return [
-        TradeRead(
+        TradePublicRead(
             id=r.id,
-            order_id=r.order_id,
-            strategy_name=r.strategy_name,
             symbol=r.symbol,
             side=r.side,
             quantity=r.quantity,
             price=Decimal(str(r.price)),
-            pnl=Decimal(str(r.pnl)) if r.pnl is not None else None,
             executed_at=r.executed_at,
         )
-        for r in result.scalars().all()
+        for r in rows
     ]
 
 
 @router.get("/stats", response_model=TradeStats)
-async def trade_stats(db: AsyncSession = Depends(get_db)):
-    """Return aggregated trade statistics."""
-    total = await db.scalar(select(func.count(TradeRecord.id)))
+async def trade_stats(
+    db: AsyncSession = Depends(get_db),
+    user: UserRecord = Depends(get_current_user),
+):
+    """Return the authenticated caller's OWN aggregated trade statistics.
+
+    Requires a valid bearer token — anonymous callers receive HTTP 401.  All
+    aggregates are server-scoped to ``user.id`` derived from the token.
+    """
+    total = await db.scalar(
+        select(func.count(TradeRecord.id)).where(TradeRecord.user_id == user.id)
+    )
     total = total or 0
 
     if total == 0:
         return TradeStats()
 
-    result = await db.execute(select(TradeRecord))
+    result = await db.execute(
+        select(TradeRecord).where(TradeRecord.user_id == user.id)
+    )
     trades = result.scalars().all()
 
     pnl_total = sum(t.pnl or 0 for t in trades)
@@ -82,9 +126,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, Literal
 from fastapi import HTTPException
 import asyncio
-from app.api.auth import get_current_user
 from app.brokers import BrokerModeBlockedError, get_broker_adapter, assert_live_dispatch_allowed
-from app.models.user import UserRecord
 from app.models.trading import OrderRecord, PositionRecord
 from app.models.broker_account import BrokerAccountRecord
 from app.market_data.unified_manager import unified_market_manager
@@ -177,12 +219,22 @@ async def list_open_positions(
 async def close_position(
     position_id: str,
     db: AsyncSession = Depends(get_db),
-    user: Optional[UserRecord] = Depends(get_current_user),
+    user: UserRecord = Depends(get_current_user),
 ):
-    """Close an open position at the real live market price and book realized PnL."""
+    """Close an open position at the real live market price and book realized PnL.
+
+    Object-level authorization: only the owner of the position may close it.
+    Without this check any authenticated user could square off another user's
+    LIVE position (dispatching real broker orders against a foreign account
+    state) and book/erase their realized PnL — a cross-tenant trading-control
+    vulnerability (IDOR).
+    """
     pos = await db.get(PositionRecord, position_id)
     if not pos or pos.status != "OPEN":
         raise HTTPException(status_code=404, detail="Open position not found or already closed")
+
+    if pos.user_id != user.id and getattr(user, "role", "").upper() not in ("ADMIN", "SUPERADMIN"):
+        raise HTTPException(status_code=403, detail="Not authorized to close this position")
 
     quote = unified_market_manager.get_quote(pos.symbol)
     inst = instrument_master.get_instrument(pos.symbol)

@@ -182,6 +182,12 @@ async def security_headers(request, call_next):
         )
     return response
 
+
+# P2-4: Prometheus request-volume metrics (best-effort; never fails requests).
+from app.core.metrics import metrics_middleware
+
+app.middleware("http")(metrics_middleware)
+
 # Mount routers
 from app.api import admin, alerts, auth, backtest, billing, brokers, broker_cron, compliance, copy_trading, dashboard, market_data, payouts, quant_lab, reports, risk_guard, strategies, subscriptions, trades, user, visual_strategies, watchlist, websocket  # noqa: E402
 
@@ -227,6 +233,26 @@ async def health_check():
 async def healthz():
     """Liveness probe — instant, no external dependency calls."""
     return {"status": "healthy", "service": "tradethrone-platform"}
+
+
+@app.get("/metrics", tags=["observability"], include_in_schema=False)
+async def metrics_endpoint():
+    """Prometheus text-format metrics (HTTP volume + runtime state).
+
+    See ``app/core/metrics.py`` for the metric definitions.  Dynamic gauges
+    (engine state, broker mode, websocket subscribers) are refreshed just-in-
+    time so a scrape always reflects current state.
+    """
+    from app.core.metrics import broker_mode_live, engine_state, render_metrics, ws_channels
+    from app.market_data.manager import ws_manager
+
+    if engine_state is not None:
+        engine_state.set(1 if _engine is not None else 0)
+    if broker_mode_live is not None:
+        broker_mode_live.set(1 if settings.broker_mode == "live" else 0)
+    if ws_channels is not None:
+        ws_channels.set(sum(ws_manager.channel_counts.values()))
+    return render_metrics()
 
 
 def _sanitize_error(exc: Exception) -> str:

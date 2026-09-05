@@ -33,6 +33,17 @@ class IdempotencyStore:
         self.redis_url = redis_url or settings.redis_url or "redis://localhost:6379/0"
         self._redis: redis.Redis | None = None
         self._ttl = ttl_seconds
+
+    @property
+    def ttl_seconds(self) -> int:
+        """The idempotency retention window in seconds.
+
+        This is also the system's replay-protection horizon: an event whose
+        authenticated timestamp precedes this window can never be matched to
+        a live idempotency record, so it must be rejected as stale by the
+        validation layer to prevent replay after the key expires.
+        """
+        return self._ttl
     
     async def initialize(self) -> None:
         self._redis = redis.from_url(self.redis_url, decode_responses=True)

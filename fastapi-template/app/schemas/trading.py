@@ -192,6 +192,24 @@ class TradeRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class TradePublicRead(BaseModel):
+    """Public trade-tape item exposed to anonymous callers of ``GET /api/trades``.
+
+    Mirrors ONLY the renderable subset of the guest Dashboard trade feed.
+    ``pnl``, ``order_id``, ``strategy_name`` and ``user_id`` are private
+    account/strategy data and must never appear in an anonymous response.
+    """
+
+    id: str
+    symbol: str
+    side: Side
+    quantity: int
+    price: Decimal
+    executed_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class TradeStats(BaseModel):
     """Aggregated trade statistics."""
 

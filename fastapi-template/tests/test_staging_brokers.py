@@ -67,11 +67,30 @@ class TestBrokerSimulated:
 
 
 class TestBrokerMissingCredentials:
-    """Live brokers must refuse to connect without creds — never leak money."""
+    """Live brokers refuse to connect outside BROKER_MODE=live, and even inside
+    a permitted live mode missing credentials still fail closed.  Nothing is
+    reachable in simulated mode and no money can ever be exposed."""
 
-    def test_zerodha_missing_creds(self):
+    def test_zerodha_connect_blocked_in_simulated_mode(self, monkeypatch):
+        """BROKER_MODE is the authoritative safety invariant: connect() is a
+        live-broker connectivity operation and is blocked in simulated mode
+        before any credential/SDK work."""
+        from app.brokers import BrokerModeBlockedError
         from app.brokers.zerodha import ZerodhaKiteBroker
 
+        monkeypatch.setattr("app.config.settings.broker_mode", "simulated")
+        async def go():
+            with pytest.raises(BrokerModeBlockedError, match="BROKER_MODE"):
+                await ZerodhaKiteBroker(api_key="", api_secret="").connect()
+
+        _run(go())
+
+    def test_zerodha_missing_creds_in_live_mode(self, monkeypatch):
+        """With BROKER_MODE=live the credential precondition still surfaces —
+        the guard must not mask legitimate missing-credential errors."""
+        from app.brokers.zerodha import ZerodhaKiteBroker
+
+        monkeypatch.setattr("app.config.settings.broker_mode", "live")
         async def go():
             with pytest.raises(RuntimeError) as ei:
                 await ZerodhaKiteBroker(api_key="", api_secret="").connect()

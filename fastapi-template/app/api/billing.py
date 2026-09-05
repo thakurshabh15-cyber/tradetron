@@ -261,6 +261,45 @@ async def verify_payment(
             detail="Plan/billing-cycle does not match the order that was created and paid for",
         )
 
+    # ── Idempotency gate (P3-B-01) ──────────────────────────────────────────
+    # A verified order must grant exactly ONE subscription term and ONE
+    # invoice.  Replaying verify-payment with the same (valid) order would
+    # otherwise push start/end dates forward from 'now' on every call and
+    # stamp an unlimited series of duplicate invoices for a single payment.
+    # Returning the existing grant also keeps the checkout flow correct when
+    # the Razorpay webhook beats the client's verify-payment call.
+    if order_rec.status == "SUCCESS":
+        logger.info(
+            "Verify-payment replayed for already-applied order %s (user %s) — returning existing grant",
+            req.razorpay_order_id,
+            user.id,
+        )
+        active_sub_stmt = select(SubscriptionRecord).where(
+            SubscriptionRecord.user_id == user.id,
+            SubscriptionRecord.status == "ACTIVE",
+        )
+        active_sub_res = await db.execute(active_sub_stmt)
+        active_sub = active_sub_res.scalars().first()
+        existing_inv_stmt = select(InvoiceRecord).where(
+            InvoiceRecord.payment_id == order_rec.id,
+        ).order_by(InvoiceRecord.issued_at.desc())
+        existing_inv = (await db.execute(existing_inv_stmt)).scalars().first()
+        return {
+            "success": True,
+            "message": f"Successfully subscribed to {plan.display_name}",
+            "subscription": {
+                "id": active_sub.id if active_sub else None,
+                "plan_name": active_sub.plan_name if active_sub else plan_name_norm,
+                "status": active_sub.status if active_sub else "ACTIVE",
+                "end_date": (
+                    active_sub.end_date.isoformat()
+                    if active_sub and active_sub.end_date
+                    else None
+                ),
+            },
+            "invoice_number": existing_inv.invoice_number if existing_inv else None,
+        }
+
     now = datetime.now(timezone.utc)
     end_date = now + timedelta(days=duration_days)
 
@@ -456,7 +495,7 @@ async def razorpay_webhook(
         plan_name = (notes.get("plan_name") or "PRO").upper().strip()
         billing_cycle = (notes.get("billing_cycle") or "MONTHLY").upper().strip()
         amount_paise = payment_entity.get("amount", 0)
-        amount = amount_paise / 100.0 if amount_paise else 1999.0
+        amount = amount_paise / 100.0 if amount_paise else 7999.0  # PRO monthly default (canonical)
 
         if user_id:
             now = datetime.now(timezone.utc)

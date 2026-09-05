@@ -57,14 +57,14 @@ class AngelOneBroker(BrokerClient):
         self.totp_key = totp_key or settings.angel_totp_key or ""
         self.jwt_token = jwt_token
 
+        # The SmartAPI SDK client is deliberately NOT created here.  Constructing
+        # ``SmartConnect(...)`` has filesystem/log side-effects (it allocates a
+        # per-day SDK log file) and is unnecessary in simulated mode.  It is
+        # created lazily by ``connect()`` — behind the BROKER_MODE live
+        # connectivity guard — and never during object construction, so a
+        # simulated deployment cannot instantiate the real Angel One SDK at all.
         self._client = None
         self._session: dict | None = None
-
-        if self.api_key and SmartConnect is not None:
-            try:
-                self._client = SmartConnect(api_key=self.api_key)
-            except Exception as exc:
-                logger.warning("SmartApi package import notice: %s", exc)
 
     async def validate_credentials(self) -> tuple[bool, str]:
         if not self.api_key or len(self.api_key.strip()) < 8 or self.api_key.strip().lower() in ("test", "mock", "placeholder", "123", "angel_api_key"):
@@ -72,6 +72,16 @@ class AngelOneBroker(BrokerClient):
 
         if not self.client_id or len(self.client_id.strip()) < 3:
             return False, "Invalid Client ID: Please enter your valid Angel One Client ID (e.g. S123456)"
+
+        # BROKER_MODE safety: credential validation performs a REAL SmartAPI
+        # login (``getProfile`` / ``generateSession``) against the live Angel
+        # One API — the same connectivity operation as ``connect()``.  It is
+        # therefore hard-blocked unless BROKER_MODE=live, so a simulated-mode
+        # deployment can never authenticate against Angel One even through the
+        # manual credential-verification flow.  The guard fires before any
+        # SDK construction or network work.
+        from app.brokers import assert_live_broker_connect_allowed
+        assert_live_broker_connect_allowed()
 
         if SmartConnect is None:
             return False, "SmartApi package not installed. Install with: pip install smartapi-python"
@@ -116,7 +126,18 @@ class AngelOneBroker(BrokerClient):
         return False, "Angel One requires API Key, Client ID, and PIN or TOTP to authenticate live sessions."
 
     async def connect(self) -> None:
-        """Authenticate with Angel One using TOTP."""
+        """Authenticate with Angel One using TOTP.
+
+        BROKER_MODE safety: login is a real broker connectivity operation
+        (SmartAPI ``generateSession``) and is therefore hard-blocked unless
+        ``BROKER_MODE=live``.  The guard fires before any SDK construction or
+        network work — a simulated-mode deployment can never perform an
+        Angel One login, even if an adapter instance already exists.
+        """
+        from app.brokers import assert_live_broker_connect_allowed
+
+        assert_live_broker_connect_allowed()
+
         if self._session:
             return
 
@@ -154,7 +175,15 @@ class AngelOneBroker(BrokerClient):
         logger.info("Angel One authenticated successfully")
 
     async def place_order(self, order: OrderRequest) -> dict[str, Any]:
-        """Place a market order via Angel One with automatic symbol token resolution."""
+        """Place a market order via Angel One with automatic symbol token resolution.
+
+        P2-10 defense-in-depth: the class-level method is gated itself, so a
+        real order can never reach Angel One while ``BROKER_MODE != live`` —
+        even if called directly, bypassing ``OrderManager`` / the API layer.
+        The gate fires before any SDK or network operation.
+        """
+        from app.brokers import assert_live_dispatch_allowed
+        assert_live_dispatch_allowed()
         await self.connect()
 
         # Resolve symbol token from instrument master

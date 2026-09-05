@@ -183,10 +183,26 @@ async def init_db() -> None:
 
     logger.info("Initializing database tables on %s...", "SQLite" if IS_SQLITE else "PostgreSQL")
 
+    # P2-6 schema ownership: in production the schema is owned by the Alembic
+    # migration chain.  init_db()'s create_all + ad-hoc ALTER TABLE list is an
+    # UNVERSIONED parallel migration system — running it against production
+    # bypasses Alembic's version table and silently reintroduces drift.  The
+    # create_all path stays fully enabled for development/testing (preserving
+    # the local/test bootstrap), but is skipped in production: the operator
+    # must run ``alembic upgrade head`` before booting.
+    _production_schema = settings.environment == "production"
+
     # 1. Create all tables reliably in an isolated transaction
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database tables verified/created successfully.")
+    if _production_schema:
+        logger.critical(
+            "Schema owned by Alembic in production — refusing to run "
+            "init_db() create_all. Run `alembic upgrade head` against this "
+            "database before booting the API."
+        )
+    else:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("Database tables verified/created successfully.")
 
     bool_default_false = "0" if IS_SQLITE else "FALSE"
     bool_default_true = "1" if IS_SQLITE else "TRUE"
@@ -249,22 +265,23 @@ async def init_db() -> None:
         ("invoices", "billing_address TEXT"),
     ]
 
-    for table, col_def in migrations:
-        try:
-            async with engine.begin() as conn:
-                if IS_SQLITE:
-                    await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col_def}"))
-                else:
-                    await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col_def}"))
-        except Exception:
-            pass
+    # Legacy idempotent column-adds — dev/testing only (P2-6, see above).
+    if not _production_schema:
+        for table, col_def in migrations:
+            try:
+                async with engine.begin() as conn:
+                    if IS_SQLITE:
+                        await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col_def}"))
+                    else:
+                        await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col_def}"))
+            except Exception:
+                pass
 
     # 2. Seed Default Plans, Strategies & Watchlist if not present
     async with SessionLocal() as session:
         try:
             existing_plans = (await session.execute(select(PlanRecord))).scalars().all()
-            if not existing_plans:
-                default_plans = [
+            default_plans = [
                     PlanRecord(
                         name="FREE",
                         display_name="Free Starter",
@@ -285,8 +302,8 @@ async def init_db() -> None:
                         name="PRO",
                         display_name="Pro Trader",
                         description="Full multi-broker execution, 10 live strategies, and 1m real candles",
-                        price_monthly=1499.0,
-                        price_yearly=14390.0,
+                        price_monthly=7999.0,
+                        price_yearly=76790.0,
                         currency="INR",
                         features_json=json.dumps({
                             "max_live_strategies": 10,
@@ -301,8 +318,8 @@ async def init_db() -> None:
                         name="CREATOR",
                         display_name="Creator Pro",
                         description="Publish verified strategies on the marketplace and earn an 80% revenue share",
-                        price_monthly=4999.0,
-                        price_yearly=47990.0,
+                        price_monthly=14999.0,
+                        price_yearly=143990.0,
                         currency="INR",
                         features_json=json.dumps({
                             "max_live_strategies": 25,
@@ -319,8 +336,8 @@ async def init_db() -> None:
                         name="ELITE",
                         display_name="Elite Institutional",
                         description="Unlimited strategies, dedicated VIP execution VPS, and 24/7 hotline",
-                        price_monthly=4999.0,
-                        price_yearly=49990.0,
+                        price_monthly=24999.0,
+                        price_yearly=239990.0,
                         currency="INR",
                         features_json=json.dumps({
                             "max_live_strategies": 999,
@@ -332,9 +349,39 @@ async def init_db() -> None:
                         }),
                     ),
                 ]
+            if not existing_plans:
                 session.add_all(default_plans)
                 await session.commit()
                 logger.info("Default subscription plans seeded (FREE, PRO, CREATOR, ELITE/Enterprise)")
+            else:
+                # Canonical-pricing reconcile (P2): the database is the runtime
+                # pricing authority, so every boot converges existing rows to the
+                # canonical catalogue.  Without this, databases created before the
+                # pricing change would keep charging the old ₹1,499/₹4,999 rates.
+                by_name = {p.name: p for p in existing_plans}
+                changed = False
+                for spec in default_plans:
+                    rec = by_name.get(spec.name)
+                    if rec is None:
+                        session.add(spec)
+                        changed = True
+                    else:
+                        if (rec.price_monthly, rec.price_yearly, rec.currency, rec.is_active) != (
+                            spec.price_monthly,
+                            spec.price_yearly,
+                            spec.currency,
+                            True,
+                        ):
+                            rec.price_monthly = spec.price_monthly
+                            rec.price_yearly = spec.price_yearly
+                            rec.currency = spec.currency
+                            rec.is_active = True
+                            changed = True
+                if changed:
+                    await session.commit()
+                    logger.info(
+                        "Subscription plan pricing reconciled to canonical catalogue (lowest paid = ₹7,999/mo)"
+                    )
 
             # Seed Default Trading Strategies if DB is empty
             existing_strats = (await session.execute(select(StrategyRecord))).scalars().all()
@@ -456,6 +503,25 @@ async def init_db() -> None:
             logger.warning("Notice on default data seeding: %s", exc)
 
     logger.info("Database initialized successfully on %s", "SQLite" if IS_SQLITE else "PostgreSQL")
+
+
+async def ensure_tables_local_dev() -> None:
+    """Run ORM ``create_all`` ONLY outside production.
+
+    Mirrors the ``init_db()`` schema-ownership policy (P2-6): in production the
+    schema is owned exclusively by the Alembic migration chain, and NO code
+    path — including webhook ingress handlers — may mutate the schema through
+    ORM ``create_all``.  An unconditional ``create_all`` on a webhook request
+    would silently add tables the migration chain never shipped, masking drift
+    that ``scripts/ci_alembic_check.py`` is meant to catch.
+
+    In development/testing this is a harmless idempotent bootstrap for engines
+    that were not initialised by the lifespan ``init_db()``.
+    """
+    if settings.environment == "production":
+        return
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

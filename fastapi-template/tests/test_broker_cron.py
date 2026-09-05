@@ -135,3 +135,63 @@ async def test_broker_renewal_engine_and_endpoints():
     assert logs_res.status_code == 200
     logs_list = logs_res.json()
     assert len(logs_list) >= 2
+@pytest.mark.asyncio
+async def test_angel_renewal_skips_real_login_when_not_live(monkeypatch):
+    """BROKER_MODE safety: the session-renewal engine (startup sync + daily
+    8:45 AM batch) must NEVER perform a real SmartAPI login while the
+    deployment is not in live mode — even with an active Angel One account that
+    has a TOTP secret configured.  The renewal is skipped, the existing stored
+    token is left untouched, and no SDK/network work happens."""
+    from app.config import settings as _settings
+    from app.engine.broker_cron import broker_renewal_engine
+
+    # Force the engine off the is_testing mock path so the real-login branch
+    # (guarded by BROKER_MODE) is the only possible reachable branch.
+    monkeypatch.setattr(_settings, "environment", "production")
+    monkeypatch.setattr(_settings, "broker_mode", "simulated")
+
+    user_id = str(uuid.uuid4())
+    acc_id = str(uuid.uuid4())
+    totp_secret = pyotp.random_base32()
+
+    async with SessionLocal() as db:
+        user = UserRecord(
+            id=user_id,
+            email=f"skip_{user_id[:8]}@tradetron.io",
+            hashed_password=hash_password("Pass123!"),
+            full_name="Skip Tester",
+            role="trader",
+            is_active=True,
+            is_verified=True,
+        )
+        db.add(user)
+        acc = BrokerAccountRecord(
+            id=acc_id,
+            user_id=user_id,
+            broker_name="ANGEL_ONE",
+            account_name="Angel Skip",
+            client_id="ANGEL123",
+            api_key_encrypted="",
+            status="CONNECTED",
+            is_active=True,
+        )
+        acc.set_credentials(
+            api_key="angel_api_key_12345",
+            api_secret="angel_password_pass",
+            access_token="keep_this_token_unchanged",
+            totp_secret=totp_secret,
+        )
+        db.add(acc)
+        await db.commit()
+
+    res = await broker_renewal_engine.renew_single_broker_session(acc_id)
+    assert res["status"] == "SUCCESS"
+    assert "BROKER_MODE" in res["message"]
+
+    # No fallback/mock token was written either — the real branch (which would
+    # import SmartConnect and try generateSession, then fall back to a mock
+    # JWT) was never reached.
+    async with SessionLocal() as db:
+        acc2 = await db.get(BrokerAccountRecord, acc_id)
+        assert acc2 is not None
+        assert acc2.get_access_token() == "keep_this_token_unchanged"

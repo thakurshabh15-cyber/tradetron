@@ -9,6 +9,7 @@ import json
 
 from app.webhooks.validation.signatures import get_verifier, VerificationResult
 from app.webhooks.validation.schemas import validate_webhook_payload, WebhookEnvelope
+from app.webhooks.resiliency.idempotency import idempotency_store
 from app.core.logging import get_logger
 from app.config import settings
 
@@ -75,14 +76,90 @@ async def validate_webhook_request(
                 )
                 raise HTTPException(status_code=401, detail="Invalid or missing signature")
         else:
-            # No verifier registered for this provider in production mode
-            # Allow unknown providers to pass through for fallback routing
+            # No verifier registered for this provider in non-local mode.
+            #
+            # SECURITY HARDENING (Phase 3-E): we must REJECT, not pass through.
+            # The `("*", "*")` fallback route resolves to the `custom_normal`
+            # worker pool, whose handler is `handle_tradethrone_signal` — which
+            # places REAL orders. Allowing an unregistered provider slug through
+            # with no signature check would let an unauthenticated attacker POST
+            # a validly-shaped TradeThrone signal and trigger a genuine trade.
+            #
+            # Every legitimately-integrated provider registers a verifier via
+            # `init_verifiers` (razorpay, zerodha, upstox, angel_one, binance,
+            # tradethrone). A provider with no verifier cannot have its
+            # authenticity established and must therefore be refused rather than
+            # forwarded to a trade-executing handler.
             logger.warning(
-                "No signature verifier configured for provider %s in production mode - allowing through for fallback routing",
+                "Rejecting webhook for provider %s in non-local mode: "
+                "no signature verifier configured (unauthenticated provider would "
+                "route to a trade-executing fallback handler)",
                 provider
+            )
+            raise HTTPException(
+                status_code=401,
+                detail=(
+                    f"No signature verifier configured for provider "
+                    f"'{provider}'; unauthenticated webhooks are rejected."
+                ),
             )
     else:
         logger.debug("Skipping signature verification for %s (local mode)", provider)
+
+    # 4b. Timestamp freshness / replay-window enforcement (skipped in local mode).
+    #
+    # SECURITY HARDENING (Phase 3-E): The idempotency store only deduplicates an
+    # event for its retention window (default 7 days). Once that key expires, a
+    # captured valid webhook can be replayed with the same event_id and it will
+    # be treated as NEW again, re-running its financial/trading side effect
+    # (duplicate TradeThrone order, re-applied Razorpay payment, ...).
+    #
+    # The signature verification above authenticates the raw body, which
+    # includes the timestamp, so a verified timestamp cannot be forged by an
+    # attacker. We therefore reject any event whose authenticated timestamp
+    # precedes the idempotency retention window: such an event can never be
+    # deduplicated and must be a replay or a pathological delivery. This binds
+    # the freshness boundary to the ALREADY-defined idempotency TTL constant
+    # (no new product policy is chosen).
+    #
+    # Providers that do not send a timestamp are unaffected: the extraction
+    # fallback above uses 'now', which is always fresh.
+    if not settings.webhook_local_mode:
+        try:
+            from datetime import timezone as _tz, timedelta as _td
+            # Normalize the authenticated timestamp to timezone-aware UTC so
+            # naive timestamps (e.g. datetime.utcnow() fallback, or providers
+            # that omit the timezone offset) compare consistently with 'now'.
+            _ts = timestamp
+            if _ts.tzinfo is None:
+                _ts = _ts.replace(tzinfo=_tz.utc)
+            replay_horizon = idempotency_store.ttl_seconds
+            max_age = _td(seconds=replay_horizon)
+            if (datetime.now(_tz.utc) - _ts) > max_age:
+                logger.warning(
+                    "Rejecting stale webhook for provider=%s event_id=%s: "
+                    "timestamp %s older than idempotency/replay window (%ds); "
+                    "likely a replay after key expiry",
+                    provider, event_id, timestamp, replay_horizon,
+                )
+                raise HTTPException(
+                    status_code=401,
+                    detail=(
+                        f"Webhook timestamp is older than the replay-protection "
+                        f"window ({replay_horizon}s) and cannot be deduplicated; "
+                        f"replayed or stale webhooks are rejected."
+                    ),
+                )
+        except HTTPException:
+            raise
+        except Exception as exc:  # Fail safe: do not loosen the replay guard on error
+            logger.error(
+                "Freshness check error for %s: %s", provider, exc
+            )
+            raise HTTPException(
+                status_code=401,
+                detail="Stale-webhook rejection check failed; refusing request.",
+            )
 
     # 5. Schema validation
     payload = json_body.get("payload", json_body)

@@ -719,8 +719,10 @@ async def emergency_kill_switch(
             details={"action": action, "reason": req.reason, "paused_strategies": len(active_strats)},
         )
 
-        # 4. Broadcast emergency WebSocket alert
-        await ws_manager.broadcast("trades", {
+        # 4. Broadcast emergency WebSocket alert to admins only — an emergency
+        # kill-switch is an operational control-plane event; it must not leak
+        # into ordinary tenants' private streams.
+        await ws_manager.broadcast_admins("trades", {
             "event": "KILL_SWITCH_ACTIVE",
             "message": f"EMERGENCY KILL-SWITCH: {req.reason}",
             "status": "HALTED",

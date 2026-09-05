@@ -14,11 +14,72 @@ logger = get_logger("api.websocket")
 
 router = APIRouter(tags=["websocket"])
 
-
 # NOTE: Literal paths MUST be registered before the parameterised
 # "/ws/market/{symbol}" route — otherwise Starlette matches the dynamic
 # route first and captures "stream" as a symbol, silently starving the
 # global ticker-tape feed used by the dashboard.
+
+# WebSocket close codes (RFC 6455 application range):
+#   4001 — missing/invalid authentication
+#   4003 — token rejected (malformed/expired/wrong type/inactive user)
+#   4408 — per-user private-connection cap exceeded (enforced in
+#          ConnectionManager.connect; socket rejected before accept)
+WS_CODE_AUTH_REQUIRED = 4001
+WS_CODE_AUTH_REJECTED = 4003
+
+
+async def authenticate_ws(websocket: WebSocket) -> dict | None:
+    """Authenticate a private WebSocket using ``?token=<access JWT>``.
+
+    Identity is strictly server-derived: the JWT is verified with the shared
+    secret, must be an ``access`` token, and the ``sub`` claim must resolve to
+    an existing ACTIVE user row.  Any client-supplied ``user_id`` parameter is
+    never consulted.
+
+    Returns ``{"id": ..., "role": ...}`` for the authenticated user, or
+    ``None`` after the socket has been closed with an appropriate close code.
+    The access token itself is never logged.
+    """
+    token = websocket.query_params.get("token")
+    if not token:
+        await _close_ws(websocket, WS_CODE_AUTH_REQUIRED, "Authentication required")
+        return None
+
+    from app.core.security import decode_token
+
+    payload = decode_token(token)
+    if not payload or payload.get("type") != "access":
+        await _close_ws(websocket, WS_CODE_AUTH_REJECTED, "Invalid or expired access token")
+        return None
+
+    user_id = payload.get("sub")
+    if not user_id:
+        await _close_ws(websocket, WS_CODE_AUTH_REJECTED, "Invalid token subject")
+        return None
+
+    from sqlalchemy import select
+
+    from app.db.session import SessionLocal
+    from app.models.user import UserRecord
+
+    async with SessionLocal() as session:
+        res = await session.execute(select(UserRecord).where(UserRecord.id == user_id))
+        user = res.scalar_one_or_none()
+
+    if not user or not user.is_active:
+        await _close_ws(websocket, WS_CODE_AUTH_REJECTED, "User inactive or not found")
+        return None
+
+    return {"id": user.id, "role": user.role}
+
+
+async def _close_ws(websocket: WebSocket, code: int, reason: str) -> None:
+    """Best-effort close of an unaccepted WebSocket (handshake rejection)."""
+    try:
+        await websocket.close(code=code, reason=reason)
+    except (RuntimeError, WebSocketDisconnect):
+        # Client already gone — nothing to do.
+        pass
 
 
 @router.websocket("/ws/market/stream")
@@ -57,20 +118,31 @@ async def market_feed(websocket: WebSocket, symbol: str):
 
 @router.websocket("/ws/trades")
 async def trade_feed(websocket: WebSocket):
-    """Live trade execution feed.
+    """Live private trade execution feed.
 
-    Every trade executed by the engine is broadcast here in real-time.
+    Authentication is mandatory (``?token=<access JWT>``).  A client receives
+    ONLY the execution events owned by their own tenant — see
+    ``ConnectionManager.broadcast_user``.  Anonymous connections are rejected
+    with close code 4001; malformed/expired/inactive tokens with 4003.
     """
+    user = await authenticate_ws(websocket)
+    if not user:
+        return
+
     channel = "trades"
-    await ws_manager.connect(channel, websocket)
-    logger.debug("WS trade feed opened")
+    if not await ws_manager.connect(
+        channel, websocket, user_id=user["id"], role=user["role"]
+    ):
+        # Per-user connection cap exceeded — socket already rejected (4408).
+        return
+    logger.debug("WS trade feed opened (user=%s)", user["id"])
 
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
         await ws_manager.disconnect(channel, websocket)
-        logger.debug("WS trade feed closed")
+        logger.debug("WS trade feed closed (user=%s)", user["id"])
 
 
 # Backward-compatible aliases → same canonical global stream handler
@@ -84,17 +156,29 @@ router.websocket("/ws/market-data")(global_market_stream)
 
 @router.websocket("/ws/events")
 async def events_feed(websocket: WebSocket):
-    """Lifecycle event feed emitting order_executed, trade_closed, and engine state updates."""
-    channel = "trades"  # Emits all execution and closure lifecycle events
-    await ws_manager.connect(channel, websocket)
-    logger.debug("WS events feed opened")
+    """Private lifecycle event feed (order_executed, trade_closed, engine state).
+
+    Requires the same ``?token=<access JWT>`` as ``/ws/trades`` and is scoped
+    to the authenticated tenant — no cross-tenant lifecycle data is emitted.
+    """
+    user = await authenticate_ws(websocket)
+    if not user:
+        return
+
+    channel = "trades"  # Emits execution and closure lifecycle events, tenant-scoped
+    if not await ws_manager.connect(
+        channel, websocket, user_id=user["id"], role=user["role"]
+    ):
+        # Per-user connection cap exceeded — socket already rejected (4408).
+        return
+    logger.debug("WS events feed opened (user=%s)", user["id"])
 
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
         await ws_manager.disconnect(channel, websocket)
-        logger.debug("WS events feed closed")
+        logger.debug("WS events feed closed (user=%s)", user["id"])
 
 
 @router.websocket("/ws/optionchain/{symbol}")

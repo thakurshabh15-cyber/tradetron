@@ -15,6 +15,7 @@ from app.api.auth import get_current_user
 from app.brokers import (
     AngelOneBroker,
     BinanceBroker,
+    BrokerModeBlockedError,
     SimulatedBroker,
     UpstoxBroker,
     ZerodhaKiteBroker,
@@ -473,7 +474,17 @@ async def link_broker_manual(
             jwt_token=req.access_token,
             totp_key=req.totp_secret,
         )
-        is_valid, msg = await angel.validate_credentials()
+        try:
+            is_valid, msg = await angel.validate_credentials()
+        except BrokerModeBlockedError as exc:
+            # BROKER_MODE safety: real credential validation is a live SmartyAPI
+            # login and must be impossible while BROKER_MODE != live.  Surface
+            # the fail-safe as a clean 400 (same contract as invalid creds).
+            logger.warning("Angel One manual link blocked (BROKER_MODE not live) for user %s: %s", user.id, exc)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Angel One SmartAPI validation failed: {exc}",
+            ) from exc
         if not is_valid:
             logger.warning("Angel One manual connection failed for user %s: %s", user.id, msg)
             raise HTTPException(status_code=400, detail=f"Angel One SmartAPI validation failed: {msg}")

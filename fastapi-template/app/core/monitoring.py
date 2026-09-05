@@ -48,11 +48,23 @@ TELEGRAM_CHAT_ID = settings.telegram_chat_id
 _telegram_configured = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
 
 if _telegram_configured:
-    logger.info("Telegram alert channel configured (bot token: %s...)", TELEGRAM_BOT_TOKEN[:8])
+    logger.info("Telegram alert channel configured")
 else:
     logger.info(
         "Telegram alerts disabled — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env to enable."
     )
+
+
+def _redact_configured_secrets(message: str) -> str:
+    """Strip configured credentials from text bound for logs/alerts.
+
+    Guards against connection URLs or bot tokens leaking into log lines when a
+    notification dispatch fails mid-request.
+    """
+    for secret in (TELEGRAM_BOT_TOKEN, settings.sentry_dsn):
+        if secret:
+            message = message.replace(secret, "<redacted>")
+    return message
 
 
 async def _send_telegram_alert(message: str) -> bool:
@@ -83,7 +95,7 @@ async def _send_telegram_alert(message: str) -> bool:
         logger.warning("aiohttp not installed — Telegram alerts require: pip install aiohttp")
         return False
     except Exception as exc:
-        logger.error("Telegram alert dispatch failed: %s", exc)
+        logger.error("Telegram alert dispatch failed: %s", _redact_configured_secrets(str(exc)))
         return False
 
 

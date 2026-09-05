@@ -102,21 +102,34 @@ class WorkerPool:
                 config.handler(webhook),
                 timeout=route.timeout_seconds
             )
-            
-            # Success
-            await webhook_queue.ack(route.queue_name, entry_id)
-            duration_ms = (asyncio.get_event_loop().time() - start_time) * 1000
-            logger.debug("Processed webhook %s in %.2fms", webhook.envelope.event_id, duration_ms)
-            
         except asyncio.TimeoutError:
             error = f"Handler timeout after {route.timeout_seconds}s"
             logger.error("Webhook %s timeout: %s", webhook.envelope.event_id, error)
             await webhook_queue.nack(route.queue_name, entry_id, webhook, error)
-            
+            return
+
         except Exception as e:
             error = f"{type(e).__name__}: {e}"
             logger.error("Webhook %s processing failed: %s", webhook.envelope.event_id, error)
             await webhook_queue.nack(route.queue_name, entry_id, webhook, error)
+            return
+
+        # Success — the handler completed and its side effects are committed.
+        # Do NOT let an ack failure below fall into a nack path: nack requeues
+        # the event, and requeueing an already-executed webhook would duplicate
+        # its broker/payment side effects.  If ack fails, log it loudly and let
+        # the standard at-least-once PEL redelivery reconcile (or operator
+        # intervention) handle it — never re-run the handler proactively.
+        try:
+            await webhook_queue.ack(route.queue_name, entry_id)
+        except Exception as e:
+            logger.error(
+                "Webhook %s processed successfully but ACK failed (%s); "
+                "entry %s left in PEL for reconciliation",
+                webhook.envelope.event_id, e, entry_id,
+            )
+        duration_ms = (asyncio.get_event_loop().time() - start_time) * 1000
+        logger.debug("Processed webhook %s in %.2fms", webhook.envelope.event_id, duration_ms)
     
     def health_check(self) -> bool:
         return self._running and len(self._tasks) > 0

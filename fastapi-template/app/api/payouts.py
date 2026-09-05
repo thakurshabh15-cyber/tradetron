@@ -127,9 +127,9 @@ async def payout_summary(user: UserRecord = Depends(get_current_user)):
         "creator_share_pct": round(CREATOR_REVENUE_SHARE * 100, 1),
         "platform_fee_pct": round(PLATFORM_REVENUE_SHARE * 100, 1),
         "example": {
-            "subscriber_pays_inr": 1499,
-            "creator_earns_inr": round(1499 * CREATOR_REVENUE_SHARE, 2),
-            "platform_fee_inr": round(1499 * PLATFORM_REVENUE_SHARE, 2),
+            "subscriber_pays_inr": 7999,
+            "creator_earns_inr": round(7999 * CREATOR_REVENUE_SHARE, 2),
+            "platform_fee_inr": round(7999 * PLATFORM_REVENUE_SHARE, 2),
         },
         "note": "Settlement runs monthly to your configured UPI/bank destination after KYC verification.",
     }

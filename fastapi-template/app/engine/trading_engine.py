@@ -371,7 +371,10 @@ class TradingEngine:
                             price=exc.price,
                             mode="PAPER",
                         )
-                    await ws_manager.broadcast("trades", trade_data)
+                    # Builtin SMA executions are system-wide PAPER trades with
+                    # no owning tenant — broadcast_user drops user_id=None so
+                    # they never leak into any private trade stream.
+                    await ws_manager.broadcast_user("trades", trade_data.get("user_id"), trade_data)
 
                 # 3. Evaluate custom user-defined strategies watching this symbol
                 for strat_id, strat in list(self._strategies.items()):
@@ -443,12 +446,13 @@ class TradingEngine:
                 mode=mode,
                 reason=reason,
             )
-            await ws_manager.broadcast("trades", {
+            await ws_manager.broadcast_user("trades", user_id, {
                 "event": "order_rejected",
                 "strategy_id": strategy.get("id"),
                 "symbol": symbol,
                 "reason": reason,
                 "mode": mode,
+                "user_id": user_id,
             })
             return
 
@@ -570,8 +574,8 @@ class TradingEngine:
             mode=mode,
         )
 
-        # ── 6. Broadcast to WebSocket ─────────────────────────────────
-        await ws_manager.broadcast("trades", trade_data)
+        # ── 6. Broadcast to WebSocket (tenant-scoped) ───────────────────
+        await ws_manager.broadcast_user("trades", trade_data.get("user_id"), trade_data)
 
         logger.info(
             "[%s] STRATEGY TRADE EXECUTED: [%s] %s %s %d @ %.2f [broker_id=%s]",

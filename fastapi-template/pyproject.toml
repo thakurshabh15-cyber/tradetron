@@ -18,7 +18,25 @@ dependencies = [
     "aiohttp>=3.10",
     "psutil>=5.9",
     "websockets>=12.0",
+    "redis>=5.0",
+    "alembic>=1.13",
+    "cryptography>=42.0",
+    "prometheus-client>=0.19",
+    "python-json-logger>=2.0.7",
+    # OpenTelemetry — required by app/webhooks/observability (metrics/tracing)
+    "opentelemetry-api>=1.24.0",
+    "opentelemetry-sdk>=1.24.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.24.0",
+    "opentelemetry-instrumentation-fastapi>=0.49b0",
+    "opentelemetry-instrumentation-redis>=0.49b0",
+    "opentelemetry-instrumentation-sqlalchemy>=0.49b0",
 ]
+
+# NOTE (P2-5): this list mirrors requirements.txt.  Keep both in sync —
+# CI installs from requirements.txt, local/uv installs from pyproject.
+# The Zerodha live SDK (kiteconnect) is deliberately NOT declared: it pins a
+# legacy autobahn==19.11.2 that conflicts with modern environments; install it
+# manually only for Zerodha live trading (see DEPLOYMENT.md).
 
 [project.optional-dependencies]
 live = [

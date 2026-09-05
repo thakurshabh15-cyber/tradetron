@@ -11,7 +11,7 @@ import redis.asyncio as redis
 from redis.asyncio import Redis
 
 from app.webhooks.validation.schemas import WebhookEnvelope
-from app.webhooks.routing.router import resolve_route
+from app.webhooks.routing.router import resolve_route, ROUTE_TABLE
 from app.config import settings
 from app.core.logging import get_logger
 
@@ -65,20 +65,22 @@ class WebhookQueue:
         try:
             self._redis = redis.from_url(self.redis_url, decode_responses=True)
             await self._redis.ping()
-            # Create consumer groups for each queue
-            for queue_name in [
-                "webhooks:broker:critical",
-                "webhooks:billing:high", 
-                "webhooks:custom:normal",
-                "webhooks:dlq",  # Dead letter queue
-            ]:
+            # Derive consumer-group queue names from the routing table so
+            # every route declared in ROUTE_TABLE is guaranteed a consumer
+            # group.  The DLQ is always included as well.
+            _routed_queues = {route.queue_name for route in ROUTE_TABLE.values()}
+            _all_queues = sorted(_routed_queues | {"webhooks:dlq"})
+            for queue_name in _all_queues:
                 try:
                     await self._redis.xgroup_create(queue_name, "workers", id="0", mkstream=True)
                 except redis.ResponseError as e:
                     if "BUSYGROUP" not in str(e):
                         raise
             self._initialized = True
-            logger.info("Webhook queue initialized with Redis Streams")
+            logger.info(
+                "Webhook queue initialized with Redis Streams (%d consumer groups)",
+                len(_all_queues),
+            )
         except Exception as e:
             logger.warning("Redis unavailable, running in degraded mode (no queue): %s", e)
             self._initialized = False
@@ -153,11 +155,22 @@ class WebhookQueue:
         if webhook.attempt >= route.max_retries:
             # Send to DLQ
             await self._send_to_dlq(webhook, error)
+            # The delivered-but-failed entry has been superseded by the DLQ
+            # copy above.  Resolve it now: it must not linger in the pending
+            # entries list (PEL) where a Redis XAUTOCLAIM/XCLAIM reclaim would
+            # re-process it from attempt=1 — duplicating the effect, losing the
+            # retry history, and growing the PEL without bound.
+            await self._redis.xack(queue_name, "workers", entry_id)
         else:
             # Requeue with incremented attempt
             webhook.attempt += 1
             webhook.last_error = error
             await self._redis.xadd(queue_name, webhook.to_stream_entry())
+            # Resolve the original pending entry immediately after the retry
+            # copy is durably written — and BEFORE the best-effort metric call
+            # below, so a metric failure can never re-leak the entry into the
+            # PEL and cause a duplicate execution on reclaim.
+            await self._redis.xack(queue_name, "workers", entry_id)
             await self._redis.hincrby("webhook:metrics:retried", queue_name, 1)
     
     async def _send_to_dlq(self, webhook: QueuedWebhook, error: str) -> None:

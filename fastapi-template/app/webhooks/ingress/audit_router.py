@@ -8,7 +8,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, List
 
-from app.db.session import get_db, engine, Base
+from app.db.session import ensure_tables_local_dev, get_db
 from app.models.audit import TradeAuditRecord
 from app.core.logging import get_logger
 
@@ -37,9 +37,8 @@ async def get_audit_logs(
     Returns:
         List of audit log entries ordered by timestamp descending
     """
-    # Ensure tables exist on the current engine instance before querying
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # Ensure tables exist (dev/test only — production schema is Alembic-owned)
+    await ensure_tables_local_dev()
     
     try:
         stmt = select(TradeAuditRecord).order_by(desc(TradeAuditRecord.timestamp)).limit(limit)

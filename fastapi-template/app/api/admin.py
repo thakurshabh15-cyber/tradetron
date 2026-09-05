@@ -611,8 +611,8 @@ async def kill_switch_user(
         details={"reason": req.reason, "target_user_id": user_id, "strategies_paused": paused_count},
     )
 
-    # Broadcast halt event to user's WebSocket
-    await ws_manager.broadcast("trades", {
+    # Broadcast halt event to ONLY the targeted user's WebSocket
+    await ws_manager.broadcast_user("trades", user_id, {
         "event": "USER_TRADING_HALT",
         "user_id": user_id,
         "message": f"Admin halt: {req.reason}",
@@ -645,7 +645,8 @@ async def kill_switch_platform(
         details={"reason": req.reason, "admin_email": admin.email},
     )
 
-    await ws_manager.broadcast("trades", {
+    # Admin-only operational event must not leak to ordinary tenants
+    await ws_manager.broadcast_admins("trades", {
         "event": "ADMIN_PLATFORM_HALT",
         "message": f"PLATFORM TRADING HALT: {req.reason}",
         "status": "HALTED",

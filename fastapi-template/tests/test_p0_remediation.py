@@ -118,10 +118,45 @@ def test_development_boots_without_any_secrets():
     assert "localhost" in s.effective_redis_url
 
 
+def _run_config_subprocess(code: str, env_overrides: dict[str, str]):
+    """Run a config-boot probe with deterministic, UTF-8-safe stdio capture.
+
+    Windows regression: under ``python -X utf8`` the parent pytest process
+    decodes subprocess output as UTF-8, but the child process (which does not
+    inherit the ``-X utf8`` flag) emits locale-encoded bytes — e.g. the em dash
+    in the production Redis diagnostic renders as a single ``0x97`` byte on
+    cp125x locales, crashing the parent with ``UnicodeDecodeError`` instead of
+    failing the real assertion.  The harness fixes BOTH directions of that
+    mismatch:
+
+    * the child always runs in UTF-8 mode (``-X utf8`` + ``PYTHONUTF8=1``), so
+      its own stderr/stdout encoding is deterministic on every OS/CI image;
+    * the parent explicitly decodes as UTF-8 with ``errors="replace"`` so a
+      stray non-UTF-8 byte can never crash collection of the diagnostics.
+
+    Subprocess failures are preserved for the caller to assert on
+    (``returncode`` is never hidden or rewritten).
+    """
+    env = {
+        **os.environ,
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8",
+        **env_overrides,
+    }
+    return subprocess.run(
+        [sys.executable, "-X", "utf8", "-c", code],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+
+
 def test_production_boot_refuses_missing_redis_in_subprocess():
     """The real module-level ``settings = Settings()`` must die on boot."""
     env = {
-        **os.environ,
         "ENVIRONMENT": "production",
         "JWT_SECRET": "j" * 40,
         "DATABASE_URL": "postgresql://" + "u:test_password" + "@db.example.internal/tradetron",
@@ -132,10 +167,7 @@ def test_production_boot_refuses_missing_redis_in_subprocess():
         # fixture builds an otherwise-complete production boot.
         "WEBHOOK_LOCAL_MODE": "false",
     }
-    result = subprocess.run(
-        [sys.executable, "-c", "import app.config"],
-        cwd=REPO_ROOT, env=env, capture_output=True, text=True,
-    )
+    result = _run_config_subprocess("import app.config", env)
     assert result.returncode != 0
     combined = result.stdout + result.stderr
     assert "UPSTASH_REDIS_URL" in combined or "REDIS_URL" in combined
@@ -152,13 +184,44 @@ def test_production_boot_succeeds_with_full_config_in_subprocess():
         "BROKER_MODE": "simulated",
         "WEBHOOK_LOCAL_MODE": "false",
     }
-    result = subprocess.run(
-        [sys.executable, "-c",
-         "import app.config; print(app.config.settings.environment)"],
-        cwd=REPO_ROOT, env=env, capture_output=True, text=True,
+    result = _run_config_subprocess(
+        "import app.config; print(app.config.settings.environment)",
+        env,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout.strip() == "production"
+
+
+def test_config_subprocess_capture_is_deterministic_utf8():
+    """Regression for the Windows ``-X utf8`` UnicodeDecodeError.
+
+    The child writes the em dash as raw cp1253 byte ``0x97`` — exactly the
+    output shape that previously crashed the parent under Python UTF-8 mode —
+    alongside the real production fail-fast diagnostic.  The harness must
+    decode it deterministically, still surface the Redis diagnostic, and keep
+    the production boot-failure behavior intact.
+    """
+    code = (
+        "import sys;"
+        "sys.stderr.buffer.write('\\u2014'.encode('cp1253'));"
+        "sys.stderr.buffer.flush();"
+        "import app.config"
+    )
+    env = {
+        "ENVIRONMENT": "production",
+        "JWT_SECRET": "j" * 40,
+        "DATABASE_URL": "postgresql://" + "u:test_password" + "@db.example.internal/tradetron",
+        "UPSTASH_REDIS_URL": "",
+        "REDIS_URL": "",
+        "BROKER_MODE": "simulated",
+        "WEBHOOK_LOCAL_MODE": "false",
+    }
+    result = _run_config_subprocess(code, env)
+    assert result.returncode != 0
+    combined = result.stdout + result.stderr
+    assert "UPSTASH_REDIS_URL" in combined or "REDIS_URL" in combined
+    # The stray non-UTF-8 byte was replaced with U+FFFD instead of crashing.
+    assert "\ufffd" in combined
 
 
 # ─────────────────────────────────────────────────────────────────────────────

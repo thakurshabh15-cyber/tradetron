@@ -44,7 +44,7 @@ async def _handle_payment_captured(db: AsyncSession, payload: dict) -> None:
     plan_name = (notes.get("plan_name") or "PRO").upper()
     billing_cycle = (notes.get("billing_cycle") or "MONTHLY").upper()
     amount_paise = payment_entity.get("amount", 0)
-    amount = amount_paise / 100.0 if amount_paise else 1999.0
+    amount = amount_paise / 100.0 if amount_paise else 7999.0  # PRO monthly default (canonical)
     
     if not user_id:
         raise ValueError("Missing user_id in payment notes")
@@ -200,7 +200,7 @@ async def _handle_subscription_charged(db: AsyncSession, payload: dict) -> None:
     plan_name = (notes.get("plan_name") or "PRO").upper()
     billing_cycle = (notes.get("billing_cycle") or "MONTHLY").upper()
     amount_paise = subscription_entity.get("amount", 0)
-    amount = amount_paise / 100.0 if amount_paise else 1999.0
+    amount = amount_paise / 100.0 if amount_paise else 7999.0  # PRO monthly default (canonical)
     
     if not user_id:
         logger.warning("Subscription charged but no user_id: %s", sub_id)

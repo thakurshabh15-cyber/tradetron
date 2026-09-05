@@ -20,6 +20,38 @@ def set_testing_environment():
     settings.environment = "production"
 
 
+@pytest.fixture(autouse=True, scope="session")
+def mock_razorpay_gateway():
+    """Force the Razorpay gateway into deterministic sandbox mode for ALL tests.
+
+    The gateway's live-mode heuristic only treats keys prefixed
+    ``rzp_test_tradetron_mock`` as mock; real/staging test keys
+    (``rzp_test_*``/``rzp_live_*``) from the environment would otherwise make
+    ``create_order`` dial the real Razorpay API during test runs (failing and
+    falling back to a sandbox order, but still an external network call).
+    Tests must never contact Razorpay production.
+    """
+    from app.core import payment_gateway as _pg
+
+    razorpay_gateway = _pg.razorpay_gateway
+    razorpay_gateway.key_id = "rzp_test_tradetron_mock_key"
+    razorpay_gateway.key_secret = "rzp_test_tradetron_mock_secret"
+    # Matches the webhook HMAC secret the billing test suite already assumes
+    # (rzp_test_tradethrone_webhook_secret); keeps webhook signatures verifiable.
+    razorpay_gateway.webhook_secret = "rzp_test_tradethrone_webhook_secret"
+    razorpay_gateway._is_live = False
+    yield
+    # Restore environment-derived configuration for any later non-test use
+    razorpay_gateway.key_id = _pg.settings.razorpay_key_id
+    razorpay_gateway.key_secret = _pg.settings.razorpay_key_secret
+    razorpay_gateway.webhook_secret = _pg.settings.razorpay_webhook_secret
+    razorpay_gateway._is_live = bool(
+        razorpay_gateway.key_id
+        and razorpay_gateway.key_secret
+        and not razorpay_gateway.key_id.startswith("rzp_test_tradetron_mock")
+    )
+
+
 @pytest.fixture(autouse=True, scope="function")
 def reset_broker_mode():
     """Ensure no test leaks LIVE broker mode into others.

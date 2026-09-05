@@ -78,6 +78,14 @@ class BinanceBroker(BrokerClient):
                 "Set BINANCE_API_KEY and BINANCE_API_SECRET in .env"
             )
 
+        # P2-10 defense-in-depth: every real Binance network operation — order
+        # placement, cancel, and account reads — is blocked while
+        # ``BROKER_MODE != live``.  The check sits on the network boundary so
+        # no subclass or future call path can bypass it; connect() and
+        # place_order() both funnel through here.
+        from app.brokers import assert_live_dispatch_allowed
+        assert_live_dispatch_allowed()
+
         session = await self._get_session()
         url = f"{self.base_url}{path}"
         params = params or {}

@@ -36,28 +36,31 @@ const resolveApiBase = () => {
 
 export const API_BASE = resolveApiBase();
 
-export function getWsUrl(path = "") {
+export function getWsUrl(path = "", token = null) {
   const cleanPath = path.startsWith("/") ? path : `/${path}`;
+  // Access tokens are appended ONLY for private WS endpoints by the caller
+  // (useWebSocket). Public market feeds never receive a token.
+  const query = token ? `?token=${encodeURIComponent(token)}` : "";
 
   if (rawWsUrl !== undefined && rawWsUrl !== "") {
     const base = rawWsUrl.replace(/\/$/, "");
-    return `${base}${cleanPath}`;
+    return `${base}${cleanPath}${query}`;
   }
 
   // Derive WS URL from API_BASE if it's an absolute URL
   if (API_BASE && API_BASE.startsWith("http")) {
     const wsBase = API_BASE.replace(/^http/, "ws").replace(/\/$/, "");
-    return `${wsBase}${cleanPath}`;
+    return `${wsBase}${cleanPath}${query}`;
   }
 
   if (typeof window !== "undefined") {
     if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
-      return `ws://127.0.0.1:8080${cleanPath}`;
+      return `ws://127.0.0.1:8080${cleanPath}${query}`;
     }
-    return `${PROD_WS_URL}${cleanPath}`;
+    return `${PROD_WS_URL}${cleanPath}${query}`;
   }
 
-  return `${PROD_WS_URL}${cleanPath}`;
+  return `${PROD_WS_URL}${cleanPath}${query}`;
 }
 
 export const WS_BASE = getWsUrl("");

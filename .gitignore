@@ -55,3 +55,16 @@ Thumbs.db
 # Dev / third-party folders
 agency-agents-main/
 OmniRoute-release*/
+# Scratch / local-scan artifacts (keep out of VCS until operator cleanup)
+_scan*.txt
+_scan*.log
+_deployed_*.js
+_ws_verify.py
+_prev_env_prod.txt
+_ci_*.db
+*.pid
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/

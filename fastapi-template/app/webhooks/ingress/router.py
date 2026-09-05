@@ -20,7 +20,7 @@ from app.webhooks.observability.metrics import (
 )
 # Importing the handler registers the TradeThrone signal worker pool
 from app.webhooks.handlers.tradethrone_signal import handle_tradethrone_signal  # noqa: F401
-from app.db.session import get_db, engine, Base
+from app.db.session import ensure_tables_local_dev, get_db
 from app.models.audit import TradeAuditRecord
 from app.brokers.angelone import place_tradethrone_order as place_tradethrone_order_angelone
 from app.core.logging import get_logger
@@ -74,9 +74,8 @@ async def _handle_local_mode(
         # Execute order placement for validated TradeThrone signals (Angel One)
         execution_result = place_tradethrone_order_angelone(validated_data)
 
-        # Ensure tables exist on the current engine instance before audit logging
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+        # Ensure tables exist (dev/test only — production schema is Alembic-owned)
+        await ensure_tables_local_dev()
 
         # Create TradeAuditRecord with explicit database session
         try:
@@ -231,9 +230,8 @@ async def receive_webhook(
             # Execute order placement for validated TradeThrone signals (Angel One)
             execution_result = place_tradethrone_order_angelone(validated_data)
             
-            # Ensure tables exist on the current engine instance before audit logging
-            async with engine.begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)
+            # Ensure tables exist (dev/test only — production schema is Alembic-owned)
+            await ensure_tables_local_dev()
             
             # Create TradeAuditRecord with explicit database session
             try:

@@ -11,7 +11,7 @@ from app.brokers.simulated import SimulatedBroker
 from app.models.trading import OrderRecord, StrategyRecord, TradeRecord
 from app.models.broker_account import BrokerAccountRecord
 from app.db.session import init_db, SessionLocal
-from sqlalchemy import select
+from sqlalchemy import desc, select
 
 
 @pytest.mark.asyncio
@@ -161,6 +161,7 @@ async def test_live_order_execution_and_margin_rejection():
         "enabled": True,
         "execution_mode": "LIVE",
         "broker_account_id": b_id,
+        "user_id": user_rec.id,
         "capital_allocated": 100000.0,
     }
 
@@ -172,12 +173,16 @@ async def test_live_order_execution_and_margin_rejection():
 
         # Verify order was rejected in DB
         async with SessionLocal() as session:
-            stmt = select(OrderRecord).where(
-                OrderRecord.strategy_id == "strat-live-test-01",
-                OrderRecord.status == "REJECTED",
+            stmt = (
+                select(OrderRecord)
+                .where(
+                    OrderRecord.strategy_id == "strat-live-test-01",
+                    OrderRecord.status == "REJECTED",
+                )
+                .order_by(desc(OrderRecord.created_at))
             )
             res = await session.execute(stmt)
-            rejected_order = res.scalars().first()
+            rejected_order = res.scalars().all()[0]
             assert rejected_order is not None
             assert rejected_order.mode == "LIVE"
             assert "Insufficient margin" in rejected_order.error_message
@@ -197,12 +202,16 @@ async def test_live_order_execution_and_margin_rejection():
 
         # Verify filled order with real broker order ID in DB
         async with SessionLocal() as session:
-            stmt = select(OrderRecord).where(
-                OrderRecord.strategy_id == "strat-live-test-01",
-                OrderRecord.status == "FILLED",
+            stmt = (
+                select(OrderRecord)
+                .where(
+                    OrderRecord.strategy_id == "strat-live-test-01",
+                    OrderRecord.status == "FILLED",
+                )
+                .order_by(desc(OrderRecord.created_at))
             )
             res = await session.execute(stmt)
-            filled_order = res.scalars().first()
+            filled_order = res.scalars().all()[0]
             assert filled_order is not None
             assert filled_order.mode == "LIVE"
             assert filled_order.broker_order_id == "240821000998877"

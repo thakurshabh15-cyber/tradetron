@@ -49,8 +49,8 @@ async def test_billing_and_payments_suite():
         assert order_res.status_code == 200
         order_data = order_res.json()
         assert "order_id" in order_data
-        assert order_data["amount_rupees"] == 1999.0
-        assert order_data["amount"] == 199900  # paise
+        assert order_data["amount_rupees"] == 7999.0
+        assert order_data["amount"] == 799900  # paise
         assert order_data["currency"] == "INR"
         order_id = order_data["order_id"]
 
@@ -98,7 +98,7 @@ async def test_billing_and_payments_suite():
         assert len(invoices) >= 1
         target_invoice = invoices[0]
         assert target_invoice["invoice_number"] == invoice_number
-        assert target_invoice["total_amount"] == 1999.0
+        assert target_invoice["total_amount"] == 7999.0
 
         download_res = await client.get(f"/api/billing/invoices/{target_invoice['id']}/download", headers=headers)
         assert download_res.status_code == 200
@@ -123,7 +123,7 @@ async def test_billing_and_payments_suite():
                         "id": "pay_webhook_live_test_7788",
                         "order_id": order_id,
                         "status": "captured",
-                        "amount": 199900,
+                        "amount": 799900,
                         "currency": "INR",
                         "notes": {
                             "user_id": user_id_str,

@@ -93,13 +93,32 @@ class UpstoxBroker(BrokerClient):
         }
 
     async def connect(self) -> None:
-        """Verify Upstox session validity."""
+        """Verify Upstox session validity.
+
+        BROKER_MODE safety: real Upstox reads and order mutations (margins,
+        holdings, positions, modify/cancel/status) all funnel through
+        ``connect()`` before making HTTP calls to ``api.upstox.com``.  Only
+        ``place_order`` carries its own dispatch gate, so ``connect()`` is the
+        single choke point that blocks all other live Upstox network work while
+        ``BROKER_MODE != live`` — a simulated-mode deployment can never touch
+        the Upstox API through class-level calls.
+        """
+        from app.brokers import assert_live_broker_connect_allowed
+        assert_live_broker_connect_allowed()
         if not self.access_token:
             raise RuntimeError("Upstox access_token is missing. Complete OAuth login.")
         self._is_connected = True
 
     async def place_order(self, order: OrderRequest) -> dict[str, Any]:
-        """Place an order via Upstox v2 API."""
+        """Place an order via Upstox v2 API.
+
+        P2-10 defense-in-depth: the class-level method is gated itself, so a
+        real order can never reach Upstox while ``BROKER_MODE != live`` — even
+        if called directly, bypassing ``OrderManager`` / the API layer.
+        The gate fires before any network operation.
+        """
+        from app.brokers import assert_live_dispatch_allowed
+        assert_live_dispatch_allowed()
         await self.connect()
         url = f"{self.BASE_URL}/order/place"
         payload = {

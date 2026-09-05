@@ -1,10 +1,28 @@
 """Broker integrations and adapter factory.
 
-Includes a PHASE-3 SAFETY GUARD: real (non-simulated) broker order dispatch is
-hard-blocked unless ``BROKER_MODE=live`` is set.  Every LIVE order-dispatch
-path (``/api/trades/order``, DMA, position close, and the strategy engine)
-calls :func:`assert_live_dispatch_allowed` before touching a broker, so a
-connected broker can never receive a real order by accident in staging/dev.
+SAFETY GUARD (defense-in-depth): real (non-simulated) broker order dispatch is
+hard-blocked unless ``BROKER_MODE=live`` is set.
+
+The guard is enforced at TWO layers:
+
+1. **Call-path layer** — every LIVE order-dispatch path (``/api/trades/order``,
+   DMA, position close, the strategy engine, and the webhook handler path via
+   the engine's startup broker) calls :func:`assert_live_dispatch_allowed`
+   before touching a broker.
+
+2. **Adapter layer (P2-10)** — every real-broker adapters' own dispatch entry
+   point also calls :func:`assert_live_dispatch_allowed`: ``place_order`` on
+   :class:`AngelOneBroker`, :class:`ZerodhaKiteBroker`, :class:`UpstoxBroker`,
+   and the network boundary (``_api_request``) on :class:`BinanceBroker`.
+   A connected broker can therefore never receive a real order — even if a
+   class-level method is invoked directly, bypassing ``OrderManager`` and the
+   API layer.
+
+3. **Connection layer** — real broker ``connect()`` (the login/session path on
+   :class:`AngelOneBroker` and :class:`ZerodhaKiteBroker`) is gated by
+   :func:`assert_live_broker_connect_allowed`, so a simulated-mode deployment
+   can never establish a live broker session from startup, portfolio reads, or
+   the background session-renewal engine.
 """
 
 from __future__ import annotations
@@ -55,6 +73,23 @@ def assert_live_dispatch_allowed() -> None:
         )
 
 
+def assert_live_broker_connect_allowed() -> None:
+    """Fail-fast guard for LIVE broker connectivity (login / session setup).
+
+    Real broker ``connect()`` establishes or validates a live session (Angel
+    One SmartAPI ``generateSession``, Zerodha ``profile`` validation) — a
+    network operation against real-money brokers.  It is therefore hard-blocked
+    unless the deployment is explicitly ``BROKER_MODE=live``, the same
+    invariant that gates order dispatch.  Raises
+    :class:`BrokerModeBlockedError` before any SDK/network work.
+    """
+    if not live_dispatch_allowed():
+        raise BrokerModeBlockedError(
+            "LIVE broker connection blocked: BROKER_MODE is not 'live'. "
+            "Set BROKER_MODE=live explicitly to allow real broker connectivity."
+        )
+
+
 def get_broker_adapter(broker_rec: Optional[BrokerAccountRecord] = None) -> BrokerClient:
     """Instantiate appropriate broker adapter with decrypted credentials from BrokerAccountRecord."""
     if not broker_rec:
@@ -97,6 +132,7 @@ __all__ = [
     "SimulatedBroker",
     "UpstoxBroker",
     "ZerodhaKiteBroker",
+    "assert_live_broker_connect_allowed",
     "assert_live_dispatch_allowed",
     "get_broker_adapter",
     "live_dispatch_allowed",

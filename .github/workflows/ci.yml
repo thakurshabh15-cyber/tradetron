@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  backend:
+    name: Backend (pytest + pip check + alembic drift + secret scan)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: fastapi-template
+    env:
+      BROKER_MODE: simulated
+      ENVIRONMENT: testing
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e ".[dev]"
+
+      - name: pip check (declared dependency conflicts)
+        run: python -m pip check
+
+      - name: Backend test suite (BROKER_MODE=simulated)
+        run: python -m pytest -q --no-header
+
+      - name: Alembic drift guard (isolated temp SQLite)
+        run: python scripts/ci_alembic_check.py
+
+      - name: Secret scan (high-precision credential patterns)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -rniE \
+            'sk_live_[A-Za-z0-9]{10,}|rzp_live_[A-Za-z0-9]{10,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN (RSA|OPENSSH|EC) PRIVATE KEY-----' \
+            app tests scripts 2>/dev/null; then
+            echo "::error::Credential-like pattern detected in source. Rotate and remove the secret before merging."
+            exit 1
+          fi
+          echo "No credential patterns found."
+
+  frontend:
+    name: Frontend (Vite production build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: fastapi-template/client
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: fastapi-template/client/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Production build
+        run: npm run build

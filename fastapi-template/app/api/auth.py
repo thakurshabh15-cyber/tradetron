@@ -114,6 +114,35 @@ async def get_current_user(
     return user
 
 
+async def get_optional_current_user(
+    authorization: str | None = Header(None),
+    db: AsyncSession = Depends(get_db),
+) -> UserRecord | None:
+    """Lenient auth dependency — unlike ``get_current_user`` it returns ``None``
+    for missing/invalid/inactive tokens instead of raising 401.
+
+    Used by read-only endpoints that serve a scrubbed public view to anonymous
+    callers (e.g. the guest trade tape ``GET /api/trades``) while still
+    returning the caller's private records once a valid bearer token is
+    present.  Identity is always server-derived from the token's ``sub`` — a
+    client-supplied ``user_id`` is never accepted or trusted.
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    token = authorization.split(" ", 1)[1]
+    payload = decode_token(token)
+    if not payload or payload.get("type") != "access":
+        return None
+
+    user_id = payload.get("sub")
+    stmt = select(UserRecord).where(UserRecord.id == user_id)
+    res = await db.execute(stmt)
+    user = res.scalar_one_or_none()
+    if not user or not user.is_active:
+        return None
+    return user
+
+
 # ── SIGNUP / REGISTRATION ────────────────────────────────────────────────────
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 async def register(

@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.brokers import live_dispatch_allowed
 from app.core.logging import get_logger
 from app.db.session import SessionLocal
 from app.models.broker_account import BrokerAccountRecord, BrokerSessionLogRecord
@@ -135,6 +136,14 @@ class BrokerSessionRenewalEngine:
                         mock_jwt = f"smartapi_jwt_{int(time.time())}_{uuid.uuid4().hex[:6]}"
                         acc.set_access_token(mock_jwt)
                         log_message = "Angel One SmartAPI session renewed (testing mode - mock token)."
+                    elif not live_dispatch_allowed():
+                        # BROKER_MODE safety: a real SmartAPI login is live broker
+                        # connectivity. While the deployment is not in live mode the
+                        # startup/daily session-renewal engine must NEVER perform
+                        # one — skip cleanly without touching the network or the
+                        # stored credentials.
+                        new_status = "SUCCESS"
+                        log_message = "Angel One session renewal skipped: BROKER_MODE is not 'live'."
                     elif totp_secret:
                         try:
                             clean_totp = totp_secret.strip()

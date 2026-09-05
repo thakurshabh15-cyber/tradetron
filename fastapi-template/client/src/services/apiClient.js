@@ -9,6 +9,57 @@
 import { API_BASE } from "../config";
 export { API_BASE };
 
+// ── P2-9: resilience helpers ─────────────────────────────────────────────
+// Hard timeout for every request so a hung backend can never freeze the UI.
+const DEFAULT_TIMEOUT_MS = 15_000;
+// Bounded retries for idempotent GETs only (never re-issue non-GET requests).
+const MAX_RETRIES = 2;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function shouldRetry(status) {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+/**
+ * fetch with a hard timeout plus bounded exponential-backoff retries.
+ *
+ * Retries happen ONLY for idempotent GET requests and only on network
+ * failures, timeouts, or transient server statuses (408/429/5xx); Jitter is
+ * added so concurrent refreshes don't stampede the backend.
+ */
+async function fetchWithResilience(url, options = {}) {
+  const method = (options.method || "GET").toUpperCase();
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const maxRetries = method === "GET" ? (options.maxRetries ?? MAX_RETRIES) : 0;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let res;
+    try {
+      res = await fetch(url, { ...options, signal: controller.signal });
+    } catch (err) {
+      clearTimeout(timer);
+      if (err.name === "AbortError") throw err; // timeout is final
+      if (attempt < maxRetries) {
+        await sleep(250 * 2 ** attempt + Math.random() * 150);
+        continue;
+      }
+      throw err;
+    }
+    clearTimeout(timer);
+    if (shouldRetry(res.status) && attempt < maxRetries) {
+      await sleep(250 * 2 ** attempt + Math.random() * 150);
+      continue;
+    }
+    return res;
+  }
+  throw new Error("unreachable");
+}
+
 let isRefreshing = false;
 let refreshSubscribers = [];
 
@@ -65,7 +116,7 @@ export async function logoutUser() {
   const refreshToken = getRefreshToken();
   const accessToken = getAccessToken();
   try {
-    await fetch(`${API_BASE}/api/auth/logout`, {
+    await fetchWithResilience(`${API_BASE}/api/auth/logout`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -91,7 +142,7 @@ export async function refreshAccessToken() {
   }
 
   try {
-    const res = await fetch(`${API_BASE}/api/auth/refresh`, {
+    const res = await fetchWithResilience(`${API_BASE}/api/auth/refresh`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ refresh_token: refreshToken }),
@@ -125,7 +176,7 @@ export async function publicFetch(url, options = {}) {
   if (!headers["Content-Type"] && !(options.body instanceof FormData)) {
     headers["Content-Type"] = "application/json";
   }
-  const res = await fetch(fullUrl, { ...options, headers });
+  const res = await fetchWithResilience(fullUrl, { ...options, headers });
   if (res.status === 401 || res.status === 403) return null;
   return res;
 }
@@ -145,7 +196,7 @@ export async function authFetch(url, options = {}) {
     headers["Content-Type"] = "application/json";
   }
 
-  let res = await fetch(fullUrl, { ...options, headers });
+  let res = await fetchWithResilience(fullUrl, { ...options, headers });
 
   // If 401 Unauthorized, try refreshing access token
   if (res.status === 401 && getRefreshToken()) {
@@ -168,7 +219,7 @@ export async function authFetch(url, options = {}) {
           ...headers,
           Authorization: `Bearer ${newToken}`,
         };
-        const retryRes = await fetch(fullUrl, { ...options, headers: retryHeaders });
+        const retryRes = await fetchWithResilience(fullUrl, { ...options, headers: retryHeaders });
         resolve(retryRes);
       });
     });

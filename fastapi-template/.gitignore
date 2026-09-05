@@ -44,3 +44,20 @@ celery_results.db
 
 # Separate release project (not part of tradetron)
 OmniRoute-release*/
+# P2-7 tightening
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.log
+*.pid
+.python-version
+fastapi.txt
+_prev_env_prod.txt
+_ci_*.db
+_alembic_*.db
+
+# Node local env (build-time overrides only)
+client/.env.local
+client/.env.*.local
+client/npm-debug.log*
