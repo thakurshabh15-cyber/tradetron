@@ -280,6 +280,7 @@ This is the strongest area of the codebase and a model to follow.
 | P1 | No local `.env` → cannot boot | Scaffold local `.env` from `.env.example` | ⏳ Blocked — awaiting approval |
 | P1 | `readyz` fails / cache mandatory but unset | Provision `UPSTASH_REDIS_URL` on Render | ⏳ Blocked — needs infra |
 | P1 | Frontend points at dead host | Realign prod URL after backend restart | ⏳ Blocked — needs backend up |
+| P1 | Unlinking broker account with OPEN LIVE positions books fabricated closes | Guard unlink (409 when OPEN positions reference the account) + fail-closed close (503 when a LIVE position's broker is unresolvable) + 4 regression tests | ✅ Fixed — §14 |
 | P2 | Multi-worker rate limiting, no CDN | Introduce managed Redis; tighten CORS | Backlog |
 | P2 | No CI / secret scanning | Add pipeline + secret scanner | Backlog |
 
@@ -287,6 +288,36 @@ This is the strongest area of the codebase and a model to follow.
 **Four sections need work but have a solid foundation:** §2 Auth, §6 Observability, §9 Webhooks, §10 Networking.
 **Six sections block production:** §1 Secrets, §3 Dependencies, §4 Config, §5 Deployment, §12 Frontend, §13 Release/Testing.
 
+---
+
+## Section 14 — Broker Account Lifecycle & LIVE Position Integrity 🟢 HEALTHY (post-fix)
+
+> Added 2026-09-06 as the resolution record for the P1 financial-correctness
+> fix: "Unlinking a broker account with OPEN LIVE positions books fabricated
+> closes". Full **447-test suite green** after the fix.
+
+### Finding
+
+- **Deleting a broker connection that still routes an OPEN LIVE position leaves real exchange exposure with no resolvable broker routing.** `unlink_broker_account` hard-deleted the `BrokerAccountRecord` unconditionally. With SQLite (FKs unenforced), OPEN `positions.broker_account_id` values became **dangling**; with PostgreSQL (`ondelete=SET NULL`) they were **NULLed**. Either way, `close_position` could no longer dispatch the real closing order.
+- **The close path then *silently fabricated* the close:** the LIVE broker-dispatch block was gated on `pos.broker_account_id` truthiness and skipped entirely when the id was NULL/dangling, so the endpoint proceeded to flip the position to `CLOSED`, write a `TradeRecord`, and book `realized_pnl` — while the real position stayed OPEN on the exchange. Booking PnL without squaring off real exposure is a **P1 financial-correctness defect**.
+- Default behavior confirmed in repro: guarded-mode (SQLite) delete + close "succeeded" with fabricated PnL; FK-forced (simulated PG) delete + close behaved identically via the NULLed reference.
+
+### Remediation (defense-in-depth, both layers shipped)
+
+1. **Prevention — refuse the unlink (`app/api/brokers.py`, `unlink_broker_account`):** before deleting, query for any `PositionRecord` with `status == "OPEN"` referencing the account; if found, return **409** with a message naming the open symbol/qty and instructing the operator to close/settle it first. The broker row is untouched on rejection.
+2. **Hardening — fail-closed close (`app/api/trades.py`, `close_position`):** a LIVE position must now **resolve** its `broker_account_id` to a real `BrokerAccountRecord` before it may be closed. If the id is missing or the record no longer exists (legacy orphans, dangling/NULLed rows from before the guard), the endpoint raises **503** with an operator guidance message instead of booking PnL; the position stays `OPEN` and `realized_pnl` stays `0.0`.
+3. **Regression tests (`tests/test_broker_unlink_live_position_safety.py`, 4 tests):**
+   - `test_unlink_blocked_with_open_position` — DELETE with an OPEN position → 409, broker row survives, position stays OPEN.
+   - `test_unlink_succeeds_for_closed_position_only` — DELETE after the position is CLOSED → 200, row removed.
+   - `test_live_close_with_missing_broker_never_fabricates_close` — LIVE OPEN position with a deleted broker row → 503, position NOT flipped, zero PnL booked.
+   - `test_live_close_happy_path_with_resolvable_broker` — LIVE OPEN position with a resolvable broker + mocked adapter → 200/CLOSED, PnL booked (legitimate path preserved).
+
+### Verification
+
+- `pytest tests/test_broker_unlink_live_position_safety.py` → **4 passed**.
+- Related safety suites: `test_copy_trading_close_live_safety.py`, `test_p3a_position_ownership.py` → **13 passed** (no regressions).
+- Position-close lifecycle: `test_live_vs_paper_execution.py`, `test_copy_trading.py` → **5 passed** (all closes in these suites are PAPER-mode; the LIVE guard does not affect them).
+- **Full suite:** `pytest tests/` → **447 passed, 0 failed** (45 pre-existing warnings only).
 ---
 
 *Full report generated from a read-only discovery audit of the working directory at `c:\Users\HP\Desktop\tradetron\fastapi-template\` and `agency-agents-main\`. No source files were modified during this audit.*

@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select, func, desc
+from sqlalchemy import desc, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user, get_optional_current_user
@@ -124,8 +124,10 @@ from datetime import datetime, timezone
 import uuid
 from pydantic import BaseModel, Field
 from typing import Optional, Literal
-from fastapi import HTTPException
+from fastapi import Header, HTTPException
 import asyncio
+import re
+from sqlalchemy.exc import IntegrityError
 from app.brokers import BrokerModeBlockedError, get_broker_adapter, assert_live_dispatch_allowed
 from app.models.trading import OrderRecord, PositionRecord
 from app.models.broker_account import BrokerAccountRecord
@@ -172,6 +174,273 @@ class ManualOrderRequest(BaseModel):
     order_type: Literal["MARKET", "LIMIT"] = "MARKET"
     price: Optional[float] = None
     mode: Literal["PAPER", "LIVE"] = "PAPER"
+    client_order_id: Optional[str] = Field(
+        None,
+        min_length=8,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9._-]{8,64}$",
+        description=(
+            "Optional caller-supplied idempotency key. When provided the order "
+            "is durably claimed (PENDING) before any broker dispatch; retries "
+            "with the same key replay the stored result instead of executing "
+            "again. Unique per authenticated user."
+        ),
+    )
+
+
+async def _resolve_idempotency_key(
+    body_key: Optional[str],
+    header_key: Optional[str],
+) -> Optional[str]:
+    """Normalize and validate an optional client idempotency key.
+
+    Accepts either the JSON body ``client_order_id`` or the ``Idempotency-Key``
+    request header; when both are supplied they must agree. A request with no
+    key preserves the legacy non-idempotent execution contract.
+    """
+    body_key = (body_key or "").strip()
+    header_key = (header_key or "").strip()
+    if body_key and header_key and body_key != header_key:
+        raise HTTPException(
+            status_code=422,
+            detail="Idempotency mismatch: body client_order_id and Idempotency-Key header differ",
+        )
+    key = body_key or header_key or None
+    if key is not None and not re.fullmatch(r"^[A-Za-z0-9._-]{8,64}$", key):
+        raise HTTPException(
+            status_code=422,
+            detail="Idempotency key must be 8-64 characters of [A-Za-z0-9._-]",
+        )
+    return key
+
+
+async def _claim_or_replay_order(
+    db: AsyncSession,
+    *,
+    user_id: str,
+    client_order_id: str,
+    symbol: str,
+    side: str,
+    quantity: int,
+    order_type: str,
+    price: float | None,
+    mode: str,
+    broker_account_id: str | None = None,
+    strategy_id: str | None = None,
+) -> tuple[str, OrderRecord]:
+    """Claim an idempotency key durably or reap a previous result.
+
+    The uniqueness invariant is enforced by the ``ux_orders_user_client_order_id``
+    partial unique index (per authenticated user), so two concurrent identical
+    requests can never both claim the same key.
+
+    Returns ``(outcome, order)``:
+
+    ``claimed`` — a durable PENDING ``OrderRecord`` was committed BEFORE any
+    broker dispatch.  The caller performs the dispatch and finalizes the row as
+    FILLED or REJECTED.
+
+    ``replay`` — a previously FILLED order exists for this user + key.  The
+    caller must return the stored result and perform NO new dispatch or side
+    effect.
+
+    ``in_progress`` — a PENDING claim already exists for this user + key; the
+    caller must return a deterministic conflict (HTTP 409) — never a second
+    dispatch.  This helper raises the 409 itself.
+    """
+    existing = (
+        await db.execute(
+            select(OrderRecord).where(
+                OrderRecord.user_id == user_id,
+                OrderRecord.client_order_id == client_order_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+    if existing is not None:
+        if existing.status == "FILLED":
+            return "replay", existing
+        if existing.status == "PENDING":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "idempotency key already in progress",
+                    "client_order_id": client_order_id,
+                    "order_id": existing.broker_order_id or existing.id,
+                    "status": "PENDING",
+                },
+            )
+        # REJECTED / CANCELLED — the clearly-defined retry: re-claim the SAME
+        # durable row (audit continuity) as PENDING and execute again.
+        #
+        # The re-claim must be a single conditional UPDATE (compare-and-swap),
+        # NOT a read-mutate-commit: the partial unique index
+        # ``ux_orders_user_client_order_id`` only guards INSERTs of NEW claims
+        # and cannot stop two concurrent same-key retries from both flipping
+        # this existing row to PENDING, both committing, and both dispatching a
+        # duplicate real order.  By restricting the UPDATE to rows still in a
+        # retryable state, exactly one retry wins; losers see PENDING (409) or
+        # a completed FILLED (replay) and never dispatch again.
+        retry_update = await db.execute(
+            update(OrderRecord)
+            .where(
+                OrderRecord.user_id == user_id,
+                OrderRecord.client_order_id == client_order_id,
+                OrderRecord.status.not_in(["FILLED", "PENDING"]),
+            )
+            .values(
+                broker_account_id=broker_account_id,
+                strategy_id=strategy_id,
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                order_type=order_type,
+                price=price,
+                mode=mode,
+                status="PENDING",
+                error_message=None,
+                broker_order_id=None,
+                filled_price=None,
+                filled_quantity=0,
+                position_id=None,
+            )
+        )
+        if retry_update.rowcount == 1:
+            await db.commit()
+            await db.refresh(existing)
+            return "claimed", existing
+
+        # Lost the race — another retry already re-claimed the key (now PENDING)
+        # or the request completed (now FILLED).  Re-read and follow the
+        # standard semantics: replay a completed order, else a deterministic
+        # in-progress conflict.  Never a second dispatch.
+        await db.rollback()
+        winner = (
+            await db.execute(
+                select(OrderRecord).where(
+                    OrderRecord.user_id == user_id,
+                    OrderRecord.client_order_id == client_order_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if winner is not None and winner.status == "FILLED":
+            return "replay", winner
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "idempotency key already in progress",
+                "client_order_id": client_order_id,
+                "order_id": (winner.broker_order_id or winner.id) if winner else None,
+                "status": "PENDING",
+            },
+        )
+
+    claim = OrderRecord(
+        user_id=user_id,
+        client_order_id=client_order_id,
+        broker_account_id=broker_account_id,
+        strategy_id=strategy_id,
+        symbol=symbol,
+        side=side,
+        quantity=quantity,
+        order_type=order_type,
+        price=price,
+        mode=mode,
+        status="PENDING",
+    )
+    db.add(claim)
+    try:
+        await db.commit()
+    except IntegrityError:
+        # A concurrent identical request committed its claim first. Roll back
+        # and report the winner deterministically — replay if already FILLED,
+        # otherwise an in-progress conflict. Never a second dispatch.
+        await db.rollback()
+        winner = (
+            await db.execute(
+                select(OrderRecord).where(
+                    OrderRecord.user_id == user_id,
+                    OrderRecord.client_order_id == client_order_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if winner is not None and winner.status == "FILLED":
+            return "replay", winner
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "idempotency key already in progress",
+                "client_order_id": client_order_id,
+                "order_id": (winner.broker_order_id or winner.id) if winner else None,
+                "status": "PENDING",
+            },
+        )
+    await db.refresh(claim)
+    return "claimed", claim
+
+
+async def _manual_replay_response(db: AsyncSession, order: OrderRecord) -> dict:
+    """Rebuild the persisted manual-order result for an idempotent replay.
+
+    Only state stored on the durable order row (plus the linked trade's
+    execution timestamp) is returned. No new dispatch, position, or side
+    effect is ever created.
+    """
+    trade = (
+        await db.execute(
+            select(TradeRecord).where(
+                TradeRecord.user_id == order.user_id,
+                TradeRecord.order_id == order.broker_order_id,
+            )
+        )
+    ).scalar_one_or_none()
+    executed_at = (
+        trade.executed_at.isoformat()
+        if trade is not None and trade.executed_at is not None
+        else order.created_at.isoformat()
+    )
+    return {
+        "success": True,
+        "order_id": order.broker_order_id or order.id,
+        "symbol": order.symbol,
+        "side": order.side,
+        "quantity": order.quantity,
+        "price": order.filled_price if order.filled_price is not None else order.price,
+        "mode": order.mode,
+        "status": "FILLED",
+        "position_id": order.position_id,
+        "copy_fanout": None,
+        "executed_at": executed_at,
+        "idempotent_replay": True,
+    }
+
+
+async def _dma_replay_response(db: AsyncSession, order: OrderRecord) -> dict:
+    """Rebuild the persisted DMA result for an idempotent replay.
+
+    Only fields stored on the durable order row are returned.  Transient
+    first-execution analytics (product, margin_required, charges, latency)
+    are NOT persisted and are therefore deliberately omitted; the returned
+    payload is reconstruction, not a re-execution.
+    """
+    lot_size = get_lot_size(order.symbol)
+    return {
+        "success": True,
+        "order_id": order.broker_order_id or order.id,
+        "broker_order_id": order.broker_order_id or order.id,
+        "symbol": order.symbol,
+        "side": order.side,
+        "lots": order.quantity // lot_size if lot_size and lot_size > 0 else order.quantity,
+        "lot_size": lot_size,
+        "quantity": order.quantity,
+        "executed_price": order.filled_price if order.filled_price is not None else order.price,
+        "position_id": order.position_id,
+        "mode": order.mode,
+        "status": "FILLED",
+        "copy_fanout": None,
+        "executed_at": order.created_at.isoformat(),
+        "idempotent_replay": True,
+    }
 
 
 @router.get("/positions")
@@ -244,48 +513,73 @@ async def close_position(
     closing_side_for_broker = "SELL" if is_long else "BUY"
 
     # ── EXEC-02 Fix: Dispatch real closing order to broker before DB update ──
-    if pos.mode == "LIVE" and pos.broker_account_id:
-        broker_acc_stmt = select(BrokerAccountRecord).where(
-            BrokerAccountRecord.id == pos.broker_account_id
-        )
-        broker_acc_res = await db.execute(broker_acc_stmt)
-        broker_acc = broker_acc_res.scalar_one_or_none()
-        if broker_acc:
-            # ── PHASE-3 LIVE/Paper separation guard ──────────────────────
-            # A LIVE close order must also be gated by BROKER_MODE=live.
-            try:
-                assert_live_dispatch_allowed()
-            except BrokerModeBlockedError as guard_exc:
-                raise HTTPException(
-                    status_code=403,
-                    detail=str(guard_exc),
-                ) from guard_exc
-            try:
-                broker_client = get_broker_adapter(broker_acc)
-                from app.schemas.trading import OrderRequest, Side
-                close_order_req = OrderRequest(
-                    symbol=pos.symbol,
-                    side=Side.SELL if is_long else Side.BUY,
-                    quantity=pos.quantity,
-                    order_type="MARKET",
-                )
-                broker_resp = await broker_client.place_order(close_order_req)
-                filled_price = broker_resp.get("filled_price") or broker_resp.get("price")
-                if filled_price:
-                    exit_price = float(filled_price)
-                logger.info(
-                    "[LIVE] Broker close order dispatched for position %s: %s",
-                    pos.id, broker_resp
-                )
-            except Exception as broker_exc:
-                logger.error(
-                    "[LIVE] Broker close order failed for position %s: %s",
-                    pos.id, broker_exc
-                )
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"Broker failed to close position on exchange: {broker_exc}"
-                )
+    if pos.mode == "LIVE":
+        # A LIVE position MUST resolve its routing broker account before it may
+        # be marked CLOSED.  If the account was deleted (dangling FK in SQLite)
+        # or FK `SET NULL`'d (PostgreSQL) while the position was still OPEN, we
+        # have real exchange exposure with no way to square it off.  Failing to
+        # close the real position while booking PnL would be a fabricated LIVE
+        # close — a financial-correctness defect.  Fail closed instead so the
+        # operator is alerted rather than silently reporting a fake exit.
+        broker_acc = None
+        if pos.broker_account_id:
+            broker_acc_stmt = select(BrokerAccountRecord).where(
+                BrokerAccountRecord.id == pos.broker_account_id
+            )
+            broker_acc_res = await db.execute(broker_acc_stmt)
+            broker_acc = broker_acc_res.scalar_one_or_none()
+
+        if not broker_acc:
+            logger.error(
+                "[LIVE] Cannot close position %s: broker account %r is "
+                "missing/disconnected. Refusing to fabricate a close.",
+                pos.id,
+                pos.broker_account_id,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Cannot close LIVE position: its broker account is no longer "
+                    "connected. Reconnect the broker account before closing so the "
+                    "real position on the exchange can be squared off."
+                ),
+            )
+
+        # ── PHASE-3 LIVE/Paper separation guard ──────────────────────
+        # A LIVE close order must also be gated by BROKER_MODE=live.
+        try:
+            assert_live_dispatch_allowed()
+        except BrokerModeBlockedError as guard_exc:
+            raise HTTPException(
+                status_code=403,
+                detail=str(guard_exc),
+            ) from guard_exc
+        try:
+            broker_client = get_broker_adapter(broker_acc)
+            from app.schemas.trading import OrderRequest, Side
+            close_order_req = OrderRequest(
+                symbol=pos.symbol,
+                side=Side.SELL if is_long else Side.BUY,
+                quantity=pos.quantity,
+                order_type="MARKET",
+            )
+            broker_resp = await broker_client.place_order(close_order_req)
+            filled_price = broker_resp.get("filled_price") or broker_resp.get("price")
+            if filled_price:
+                exit_price = float(filled_price)
+            logger.info(
+                "[LIVE] Broker close order dispatched for position %s: %s",
+                pos.id, broker_resp
+            )
+        except Exception as broker_exc:
+            logger.error(
+                "[LIVE] Broker close order failed for position %s: %s",
+                pos.id, broker_exc
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=f"Broker failed to close position on exchange: {broker_exc}"
+            )
 
     delta = (exit_price - pos.entry_price) if is_long else (pos.entry_price - exit_price)
     realized_pnl = round(delta * pos.quantity, 2)
@@ -359,8 +653,16 @@ async def place_manual_order(
     req: ManualOrderRequest,
     user: UserRecord = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ):
-    """Place manual DMA order for PAPER or LIVE execution with real fill price and open position tracking."""
+    """Place manual DMA order for PAPER or LIVE execution with real fill price and open position tracking.
+
+    Idempotency (P0): when the caller supplies ``client_order_id`` (body) or an
+    ``Idempotency-Key`` request header, the order is durably claimed as PENDING
+    *before* any broker dispatch, and a retry with the same key replays the
+    stored result instead of executing a second time. Requests without a key
+    keep the legacy (non-idempotent) contract exactly.
+    """
     from app.engine.subscription import subscription_engine
     await subscription_engine.verify_feature_access(db, user.id, "trade_execution")
 
@@ -372,7 +674,10 @@ async def place_manual_order(
     live_p = _quote_price(quote) or (inst.base_price if inst else (req.price or 1000.0))
     executed_price = round(req.price if req.order_type == "LIMIT" and req.price else live_p, 2)
 
-    # 2. If LIVE mode, ensure a real connected broker exists
+    # 2. If LIVE mode, ensure a real connected broker exists, and enforce the
+    #    BROKER_MODE=live guard BEFORE any durable idempotency claim — a blocked
+    #    deployment must never leave a PENDING claim behind that would brick
+    #    retries for the key.
     broker_account_id = None
     if req.mode == "LIVE":
         broker_stmt = select(BrokerAccountRecord).where(
@@ -400,6 +705,31 @@ async def place_manual_order(
                 detail=str(guard_exc),
             ) from guard_exc
 
+    # 2b. Idempotency claim (keyed requests only) — the durable PENDING order
+    #     row is committed BEFORE the broker dispatch below.
+    order: Optional[OrderRecord] = None
+    replay_order: Optional[OrderRecord] = None
+    retry_key = await _resolve_idempotency_key(req.client_order_id, idempotency_key)
+    if retry_key:
+        outcome, order = await _claim_or_replay_order(
+            db,
+            user_id=user.id,
+            client_order_id=retry_key,
+            symbol=clean_sym,
+            side=req.side,
+            quantity=req.quantity,
+            order_type=req.order_type,
+            price=executed_price,
+            mode=req.mode,
+            broker_account_id=broker_account_id,
+        )
+        if outcome == "replay":
+            replay_order = order
+        # outcome == "in_progress" → _claim_or_replay_order raised HTTP 409.
+
+    # 2c. LIVE broker dispatch — runs only for the first claim of a key, or
+    #     every legacy unkeyed request. Never for a replay of a completed one.
+    if req.mode == "LIVE" and replay_order is None:
         # ── EXEC-01a Fix: Dispatch real entry order to broker ──
         try:
             broker_client = get_broker_adapter(broker_acc)
@@ -412,35 +742,63 @@ async def place_manual_order(
                 price=executed_price if req.order_type == "LIMIT" else None,
             )
             broker_resp = await broker_client.place_order(live_order_req)
+            # Crash-window hardening (P1): durably persist the broker's returned
+            # order reference on the PENDING claim IMMEDIATELY after acceptance,
+            # in its own commit. If the process dies between broker acceptance
+            # and the finalize commit, the row still carries the reference so the
+            # reconciliation worker can read the broker's status back.
+            broker_order_ref = broker_resp.get("order_id") or broker_resp.get("broker_order_id")
+            if order is not None and order.status == "PENDING" and broker_order_ref:
+                order.broker_order_id = str(broker_order_ref)
+                await db.commit()
             filled_price = broker_resp.get("filled_price") or broker_resp.get("price")
             if filled_price:
                 executed_price = round(float(filled_price), 2)
             logger.info("[LIVE] Manual order dispatched to broker: %s", broker_resp)
         except Exception as broker_exc:
             logger.error("[LIVE] Broker order placement failed: %s", broker_exc)
+            if order is not None and order.status == "PENDING":
+                # Keyed claim: persist a durable REJECTED — never a ghost and
+                # never a fabricated FILLED. The same key can then be retried.
+                order.status = "REJECTED"
+                order.error_message = f"Broker rejected order: {broker_exc}"
+                await db.commit()
             raise HTTPException(
                 status_code=502,
                 detail=f"Broker rejected order: {broker_exc}"
             )
 
+    if replay_order is not None:
+        return await _manual_replay_response(db, replay_order)
+
     # 3. Create persistent OrderRecord
     order_id = f"ORD_{int(datetime.now(timezone.utc).timestamp())}_{str(uuid.uuid4())[:8]}"
-    order = OrderRecord(
-        id=str(uuid.uuid4()),
-        user_id=user.id,
-        broker_account_id=broker_account_id,
-        broker_order_id=order_id,
-        symbol=clean_sym,
-        side=req.side,
-        quantity=req.quantity,
-        order_type=req.order_type,
-        price=executed_price,
-        filled_price=executed_price,
-        filled_quantity=req.quantity,
-        status="FILLED",
-        mode=req.mode,
-    )
-    db.add(order)
+    if order is None:
+        # Legacy unkeyed request — unchanged: the order row is born FILLED.
+        order = OrderRecord(
+            id=str(uuid.uuid4()),
+            user_id=user.id,
+            broker_account_id=broker_account_id,
+            broker_order_id=order_id,
+            symbol=clean_sym,
+            side=req.side,
+            quantity=req.quantity,
+            order_type=req.order_type,
+            price=executed_price,
+            filled_price=executed_price,
+            filled_quantity=req.quantity,
+            status="FILLED",
+            mode=req.mode,
+        )
+        db.add(order)
+    else:
+        # Keyed request — finalize the durable PENDING claim with the result.
+        if order.broker_order_id is None:
+            order.broker_order_id = order_id
+        order.price = executed_price
+        order.filled_price = executed_price
+        order.filled_quantity = req.quantity
+        order.status = "FILLED"
 
     # 4. Create persistent TradeRecord
     trade = TradeRecord(
@@ -476,6 +834,7 @@ async def place_manual_order(
         opened_at=datetime.now(timezone.utc),
     )
     db.add(position)
+    order.position_id = position.id
 
     await db.commit()
     await db.refresh(trade)
@@ -559,10 +918,18 @@ async def execute_dma_order(
     req: DMAOrderRequest,
     db: AsyncSession = Depends(get_db),
     user: UserRecord = Depends(get_current_user),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ):
     """Sub-millisecond DMA execution: quote snap, lot auto-correction, margin &
     statutory charge engine, latency-instrumented dispatch, full persistence,
-    SL/TP registration, notifications, audit, copy-trading fan-out."""
+    SL/TP registration, notifications, audit, copy-trading fan-out.
+
+    Idempotency (P0): when the caller supplies ``client_order_id`` (body) or an
+    ``Idempotency-Key`` request header, the order is durably claimed as PENDING
+    *before* any broker dispatch, and a retry with the same key replays the
+    stored result instead of executing a second time. Requests without a key
+    keep the legacy (non-idempotent) contract exactly.
+    """
     t_start = perf_counter()
 
     clean_sym = req.symbol.upper().strip()
@@ -588,7 +955,9 @@ async def execute_dma_order(
     margin_required, asset_class = compute_margin_required(clean_sym, req.product, quantity, executed_price)
     charges = compute_statutory_charges(clean_sym, req.side, req.product, quantity, executed_price)
 
-    # 3. Broker account resolution for LIVE routing
+    # 3. Broker account resolution for LIVE routing, and the BROKER_MODE=live
+    #    guard — both fire BEFORE any durable idempotency claim (a blocked
+    #    deployment must never leave a PENDING claim behind).
     broker_account_id = None
     if req.mode == "LIVE":
         stmt_acc = select(BrokerAccountRecord).where(
@@ -603,10 +972,6 @@ async def execute_dma_order(
             raise HTTPException(status_code=403, detail="LIVE DMA requires a CONNECTED broker account.")
         broker_account_id = acc_row.id
 
-    # 4. Latency-instrumented dispatch (real broker for LIVE)
-    t_dispatch = perf_counter()
-    broker_order_ref = None
-    if req.mode == "LIVE" and acc_row:
         # ── PHASE-3 LIVE/Paper separation guard ──────────────────────────
         # Even with a connected broker, a LIVE DMA order must be gated by
         # BROKER_MODE=live.
@@ -618,6 +983,34 @@ async def execute_dma_order(
                 detail=str(guard_exc),
             ) from guard_exc
 
+    # 3b. Idempotency claim (keyed requests only) — the durable PENDING order
+    #     row is committed BEFORE the broker dispatch below.
+    order: Optional[OrderRecord] = None
+    replay_order: Optional[OrderRecord] = None
+    retry_key = await _resolve_idempotency_key(req.client_order_id, idempotency_key)
+    if retry_key:
+        outcome, order = await _claim_or_replay_order(
+            db,
+            user_id=user.id,
+            client_order_id=retry_key,
+            symbol=clean_sym,
+            side=req.side,
+            quantity=quantity,
+            order_type=req.order_type,
+            price=executed_price,
+            mode=req.mode,
+            broker_account_id=broker_account_id,
+            strategy_id=req.strategy_id,
+        )
+        if outcome == "replay":
+            replay_order = order
+        # outcome == "in_progress" → _claim_or_replay_order raised HTTP 409.
+
+    # 4. Latency-instrumented dispatch (real broker for LIVE). Runs only for
+    #    the first claim of a key, or every legacy unkeyed request.
+    t_dispatch = perf_counter()
+    broker_order_ref = None
+    if req.mode == "LIVE" and acc_row and replay_order is None:
         # ── EXEC-01b Fix: Dispatch real DMA order to broker ──
         try:
             broker_client = get_broker_adapter(acc_row)
@@ -631,18 +1024,34 @@ async def execute_dma_order(
             )
             broker_resp = await broker_client.place_order(dma_order_req)
             broker_order_ref = broker_resp.get("order_id") or broker_resp.get("broker_order_id")
+            # Crash-window hardening (P1): durably persist the broker's returned
+            # order reference on the PENDING claim IMMEDIATELY after acceptance,
+            # in its own commit — the reference must survive a process crash
+            # before the finalize commit so reconciliation can read it back.
+            if order is not None and order.status == "PENDING" and broker_order_ref:
+                order.broker_order_id = str(broker_order_ref)
+                await db.commit()
             filled_price = broker_resp.get("filled_price") or broker_resp.get("price")
             if filled_price:
                 executed_price = round(float(filled_price), 2)
             logger.info("[LIVE] DMA order dispatched to broker: %s", broker_resp)
         except Exception as broker_exc:
             logger.error("[LIVE] DMA broker dispatch failed: %s", broker_exc)
+            if order is not None and order.status == "PENDING":
+                # Keyed claim: persist a durable REJECTED — never a ghost and
+                # never a fabricated FILLED. The same key can then be retried.
+                order.status = "REJECTED"
+                order.error_message = f"Broker rejected DMA order: {broker_exc}"
+                await db.commit()
             raise HTTPException(
                 status_code=502,
                 detail=f"Broker rejected DMA order: {broker_exc}"
             )
     dispatch_latency_ms = round((perf_counter() - t_dispatch) * 1000, 3)
     total_latency_ms = round((perf_counter() - t_start) * 1000, 3)
+
+    if replay_order is not None:
+        return await _dma_replay_response(db, replay_order)
 
     # 5. Persistence
     order_id = f"DMA_{int(datetime.now(timezone.utc).timestamp())}_{str(uuid.uuid4())[:8]}"
@@ -658,14 +1067,24 @@ async def execute_dma_order(
         else (round(executed_price * (1 - req.take_profit_pct / 100), 2) if req.take_profit_pct else None)
     )
 
-    order = OrderRecord(
-        id=str(uuid.uuid4()), user_id=user.id, strategy_id=req.strategy_id,
-        broker_account_id=broker_account_id, broker_order_id=broker_order_ref or order_id,
-        symbol=clean_sym, side=req.side, quantity=quantity, order_type=req.order_type,
-        price=executed_price, filled_price=executed_price, filled_quantity=quantity,
-        status="FILLED", mode=req.mode,
-    )
-    db.add(order)
+    if order is None:
+        # Legacy unkeyed request — unchanged: the order row is born FILLED.
+        order = OrderRecord(
+            id=str(uuid.uuid4()), user_id=user.id, strategy_id=req.strategy_id,
+            broker_account_id=broker_account_id, broker_order_id=broker_order_ref or order_id,
+            symbol=clean_sym, side=req.side, quantity=quantity, order_type=req.order_type,
+            price=executed_price, filled_price=executed_price, filled_quantity=quantity,
+            status="FILLED", mode=req.mode,
+        )
+        db.add(order)
+    else:
+        # Keyed request — finalize the durable PENDING claim with the result.
+        if order.broker_order_id is None:
+            order.broker_order_id = broker_order_ref or order_id
+        order.price = executed_price
+        order.filled_price = executed_price
+        order.filled_quantity = quantity
+        order.status = "FILLED"
     trade = TradeRecord(
         id=str(uuid.uuid4()), order_id=order_id, strategy_id=req.strategy_id,
         strategy_name="Institutional DMA", symbol=clean_sym, side=req.side,
@@ -682,6 +1101,7 @@ async def execute_dma_order(
         mode=req.mode, status="OPEN", opened_at=datetime.now(timezone.utc),
     )
     db.add(position)
+    order.position_id = position.id
     await db.commit()
     await db.refresh(trade)
     await db.refresh(position)

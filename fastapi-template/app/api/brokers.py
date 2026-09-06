@@ -21,6 +21,10 @@ from app.brokers import (
     ZerodhaKiteBroker,
     get_broker_adapter,
 )
+from app.brokers.postback import (
+    reconcile_broker_postback,
+    verify_broker_postback_signature,
+)
 from app.core.audit import log_audit_event
 from app.core.logging import get_logger
 from app.db.session import get_db
@@ -580,6 +584,32 @@ async def unlink_broker_account(
         raise HTTPException(status_code=404, detail="Broker account not found")
 
     broker_name = acc.broker_name
+
+    # ── P1 financial-correctness guard ──────────────────────────────────────
+    # A broker account may only be unlinked when it carries no OPEN positions.
+    # Deleting (or FK-disconnecting) the account that routes a LIVE OPEN
+    # position leaves the user with real exposure whose broker_account_id is
+    # now dangling (SQLite) or NULLed (PG `ondelete=SET NULL`).  The close path
+    # requires a resolvable broker_account_id to dispatch the real closing
+    # order; without one it would silently book PnL WITHOUT closing the
+    # position on the exchange — a fabricated LIVE close.  Refuse the delete so
+    # the operator must first square off / settle LIVE exposure.
+    open_pos_stmt = select(PositionRecord).where(
+        PositionRecord.broker_account_id == acc.id,
+        PositionRecord.status == "OPEN",
+    )
+    open_pos_res = await db.execute(open_pos_stmt)
+    open_pos = open_pos_res.scalars().first()
+    if open_pos is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Broker account holds {open_pos.symbol} ({open_pos.quantity}qty) "
+                "as an OPEN position. Close or settle it before unlinking this "
+                "broker account so LIVE exposure is never left without routing."
+            ),
+        )
+
     await db.delete(acc)
     await db.commit()
 
@@ -683,55 +713,57 @@ async def broker_postback_webhook(
     broker_name: str = "ZERODHA",
     db: AsyncSession = Depends(get_db),
 ):
-    """Handle incoming real-time execution postback from Zerodha Kite Connect or other brokers."""
+    """Handle incoming real-time execution postback from Zerodha Kite Connect or other brokers.
+
+    V3 hardening: signature verification is REQUIRED before any financial state is
+    mutated (HTTP 401 fail-closed when the signature is missing/invalid), and every
+    reconciled event is bound to the order's own CONNECTED, tenant-owned broker
+    account - cross-account/cross-tenant events are ignored without mutation.
+    """
     body_bytes = await request.body()
     try:
         payload = json.loads(body_bytes.decode())
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}")
 
-    norm_event = ZerodhaKiteBroker.process_postback(payload)
-    logger.info("Zerodha Postback Received: %s", norm_event)
+    # ── V3: cryptographic verification REQUIRED before any financial mutation. ──
+    verify_broker_postback_signature(
+        body_bytes,
+        {k.lower(): v for k, v in request.headers.items()},
+        broker_name,
+    )
+
+    # Normalize the provider-specific event.
+    if broker_name.strip().upper() == "ZERODHA":
+        norm_event = ZerodhaKiteBroker.process_postback(payload)
+    else:
+        norm_event = {
+            "broker": broker_name.strip().upper(),
+            "broker_order_id": payload.get("broker_order_id") or payload.get("order_id", "UNKNOWN"),
+            "status": str(payload.get("status", "")).upper(),
+            "symbol": payload.get("symbol") or payload.get("tradingsymbol", ""),
+            "filled_quantity": int(payload.get("filled_quantity", 0) or 0),
+            "average_price": float(payload.get("average_price", 0.0) or 0.0),
+        }
+    logger.info("%s Postback Received (verified): %s", broker_name.upper(), norm_event)
 
     broker_order_id = norm_event["broker_order_id"]
     new_status = norm_event["status"]
+    broker_account_id = payload.get("broker_account_id")  # optional; server-validated
 
-    stmt = select(OrderRecord).where(OrderRecord.broker_order_id == broker_order_id)
-    res = await db.execute(stmt)
-    order = res.scalar_one_or_none()
+    outcome = await reconcile_broker_postback(
+        db,
+        broker_order_id=broker_order_id,
+        broker_account_id=broker_account_id,
+        status=new_status,
+        symbol=norm_event.get("symbol", ""),
+        filled_quantity=norm_event.get("filled_quantity", 0),
+        average_price=norm_event.get("average_price", 0.0),
+    )
 
-    if order:
-        order.status = new_status
-        if norm_event.get("filled_quantity"):
-            order.filled_quantity = norm_event["filled_quantity"]
-        if norm_event.get("average_price"):
-            order.filled_price = norm_event["average_price"]
-
-        if new_status == "FILLED":
-            trade = TradeRecord(
-                strategy_id=order.strategy_id,
-                broker_order_id=broker_order_id,
-                user_id=order.user_id,
-                symbol=order.symbol,
-                side=order.side,
-                quantity=order.filled_quantity or order.quantity,
-                entry_price=order.filled_price or order.price or 0.0,
-                status="CLOSED",
-                exit_reason="BROKER_POSTBACK_FILL",
-            )
-            db.add(trade)
-
-        await db.commit()
-
-        await ws_manager.broadcast(
-            f"order_update:{order.strategy_id}",
-            {
-                "event": "ORDER_STATUS_CHANGED",
-                "order_id": order.id,
-                "broker_order_id": broker_order_id,
-                "status": new_status,
-                "symbol": order.symbol,
-            },
-        )
-
-    return {"status": "ok", "reconciled_status": new_status, "event_processed": True}
+    return {
+        "status": "ok",
+        "reconciled_status": new_status,
+        "event_processed": outcome["event_processed"],
+        "reason": outcome.get("reason"),
+    }
