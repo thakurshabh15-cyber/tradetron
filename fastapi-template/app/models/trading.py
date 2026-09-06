@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -90,6 +90,21 @@ class OrderRecord(Base):
     status: Mapped[str] = mapped_column(String(20), default="PENDING")  # PENDING, OPEN, FILLED, REJECTED, CANCELLED
     mode: Mapped[str] = mapped_column(String(20), default="PAPER")  # "PAPER" | "LIVE"
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    client_order_id: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        doc=(
+            "Optional caller-supplied idempotency key. Durable per-user unique "
+            "(see ux_orders_user_client_order_id partial index). A request "
+            "carrying one of these is claimed as PENDING before broker dispatch "
+            "so a retry can never double-execute."
+        ),
+    )
+    position_id: Mapped[str | None] = mapped_column(
+        String(36),
+        nullable=True,
+        doc="Position row created for this order (idempotent-replay linkage).",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow
     )
@@ -99,6 +114,17 @@ class OrderRecord(Base):
         Index("ix_orders_status", "status"),
         Index("ix_orders_mode", "mode"),
         Index("ix_orders_user_created", "user_id", "created_at"),
+        # Durable financial idempotency invariant: an idempotency key is unique
+        # per user. Partial so legacy unkeyed rows (NULL client_order_id) never
+        # collide, and NULL user_id rows (FK SET NULL) never collide either.
+        Index(
+            "ux_orders_user_client_order_id",
+            "user_id",
+            "client_order_id",
+            unique=True,
+            sqlite_where=text("client_order_id IS NOT NULL"),
+            postgresql_where=text("client_order_id IS NOT NULL"),
+        ),
     )
 
 

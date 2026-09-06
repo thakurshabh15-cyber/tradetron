@@ -206,6 +206,52 @@ class BinanceBroker(BrokerClient):
         logger.warning("Binance order status query requires symbol. Use full query via order manager.")
         return {"status": "UNKNOWN", "broker_order_id": broker_order_id, "note": "Use order manager for full query"}
 
+    async def get_order_status_with_symbol(
+            self, symbol: str, broker_order_id: str
+        ) -> dict[str, Any]:
+            """Read-only order status query for Binance (requires symbol context).
+
+            Mirrors the existing ``cancel_order_with_symbol`` pattern: ``GET
+            /api/v3/order`` with ``symbol`` + ``orderId``.  Never places or mutates
+            an order; gated by the same BROKER_MODE guard as every other real
+            Binance network operation (``_api_request``).  Returns a canonical
+            status token: FILLED / OPEN / CANCELLED / REJECTED / UNKNOWN.
+            """
+            await self.connect()
+            try:
+                params = {"symbol": symbol, "orderId": int(broker_order_id)}
+                data = await self._api_request("GET", "/api/v3/order", params)
+            except Exception as exc:
+                logger.warning(
+                    "Binance order status query failed for %s/%s: %s",
+                    symbol, broker_order_id, exc,
+                )
+                return {
+                    "status": "UNKNOWN",
+                    "broker_order_id": broker_order_id,
+                    "symbol": symbol,
+                }
+            raw = str(data.get("status", "")).upper()
+            if raw == "FILLED":
+                status = "FILLED"
+            elif raw in ("CANCELED", "EXPIRED"):
+                status = "CANCELLED"
+            elif raw == "REJECTED":
+                status = "REJECTED"
+            elif raw in ("NEW", "PARTIALLY_FILLED", "PENDING_NEW"):
+                status = "OPEN"
+            else:
+                status = "UNKNOWN"
+            return {
+                "status": status,
+                "broker_order_id": broker_order_id,
+                "symbol": symbol,
+                "price": data.get("price"),
+                "origQty": data.get("origQty"),
+                "executedQty": data.get("executedQty"),
+                "cummulativeQuoteQty": data.get("cummulativeQuoteQty"),
+                "avgPrice": data.get("avgPrice"),
+            }
     async def get_positions(self) -> list[dict[str, Any]]:
         """Fetch real account balances from Binance (positions = non-zero balances)."""
         await self.connect()
@@ -267,3 +313,4 @@ class BinanceBroker(BrokerClient):
         """Clean up aiohttp session."""
         if self._session and not self._session.closed:
             await self._session.close()
+

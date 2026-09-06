@@ -512,6 +512,30 @@ async def close_position(
     is_long = pos.side in ("LONG", "BUY")
     closing_side_for_broker = "SELL" if is_long else "BUY"
 
+    # ── P1 FIX: Atomic CAS claim — sole gate preventing concurrent close race──
+    # A conditional UPDATE that transitions OPEN→CLOSED atomically.  Exactly one
+    # concurrent request wins (rowcount == 1); losers get 404 and must NEVER
+    # dispatch a broker close order or book duplicate PnL/trade state.
+    #
+    # Failure safety (P1 durability fix): for LIVE positions the claim is
+    # committed BEFORE the broker dispatch runs (see below), so a crash between
+    # dispatch and PnL commit can never leave DB=OPEN with the exchange already
+    # CLOSED (a retry would double-close real inventory).  If the broker
+    # dispatch itself fails, the committed CAS is explicitly reverted to OPEN.
+    result = await db.execute(
+        update(PositionRecord)
+        .where(PositionRecord.id == position_id, PositionRecord.status == "OPEN")
+        .values(status="CLOSED", closed_at=datetime.now(timezone.utc))
+    )
+    if result.rowcount != 1:
+        raise HTTPException(
+            status_code=404,
+            detail="Open position not found or already closed by concurrent request",
+        )
+    # Sync ORM object to match the atomic CAS state
+    pos.status = "CLOSED"
+    pos.closed_at = datetime.now(timezone.utc)
+
     # ── EXEC-02 Fix: Dispatch real closing order to broker before DB update ──
     if pos.mode == "LIVE":
         # A LIVE position MUST resolve its routing broker account before it may
@@ -554,6 +578,22 @@ async def close_position(
                 status_code=403,
                 detail=str(guard_exc),
             ) from guard_exc
+
+        # â”€â”€ P1 FIX: Durability â€” commit the CAS claim BEFORE any broker dispatch â”€â”€
+        # Every pre-flight check (broker resolution, live-dispatch guard) has
+        # passed, so the position may now be durably claimed CLOSED.  If the
+        # process crashes AFTER this commit but BEFORE the dispatch, the local
+        # ledger shows CLOSED while the exchange is still OPEN â€” a "phantom
+        # close" that reconciliation / manual intervention can recover and that
+        # can NEVER trigger a second broker action.  The pre-fix order
+        # (dispatch-then-commit) left DB=OPEN / exchange=CLOSED on a crash, so
+        # a retry would re-dispatch a close order against real inventory â€”
+        # a double close.  Committing first trades that double-close risk for
+        # a recoverable divergence.  If the dispatch below fails, the committed
+        # CAS is explicitly reverted to OPEN so the close stays retryable.
+        await db.commit()
+        await db.refresh(pos)
+
         try:
             broker_client = get_broker_adapter(broker_acc)
             from app.schemas.trading import OrderRequest, Side
@@ -576,6 +616,17 @@ async def close_position(
                 "[LIVE] Broker close order failed for position %s: %s",
                 pos.id, broker_exc
             )
+            # P1 FIX: The CAS claim was already COMMITTED before dispatch.
+            # Explicitly revert it to OPEN so the position stays retryable and no
+            # fabricated CLOSED / PnL is left behind.
+            await db.execute(
+                update(PositionRecord)
+                .where(PositionRecord.id == position_id)
+                .values(status="OPEN", closed_at=None)
+            )
+            pos.status = "OPEN"
+            pos.closed_at = None
+            await db.commit()
             raise HTTPException(
                 status_code=502,
                 detail=f"Broker failed to close position on exchange: {broker_exc}"
@@ -585,8 +636,7 @@ async def close_position(
     realized_pnl = round(delta * pos.quantity, 2)
     pnl_pct = round((delta / pos.entry_price) * 100, 2) if pos.entry_price else 0.0
 
-    pos.status = "CLOSED"
-    pos.closed_at = datetime.now(timezone.utc)
+    # pos.status and pos.closed_at already set by the CAS claim above
     pos.current_price = exit_price
     pos.realized_pnl = realized_pnl
     pos.unrealized_pnl = 0.0

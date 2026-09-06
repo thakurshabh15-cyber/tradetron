@@ -30,7 +30,7 @@ class IdempotencyStore:
     """Distributed idempotency store using Redis"""
     
     def __init__(self, redis_url: str | None = None, ttl_seconds: int = 86400 * 7):  # 7 days
-        self.redis_url = redis_url or settings.redis_url or "redis://localhost:6379/0"
+        self.redis_url = redis_url or settings.effective_redis_url or "redis://localhost:6379/0"
         self._redis: redis.Redis | None = None
         self._ttl = ttl_seconds
 
@@ -110,6 +110,42 @@ class IdempotencyStore:
             logger.warning("Idempotency check failed, allowing request: %s", e)
             return True, None  # Fail open
     
+    async def is_completed(self, key: str) -> bool:
+        """Read-only check: is this idempotency key already COMPLETED?
+
+        This is a non-mutating lookup (plain GET).  It is deliberately NOT
+        ``check_and_mark_processing()``, which is mutating — it would reopen a
+        completed record's state, re-mark a new key as ``processing``, and
+        delete a stale ``processing`` record.  Those mutations are correct at
+        the HTTP ingress (which owns the create/lock lifecycle) but must never
+        run on the worker's *duplicate-suppression* path, where the invariant
+        is: "if already completed, do not execute the handler again and do not
+        alter the record."
+
+        FAIL-SAFE: any Redis error returns ``False`` (not completed), never
+        ``True``.  For a trading/payment side-effect path, false suppression
+        (dropping a real event) is far worse than a rare duplicate, so an
+        indeterminate lookup must NOT be treated as completed.
+        """
+        if not key:
+            return False
+        try:
+            value = await self._redis.get(f"idempotency:{key}")
+        except Exception as exc:
+            logger.warning(
+                "Idempotency is_completed lookup failed for %s; treating as "
+                "not-completed (fail-safe): %s",
+                key, exc,
+            )
+            return False
+        if not value:
+            return False
+        try:
+            record = json.loads(value)
+        except (TypeError, ValueError):
+            return False
+        return record.get("status") == "completed"
+
     async def mark_completed(self, key: str, result: dict[str, Any]) -> None:
         redis_key = f"idempotency:{key}"
         record = {

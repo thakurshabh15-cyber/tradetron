@@ -260,7 +260,7 @@ async def test_emergency_kill_switch_immediate_block():
         assert kill_res.json()["status"] == "HALTED"
 
         # Verify all strategies are paused
-        strat_res = await client.get("/api/strategies")
+        strat_res = await client.get("/api/strategies", headers=headers)
         assert strat_res.status_code == 200
         strats = strat_res.json()
         for s in strats:

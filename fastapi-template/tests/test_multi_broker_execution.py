@@ -1,9 +1,12 @@
 """Unit tests for Multi-Broker Adapters (Zerodha Kite, Binance), Pre-Trade Margin Gates, Postbacks & Kill-Switch."""
 
 import asyncio
+import hashlib
+import json
 import time
 from httpx import ASGITransport, AsyncClient
 from app.main import app
+from app.config import settings
 from app.db.session import SessionLocal, init_db
 from app.brokers.zerodha import ZerodhaKiteBroker
 from app.brokers.binance import BinanceBroker
@@ -125,13 +128,24 @@ async def test_multi_broker_execution_suite():
         assert resume_res.status_code == 200
         assert resume_res.json()["status"] == "RUNNING"
 
-        # 8. Test Broker Postback Webhook
-        postback_res = await client.post("/api/brokers/postback/ZERODHA", json={
+        # 8. Test Broker Postback Webhook (V3 hardening: the direct broker
+        #    postback endpoint requires a cryptographically verified provider
+        #    signature unless the deployment is in WEBHOOK_LOCAL_MODE - sign the
+        #    test payload so the legitimate happy path stays deterministic.)
+        settings.webhook_local_mode = False
+        settings.zerodha_api_key = "test_zerodha_key"
+        settings.zerodha_api_secret = "test_zerodha_secret"
+        postback_payload = {
             "order_id": "KITE-ORD-8811",
             "status": "COMPLETE",
             "tradingsymbol": "NIFTY50",
             "filled_quantity": 50,
             "average_price": 24850.0,
-        })
+        }
+        postback_checksum = hashlib.sha256(
+            f"{settings.zerodha_api_key}{json.dumps(postback_payload, separators=(',', ':'))}{settings.zerodha_api_secret}".encode()
+        ).hexdigest()
+        postback_payload["checksum"] = postback_checksum
+        postback_res = await client.post("/api/brokers/postback/ZERODHA", json=postback_payload)
         assert postback_res.status_code == 200
         assert postback_res.json()["reconciled_status"] == "FILLED"

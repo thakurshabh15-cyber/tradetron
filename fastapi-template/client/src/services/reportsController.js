@@ -5,6 +5,7 @@
  */
 
 import { API_BASE } from "../config";
+import { authFetch } from "./apiClient";
 
 export const reportsController = {
   /**
@@ -13,7 +14,8 @@ export const reportsController = {
   async getPerformance(params = {}) {
     const query = new URLSearchParams(params).toString();
     const url = `${API_BASE}/api/reports/performance${query ? `?${query}` : ""}`;
-    const res = await fetch(url);
+    // Private endpoint: must attach the caller's bearer token (auto-refreshed).
+    const res = await authFetch(url);
     if (!res.ok) throw new Error("Failed to fetch performance report");
     return res.json();
   },
@@ -22,7 +24,7 @@ export const reportsController = {
    * Fetch trade velocity and volume summaries
    */
   async getTradesSummary(period = "all") {
-    const res = await fetch(`${API_BASE}/api/reports/trades/summary?period=${period}`);
+    const res = await authFetch(`${API_BASE}/api/reports/trades/summary?period=${period}`);
     if (!res.ok) throw new Error("Failed to fetch trade summary");
     return res.json();
   },
@@ -32,7 +34,7 @@ export const reportsController = {
    */
   async downloadCsvExport() {
     const url = `${API_BASE}/api/reports/export?format=csv`;
-    const res = await fetch(url);
+    const res = await authFetch(url);
     if (!res.ok) throw new Error("Failed to download CSV export");
 
     const blob = await res.blob();

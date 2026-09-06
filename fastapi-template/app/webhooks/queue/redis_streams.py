@@ -138,6 +138,103 @@ class WebhookQueue:
         
         return []
     
+    async def recover_pending(
+        self,
+        queue_names: list[str],
+        min_idle_ms: int,
+        count: int = 25,
+        consumer_name: str = "recovery",
+    ) -> list[tuple[str, str, QueuedWebhook]]:
+        """Bounded PEL recovery via XPENDING + XAUTOCLAIM.
+
+        Returns ``[(queue_name, entry_id, QueuedWebhook)]`` for every entry
+        reclaimed this pass.  This is the ONLY re-delivery mechanism for
+        entries stranded in the PEL (e.g. a worker that crashed after XREADGROUP
+        delivered the entry but before XACK).  The worker pool feeds every
+        recovered entry through the SAME ``_process_webhook()`` path as
+        normally-consumed entries, so the duplicate-suppression guard,
+        mark_completed-before-XACK ordering, and nack/retry/DLQ semantics all
+        apply unchanged.
+
+        Safety properties:
+          * ``min_idle_ms`` — an entry is only reclaimed once it has been
+            idle (undelivered-but-unacked) for at least this many milliseconds.
+            This is what prevents reclaiming an entry another worker is still
+            actively processing.
+          * ``count`` — bounded batch per queue per pass: at most ``count``
+            entries are claimed from any single queue, so a corrupted/large PEL
+            is drained incrementally instead of blasting every pending entry
+            into the workers in one cycle.
+          * XPENDING is used only as a cheap "is there anything pending at
+            all?" guard before running XAUTOCLAIM, avoiding needless scans.
+          * Errors are contained per queue: one broken queue/group never
+            aborts recovery for the other queues.
+        """
+        if not self._initialized or not self._redis:
+            return []
+        recovered: list[tuple[str, str, QueuedWebhook]] = []
+        for queue_name in queue_names:
+            try:
+                summary = await self._redis.xpending(queue_name, "workers")
+            except Exception as exc:
+                logger.warning("PEL recovery XPENDING failed for %s: %s", queue_name, exc)
+                continue
+            try:
+                pending = int(summary.get("pending", 0) or 0) if summary else 0
+            except (TypeError, ValueError):
+                pending = 0
+            if pending <= 0:
+                continue
+            try:
+                xautoclaim = await self._redis.xautoclaim(
+                    queue_name,
+                    "workers",
+                    consumer_name,
+                    min_idle_ms,
+                    start_id="0-0",
+                    count=count,
+                )
+            except Exception as exc:
+                # XAUTOCLAIM requires Redis >= 6.2; on older servers this will
+                # be a ResponseError.  Contained here: the normal consume path
+                # and other queues are unaffected.
+                logger.warning("PEL recovery XAUTOCLAIM failed for %s: %s", queue_name, exc)
+                continue
+            try:
+                next_id, entries, deleted_ids = xautoclaim[0], xautoclaim[1], xautoclaim[2]
+            except (IndexError, TypeError, ValueError):
+                logger.warning("PEL recovery XAUTOCLAIM malformed result for %s", queue_name)
+                continue
+            seen = 0
+            for entry in entries or []:
+                try:
+                    entry_id = entry[0]
+                    fields = entry[1] if len(entry) > 1 else []
+                    if not fields:
+                        # The message was deleted from the stream after delivery
+                        # while still pending; nothing left to process.
+                        continue
+                    data = dict(zip(fields[::2], fields[1::2]))
+                    webhook = QueuedWebhook.from_stream_entry(entry_id, data)
+                except Exception as exc:
+                    logger.warning(
+                        "PEL recovery could not decode entry on %s (skipped, "
+                        "count %d reclaimed so far): %s",
+                        queue_name, seen, exc,
+                    )
+                    continue
+                recovered.append((queue_name, entry_id, webhook))
+                seen += 1
+                if seen >= count:
+                    break  # hard bound even if the server returned more
+            logger.info(
+                "PEL recovery: claimed %d/%d pending from %s (consumer=%s, "
+                "min_idle=%dms, batch=%d, next_cursor=%s, deleted=%d)",
+                seen, pending, queue_name, consumer_name, min_idle_ms,
+                count, next_id, len(deleted_ids or []),
+            )
+        return recovered
+
     async def ack(self, queue_name: str, entry_id: str) -> None:
         """Acknowledge successful processing"""
         if not self._initialized or not self._redis:
@@ -171,7 +268,12 @@ class WebhookQueue:
             # below, so a metric failure can never re-leak the entry into the
             # PEL and cause a duplicate execution on reclaim.
             await self._redis.xack(queue_name, "workers", entry_id)
-            await self._redis.hincrby("webhook:metrics:retried", queue_name, 1)
+            try:
+                await self._redis.hincrby("webhook:metrics:retried", queue_name, 1)
+            except Exception as exc:
+                logger.warning(
+                    "Best-effort metric update failed for %s: %s", queue_name, exc
+                )
     
     async def _send_to_dlq(self, webhook: QueuedWebhook, error: str) -> None:
         """Send failed webhook to dead letter queue"""
@@ -184,7 +286,10 @@ class WebhookQueue:
             "original_queue": resolve_route(webhook.envelope.provider, webhook.envelope.event_type).queue_name,
         }
         await self._redis.xadd("webhooks:dlq", dlq_entry)
-        await self._redis.hincrby("webhook:metrics:dlq", "total", 1)
+        try:
+            await self._redis.hincrby("webhook:metrics:dlq", "total", 1)
+        except Exception as exc:
+            logger.warning("Best-effort DLQ metric update failed: %s", exc)
         logger.error("Webhook %s sent to DLQ after %d attempts: %s", 
                      webhook.envelope.event_id, webhook.attempt, error)
     

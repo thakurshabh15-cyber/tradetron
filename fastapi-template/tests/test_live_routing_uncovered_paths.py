@@ -12,9 +12,13 @@ construction / not wired to any real-broker dispatch:
    broker from a webhook payload.
 
 2. Copy-trading fan-out (``copy_trading.py``)
-   DB-bookkeeping only: it persists FILLED Order/Trade/Position records
-   directly to the database and NEVER calls a broker's ``place_order`` — even
-   when ``mode == LIVE``. So it cannot touch a real exchange.
+   LIVE follower fan-out is now gated by ``assert_live_dispatch_allowed()``
+   and dispatched through the follower's own owned broker adapter; PAPER
+   fan-out remains pure DB bookkeeping (FILLED records, no broker). A LIVE
+   fan-out can never fabricate FILLED/OPEN state: when the deployment is
+   not ``BROKER_MODE=live`` (or the follower has no owned connected broker,
+   or the broker rejects the order) the engine persists a REJECTED order
+   only.
 
 3. ``visual_strategy.execute_legs``
    A latent dispatch primitive that takes an arbitrary ``broker``; this verifies
@@ -80,25 +84,27 @@ def test_webhook_signal_handler_has_no_user_broker_input():
 
 # ── 2. Copy trading → DB-only, never dispatches to a broker ─────────────────
 
-def test_copy_trading_module_has_no_broker_dispatch_calls():
-    """copy_trading.py must contain no broker execution ``place_order`` call.
+def test_copy_trading_module_live_dispatch_is_guarded():
+    """copy_trading.py must gate EVERY LIVE follower fan-out behind the guard.
 
-    It persists FILLED Order/Trade/Position records directly to the DB and
-    never calls a real or simulated broker.
+    The P0-1 fix wired LIVE copy-trades through the follower's own broker
+    adapter, so the module MUST:
+
+      - import assert_live_dispatch_allowed() and call it before any broker call
+      - resolve the broker account from server data only (filtered by
+        ``BrokerAccountRecord.user_id == follower.follower_user_id``)
+      - persist REJECTED (never FILLED/OPEN) when the guard blocks, the
+        follower owns no connected broker, or the broker rejects the order
+      - keep PAPER bookkeeping FILLED-only (unchanged behavior, no broker)
     """
     src = (REPO_ROOT / "app" / "engine" / "copy_trading.py").read_text(encoding="utf-8")
-    assert ".place_order(" not in src, "copy_trading must never call broker.place_order"
-    # No broker *object* may be referenced in execution code: reject any code
-    # usage of a broker instance/type (docstrings/comments may mention the word
-    # "broker" — e.g. "Live broker execution modes" — so match code patterns).
-    code_broker_refs = re.findall(
-        r"\b(broker\s*[.=:(]|Broker\s*\(|from app\.brokers|import .*Broker)\b", src
-    )
-    assert not code_broker_refs, (
-        f"copy_trading must not reference a broker execution object: {code_broker_refs}"
-    )
-    # Orders are recorded as FILLED directly — bookkeeping, not execution.
-    assert 'status="FILLED"' in src or "status='FILLED'" in src
+    assert "assert_live_dispatch_allowed" in src, "LIVE copy-trade must invoke the live-dispatch guard"
+    assert ".place_order(" in src, "LIVE copy-trade must dispatch through the broker boundary"
+    assert 'status="REJECTED"' in src, "blocked/failed LIVE fan-out must persist REJECTED"
+    assert 'status="FILLED"' in src, "PAPER/confirmed fills still persist FILLED"
+    assert (
+        "BrokerAccountRecord.user_id == follower.follower_user_id" in src
+    ), "server-derived follower identity must scope the broker resolution"
 
 
 def test_copy_trading_engine_holds_no_broker(monkeypatch):
@@ -111,14 +117,14 @@ def test_copy_trading_engine_holds_no_broker(monkeypatch):
     assert not hasattr(engine, "order_manager")
 
 
-def test_copy_trading_executor_persists_filled_without_a_broker(monkeypatch):
-    """The per-follower executor writes FILLED DB records, never dispatches.
+def test_copy_trading_executor_rejects_live_fill_without_owned_broker(monkeypatch):
+    """The per-follower executor must NOT fabricate FILLED/OPEN for a LIVE follower.
 
-    ``_execute_single_follower_order`` is the innermost execution step — the one
-    place a broker call WOULD live if copy trading dispatched to a real broker.
-    We drive it directly with a LIVE-mode follower and a capture session,
-    proving it persists FILLED Order/Trade/Position records and does so without
-    touching any broker (no broker exists on the engine).
+    ``_execute_single_follower_order`` is the innermost execution step. For a
+    LIVE-mode follower the engine must resolve a CONNECTED broker account owned
+    by ``follower.follower_user_id`` from the DB before dispatching. Here the
+    capture session yields no owned broker row, so the executor must persist a
+    REJECTED order and create NO Trade/Position - never a phantom fill.
     """
     from app.engine.copy_trading import CopyTradingEngine
     from app.models.trading import OrderRecord, TradeRecord, PositionRecord
@@ -144,7 +150,7 @@ def test_copy_trading_executor_persists_filled_without_a_broker(monkeypatch):
             return _Scalar()
 
         async def get(self, model, pk):
-            return None  # no follower_row -> stats update skipped
+            return None  # no follower_row / broker row resolvable
 
         async def flush(self):
             return None
@@ -152,6 +158,9 @@ def test_copy_trading_executor_persists_filled_without_a_broker(monkeypatch):
     class _Scalar:
         def scalars(self):
             return self
+
+        def first(self):
+            return None  # no owned broker account resolves
 
         def all(self):
             return []
@@ -167,7 +176,7 @@ def test_copy_trading_executor_persists_filled_without_a_broker(monkeypatch):
 
     session = _CaptureSession()
     monkeypatch.setattr("app.engine.copy_trading.SessionLocal", lambda: session)
-    # notify_trade_fill is imported locally inside the executor — patch its source.
+    # notify_trade_fill is imported locally inside the executor - patch its source.
     monkeypatch.setattr("app.engine.alerts.notify_trade_fill", AsyncMock())
 
     engine = CopyTradingEngine()
@@ -186,16 +195,16 @@ def test_copy_trading_executor_persists_filled_without_a_broker(monkeypatch):
             master_mode="LIVE",
         )
     )
-    assert outcome.get("success", False) is True, outcome
+    assert outcome.get("success", False) is False, outcome
+    assert outcome.get("reason") == "no_owned_broker", outcome
 
-    # The executor must have persisted a FILLED order + a trade + an open position.
     orders = [r for r in session.added if isinstance(r, OrderRecord)]
     trades = [r for r in session.added if isinstance(r, TradeRecord)]
     positions = [r for r in session.added if isinstance(r, PositionRecord)]
-    assert orders, "expected at least one OrderRecord"
-    assert all(o.status == "FILLED" for o in orders), "order must be FILLED"
-    assert trades, "expected a TradeRecord"
-    assert positions, "expected an open PositionRecord"
+    assert len(orders) == 1, "exactly one REJECTED order record expected"
+    assert orders[0].status == "REJECTED", "must never fabricate a FILLED order"
+    assert not trades, "no fabricated trade record"
+    assert not positions, "no fabricated OPEN position"
     assert session._committed is True
 
 
@@ -210,7 +219,7 @@ def test_visual_strategy_execute_legs_has_no_callers():
     occurrences = _grep("execute_legs")
     assert len(occurrences) == 1, (
         "execute_legs must appear exactly once (its definition). "
-        f"Called from:\n{occurrences}"
+        f"Called from:\r\n{occurrences}"
     )
     assert "visual_strategy.py" in occurrences[0] and "def execute_legs" in occurrences[0]
 
@@ -221,7 +230,7 @@ def test_visual_strategy_engine_singleton_is_unused():
     # Only its definition line is expected.
     assert len(occurrences) == 1, (
         "visual_strategy_engine must be unused (only its definition exists). "
-        f"Found:\n{occurrences}"
+        f"Found:\r\n{occurrences}"
     )
 
 

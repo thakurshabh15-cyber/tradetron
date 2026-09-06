@@ -25,6 +25,7 @@ from app.brokers.postback import (
     reconcile_broker_postback,
     verify_broker_postback_signature,
 )
+from app.engine.order_reconciliation import normalize_broker_status
 from app.core.audit import log_audit_event
 from app.core.logging import get_logger
 from app.db.session import get_db
@@ -746,6 +747,32 @@ async def broker_postback_webhook(
             "average_price": float(payload.get("average_price", 0.0) or 0.0),
         }
     logger.info("%s Postback Received (verified): %s", broker_name.upper(), norm_event)
+
+    # P1: reduce the event status to the canonical order vocabulary BEFORE
+    # reconciliation, exactly like the queued webhook worker path.  Reuses the
+    # shared ``normalize_broker_status`` (single token-set source of truth) so
+    # raw non-Zerodha tokens (e.g. Upstox/Angel ``COMPLETE`` / ``COMPLETED``)
+    # reach the reconciler's ``FILLED`` booking branch (pre-fix they fell
+    # through and never booked a Trade/PositionRecord).  For Zerodha this is
+    # idempotent over ``process_postback``'s already-canonical output
+    # (FILLED/CANCELLED/OPEN -> themselves), so it introduces NO behavior
+    # change and NO double-normalization regression.  An UNKNOWN status is
+    # fail-closed: the event is acknowledged (HTTP 200, ``event_processed``
+    # False) with ZERO DB mutation - no fabricated fill, no guessed terminal
+    # state, exactly matching the queued path's fail-safe.
+    canonical_status = normalize_broker_status(norm_event["status"])
+    if canonical_status is None:
+        logger.warning(
+            "Direct broker postback for order=%s dropped: unrecognized status %r",
+            norm_event.get("broker_order_id"), str(norm_event.get("status")),
+        )
+        return {
+            "status": "ok",
+            "reconciled_status": None,
+            "event_processed": False,
+            "reason": "unknown_status",
+        }
+    norm_event["status"] = canonical_status
 
     broker_order_id = norm_event["broker_order_id"]
     new_status = norm_event["status"]

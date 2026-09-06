@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.auth import get_optional_current_user
 from app.core.logging import get_logger
 from app.db.session import get_db
+from app.models.user import UserRecord
 from app.models.watchlist import PriceAlertRecord, WatchlistRecord
 
 logger = get_logger("api.watchlist")
@@ -32,16 +36,33 @@ _DEFAULT_SEEDS = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN"]
 
 
 @router.get("")
-async def get_watchlist(db: AsyncSession = Depends(get_db)):
-    """Retrieve all symbols in the active watchlist."""
+async def get_watchlist(
+    db: AsyncSession = Depends(get_db),
+    user: Optional[UserRecord] = Depends(get_optional_current_user),
+):
+    """Retrieve the caller's OWN watchlist symbols.
+
+    Tenant isolation policy (mirrors the dashboard/summary split):
+
+    * **Authenticated** — strictly scoped to the server-derived ``user.id``
+      from the bearer token; another tenant's rows and the anonymous demo
+      rows are never returned.
+    * **Anonymous** — returns only the ``user_id IS NULL`` demo rows (the
+      seeded guest watchlist used by the landing/watchlist page). A
+      client-supplied ``user_id`` is never consulted.
+    """
     stmt = select(WatchlistRecord).order_by(WatchlistRecord.created_at.desc())
+    if user is not None:
+        stmt = stmt.where(WatchlistRecord.user_id == user.id)
+    else:
+        stmt = stmt.where(WatchlistRecord.user_id.is_(None))
     res = await db.execute(stmt)
     records = res.scalars().all()
 
-    # If DB is empty, initialize default seed records
-    if not records:
+    # Seed the demo dataset only when no demo rows exist yet (anonymous view).
+    if user is None and not records:
         for sym in _DEFAULT_SEEDS:
-            rec = WatchlistRecord(symbol=sym, notes="Core watch asset")
+            rec = WatchlistRecord(symbol=sym, notes="Core watch asset", user_id=None)
             db.add(rec)
         await db.commit()
         res = await db.execute(stmt)
@@ -62,20 +83,31 @@ async def get_watchlist(db: AsyncSession = Depends(get_db)):
 async def add_to_watchlist(
     req: AddWatchlistRequest,
     db: AsyncSession = Depends(get_db),
+    user: Optional[UserRecord] = Depends(get_optional_current_user),
 ):
-    """Add a symbol to the active watchlist."""
+    """Add a symbol to the caller's own watchlist namespace.
+
+    Authenticated callers get the row stamped with the server-derived
+    ``user.id``; anonymous callers operate on the ``user_id IS NULL`` demo
+    namespace only. Duplicate checks are namespace-scoped, so tenants never
+    collide with one another or with the demo dataset.
+    """
     sym_clean = req.symbol.strip().upper()
 
-    # Check for duplicates
-    stmt = select(WatchlistRecord).where(WatchlistRecord.symbol == sym_clean)
-    res = await db.execute(stmt)
-    if res.scalar_one_or_none():
+    # Check for duplicates within the caller's own namespace only.
+    dup_stmt = select(WatchlistRecord).where(WatchlistRecord.symbol == sym_clean)
+    if user is None:
+        dup_stmt = dup_stmt.where(WatchlistRecord.user_id.is_(None))
+    else:
+        dup_stmt = dup_stmt.where(WatchlistRecord.user_id == user.id)
+    dup_res = await db.execute(dup_stmt)
+    if dup_res.scalar_one_or_none():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"{sym_clean} is already in the watchlist",
         )
 
-    record = WatchlistRecord(symbol=sym_clean, notes=req.notes)
+    record = WatchlistRecord(symbol=sym_clean, notes=req.notes, user_id=user.id if user else None)
     db.add(record)
     await db.commit()
     await db.refresh(record)
@@ -93,13 +125,25 @@ async def add_to_watchlist(
 async def remove_from_watchlist(
     symbol_or_id: str,
     db: AsyncSession = Depends(get_db),
+    user: Optional[UserRecord] = Depends(get_optional_current_user),
 ):
-    """Remove a symbol from the watchlist by symbol name or ID."""
+    """Remove a symbol from the caller's own watchlist namespace.
+
+    The target row must belong to the caller's namespace: authenticated
+    callers can only delete rows stamped with their server-derived
+    ``user.id``; anonymous callers can only delete ``user_id IS NULL`` demo
+    rows. Anything else is reported as not-found so the endpoint never
+    reveals (or mutates) another tenant's data.
+    """
     clean_target = symbol_or_id.strip()
 
     stmt = select(WatchlistRecord).where(
         (WatchlistRecord.id == clean_target) | (WatchlistRecord.symbol == clean_target.upper())
     )
+    if user is None:
+        stmt = stmt.where(WatchlistRecord.user_id.is_(None))
+    else:
+        stmt = stmt.where(WatchlistRecord.user_id == user.id)
     res = await db.execute(stmt)
     record = res.scalar_one_or_none()
 
@@ -114,9 +158,20 @@ async def remove_from_watchlist(
 
 # ── PRICE ALERTS ─────────────────────────────────────────────────────────────
 @router.get("/alerts/list")
-async def list_alerts(db: AsyncSession = Depends(get_db)):
-    """List all registered price alerts."""
+async def list_alerts(
+    db: AsyncSession = Depends(get_db),
+    user: Optional[UserRecord] = Depends(get_optional_current_user),
+):
+    """List the caller's OWN price alerts.
+
+    Authenticated — strictly tenant-scoped to the server-derived ``user.id``.
+    Anonymous — only the ``user_id IS NULL`` demo alerts (guest visitors).
+    """
     stmt = select(PriceAlertRecord).order_by(PriceAlertRecord.created_at.desc())
+    if user is None:
+        stmt = stmt.where(PriceAlertRecord.user_id.is_(None))
+    else:
+        stmt = stmt.where(PriceAlertRecord.user_id == user.id)
     res = await db.execute(stmt)
     alerts = res.scalars().all()
 
@@ -139,8 +194,13 @@ async def list_alerts(db: AsyncSession = Depends(get_db)):
 async def create_price_alert(
     req: CreateAlertRequest,
     db: AsyncSession = Depends(get_db),
+    user: Optional[UserRecord] = Depends(get_optional_current_user),
 ):
-    """Create a new price alert (e.g. NVDA CROSSES ABOVE $135.00)."""
+    """Create a new price alert (e.g. NVDA CROSSES ABOVE $135.00).
+
+    Authenticated callers get the alert stamped with the server-derived
+    ``user.id``; anonymous callers create ``user_id IS NULL`` demo alerts.
+    """
     sym_clean = req.symbol.strip().upper()
     cond_clean = req.condition.strip().upper()
     if cond_clean not in ("ABOVE", "BELOW"):
@@ -151,6 +211,7 @@ async def create_price_alert(
         condition=cond_clean,
         target_price=req.target_price,
         is_active=True,
+        user_id=user.id if user else None,
     )
     db.add(alert)
     await db.commit()
@@ -177,9 +238,19 @@ async def create_price_alert(
 async def delete_price_alert(
     alert_id: str,
     db: AsyncSession = Depends(get_db),
+    user: Optional[UserRecord] = Depends(get_optional_current_user),
 ):
-    """Delete a price alert."""
+    """Delete the caller's OWN price alert.
+
+    The target alert must belong to the caller's namespace (server-derived
+    ``user.id`` for authenticated callers, ``user_id IS NULL`` demo alerts for
+    anonymous callers); anything else is reported as not-found.
+    """
     stmt = select(PriceAlertRecord).where(PriceAlertRecord.id == alert_id)
+    if user is None:
+        stmt = stmt.where(PriceAlertRecord.user_id.is_(None))
+    else:
+        stmt = stmt.where(PriceAlertRecord.user_id == user.id)
     res = await db.execute(stmt)
     alert = res.scalar_one_or_none()
 
@@ -195,9 +266,19 @@ async def delete_price_alert(
 async def toggle_price_alert(
     alert_id: str,
     db: AsyncSession = Depends(get_db),
+    user: Optional[UserRecord] = Depends(get_optional_current_user),
 ):
-    """Toggle price alert active state."""
+    """Toggle the caller's OWN price alert active state.
+
+    The target alert must belong to the caller's namespace (server-derived
+    ``user.id`` for authenticated callers, ``user_id IS NULL`` demo alerts for
+    anonymous callers); anything else is reported as not-found.
+    """
     stmt = select(PriceAlertRecord).where(PriceAlertRecord.id == alert_id)
+    if user is None:
+        stmt = stmt.where(PriceAlertRecord.user_id.is_(None))
+    else:
+        stmt = stmt.where(PriceAlertRecord.user_id == user.id)
     res = await db.execute(stmt)
     alert = res.scalar_one_or_none()
 

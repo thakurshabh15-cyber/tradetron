@@ -11,9 +11,11 @@ from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.auth import get_current_user
 from app.core.logging import get_logger
 from app.db.session import get_db
 from app.models.trading import TradeRecord
+from app.models.user import UserRecord
 
 logger = get_logger("api.reports")
 router = APIRouter(prefix="/api/reports", tags=["reports"])
@@ -22,12 +24,22 @@ router = APIRouter(prefix="/api/reports", tags=["reports"])
 @router.get("/performance")
 async def get_performance_report(
     db: AsyncSession = Depends(get_db),
+    user: UserRecord = Depends(get_current_user),
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     strategy_id: Optional[str] = None,
 ):
-    """Aggregate comprehensive trading performance metrics and strategy breakdown."""
-    stmt = select(TradeRecord).order_by(TradeRecord.executed_at.desc())
+    """Aggregate the authenticated caller's OWN performance metrics and strategy breakdown.
+
+    Anonymous callers receive 401.  Every metric is tenant-scoped to the
+    server-derived ``user.id`` from the bearer token; a client-supplied
+    ``user_id`` is never consulted.
+    """
+    stmt = (
+        select(TradeRecord)
+        .where(TradeRecord.user_id == user.id)
+        .order_by(TradeRecord.executed_at.desc())
+    )
     if strategy_id:
         stmt = stmt.where(TradeRecord.strategy_id == strategy_id)
 
@@ -109,10 +121,19 @@ async def get_performance_report(
 @router.get("/trades/summary")
 async def get_trades_summary(
     db: AsyncSession = Depends(get_db),
+    user: UserRecord = Depends(get_current_user),
     period: Literal["daily", "weekly", "all"] = "all",
 ):
-    """Return aggregated trade counts, volume by side, and execution velocity."""
-    stmt = select(TradeRecord).order_by(TradeRecord.executed_at.desc())
+    """Return the authenticated caller's OWN aggregated trade counts, volume by side and velocity.
+
+    Anonymous callers receive 401; aggregates are tenant-scoped to the
+    server-derived ``user.id``.
+    """
+    stmt = (
+        select(TradeRecord)
+        .where(TradeRecord.user_id == user.id)
+        .order_by(TradeRecord.executed_at.desc())
+    )
     res = await db.execute(stmt)
     trades = res.scalars().all()
 
@@ -145,10 +166,19 @@ async def get_trades_summary(
 @router.get("/export")
 async def export_trades_report(
     db: AsyncSession = Depends(get_db),
+    user: UserRecord = Depends(get_current_user),
     format: Literal["csv", "json"] = "csv",
 ):
-    """Export complete trade log as downloadable CSV or structured JSON."""
-    stmt = select(TradeRecord).order_by(TradeRecord.executed_at.desc())
+    """Export the authenticated caller's OWN trade log as CSV or structured JSON.
+
+    Anonymous callers receive 401; the export can only ever contain records
+    scoped to the server-derived ``user.id``.
+    """
+    stmt = (
+        select(TradeRecord)
+        .where(TradeRecord.user_id == user.id)
+        .order_by(TradeRecord.executed_at.desc())
+    )
     res = await db.execute(stmt)
     trades = res.scalars().all()
 

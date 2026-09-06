@@ -23,6 +23,38 @@ logger = get_logger("api.copy_trading")
 router = APIRouter(prefix="/api/copy-trading", tags=["copy_trading"])
 
 
+async def _validate_follower_broker_ownership(
+    db: AsyncSession,
+    follower_user_id: str,
+    broker_account_id: str | None,
+) -> BrokerAccountRecord | None:
+    """Return the follower's own CONNECTED, active broker account, or None.
+
+    Security invariant: a follower may NEVER reference another user's broker
+    account. The account is resolved from server-derived identity
+    (``follower_user_id`` = authenticated ``user.id``) — never from the client's
+    claimed user/account relationship. Only a CONNECTED, active account owned by
+    that exact user is acceptable.
+    """
+    if not broker_account_id:
+        return None
+
+    stmt = select(BrokerAccountRecord).where(
+        BrokerAccountRecord.id == broker_account_id,
+        BrokerAccountRecord.user_id == follower_user_id,
+        BrokerAccountRecord.status == "CONNECTED",
+        BrokerAccountRecord.is_active.is_(True),
+    )
+    broker = (await db.execute(stmt)).scalar_one_or_none()
+    if not broker:
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: broker account does not belong to the authenticated user "
+            "(Cross-tenant broker_account_id rejected.)",
+        )
+    return broker
+
+
 # ── Pydantic Request & Response Schemas ──────────────────────────────────────
 
 
@@ -292,25 +324,23 @@ async def join_copy_group(
     existing = (await db.execute(existing_stmt)).scalar_one_or_none()
     if existing:
         if existing.status == "STOPPED":
+            # ── Ownership guard: never trust a client-supplied user/account
+            #    relationship. Reject any broker_account_id not owned by the
+            #    authenticated user (server-derived identity).
+            await _validate_follower_broker_ownership(db, user.id, req.broker_account_id)
             existing.status = "ACTIVE"
             existing.multiplier = req.multiplier
             existing.max_allocation = req.max_allocation
             existing.mode = req.mode
-            existing.broker_account_id = req.broker_account_id
+            existing.broker_account_id = req.broker_account_id if req.mode == "LIVE" else None
             await db.commit()
             return {"success": True, "message": "Resumed copy trading subscription", "follower_id": existing.id}
         raise HTTPException(status_code=400, detail="You are already following this copy group")
 
-    # If Live mode, verify broker account
-    if req.mode == "LIVE" and req.broker_account_id:
-        broker_stmt = select(BrokerAccountRecord).where(
-            BrokerAccountRecord.id == req.broker_account_id,
-            BrokerAccountRecord.user_id == user.id,
-            BrokerAccountRecord.status == "CONNECTED",
-        )
-        broker = (await db.execute(broker_stmt)).scalar_one_or_none()
-        if not broker:
-            raise HTTPException(status_code=400, detail="Connected broker account not found")
+    # ── Ownership guard: a follower may only attach their OWN CONNECTED,
+    #    active broker account (server-derived identity = `user.id`).
+    #    Offering a cross-tenant broker_account_id raises 403.
+    await _validate_follower_broker_ownership(db, user.id, req.broker_account_id)
 
     follower = CopyFollowerRecord(
         group_id=group.id,
@@ -391,7 +421,16 @@ async def update_following_settings(
     if req.mode is not None:
         follower.mode = req.mode
     if req.broker_account_id is not None:
-        follower.broker_account_id = req.broker_account_id
+        # ── Ownership guard: never trust a client-supplied user/account
+        #    relationship. Reject any broker_account_id not owned by the
+        #    authenticated user (server-derived identity).
+        resolved_broker = await _validate_follower_broker_ownership(db, user.id, req.broker_account_id)
+        # Only a LIVE subscription may hold a real broker account linkage.
+        follower.broker_account_id = (
+            req.broker_account_id
+            if resolved_broker is not None and (req.mode or follower.mode) == "LIVE"
+            else None
+        )
 
     follower.updated_at = datetime.now(timezone.utc)
     db.add(follower)

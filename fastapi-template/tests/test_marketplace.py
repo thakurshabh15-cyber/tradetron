@@ -86,7 +86,7 @@ def test_marketplace_suite():
     assert pause_data["success"] is True
     assert pause_data["status"] == "PAUSED"
 
-    # 7. Test Publish to Marketplace
+    # 7. Test Publish to Marketplace (authenticated — marketplace/publish is private)
     publish_res = client.post(
         "/api/strategies/marketplace/publish",
         json={
@@ -97,6 +97,7 @@ def test_marketplace_suite():
             "price": 0.0,
             "description": "Verified momentum algo tested on Apple and Microsoft.",
         },
+        headers=m_headers,
     )
     assert publish_res.status_code == 200, publish_res.text
     pub_data = publish_res.json()

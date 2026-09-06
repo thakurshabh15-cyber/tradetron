@@ -229,6 +229,12 @@ async def init_db() -> None:
         ("orders", "filled_quantity INTEGER DEFAULT 0"),
         ("orders", "mode VARCHAR(20) DEFAULT 'PAPER'"),
         ("orders", "error_message TEXT"),
+        # Order idempotency (0003_orders_idempotency): nullable by design, so
+        # legacy rows are untouched. Production schema is owned by the Alembic
+        # migration; this dev/test bootstrap keeps pre-existing local DBs in
+        # step with the ORM model.
+        ("orders", "client_order_id VARCHAR(64)"),
+        ("orders", "position_id VARCHAR(36)"),
         ("trades", "user_id VARCHAR(36)"),
         ("trades", "pnl_pct FLOAT"),
         ("trades", "exit_reason VARCHAR(50)"),

@@ -30,7 +30,8 @@ from app.webhooks.handlers import broker_postback, billing, tradethrone_signal  
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Minimal startup - just basic logging/tracing, no blocking Redis/Worker calls
+    # Startup: logging/tracing, database, resiliency, and the Redis-backed
+    # webhook pipeline (queue + rate limiter + idempotency + worker pool).
     setup_logging()
     setup_webhook_logging()
     # TEMPORARY: OpenTelemetry tracing disabled - FastAPIInstrumentor middleware
@@ -47,12 +48,42 @@ async def lifespan(app: FastAPI):
     init_circuit_breakers()
     init_bulkheads()
 
+    # Initialize the Redis-backed webhook pipeline.  In webhook_local_mode the
+    # ingress path bypasses Redis entirely (signature verification and the
+    # queue are skipped), so there is nothing to connect here.
+    if not settings.webhook_local_mode:
+        from app.webhooks.queue.redis_streams import webhook_queue
+        from app.webhooks.resiliency.rate_limiter import rate_limiter
+        from app.webhooks.resiliency.idempotency import idempotency_store
+        from app.webhooks.workers.pool import worker_pool
+
+        await webhook_queue.initialize()
+        await rate_limiter.initialize()
+        await idempotency_store.initialize()
+        await worker_pool.start()
+        logger.info("Webhook pipeline initialized (queue + rate limiter + idempotency + workers)")
+    else:
+        logger.info("Webhook local mode active — pipeline not started (Redis bypassed)")
+
     logger.info("TradeThrone Webhook platform started (lifespan yield only)")
 
     yield
 
     # Shutdown - minimal, no await on external services
     logger.info("Shutting down TradeThrone webhook platform...")
+    if not settings.webhook_local_mode:
+        from app.webhooks.workers.pool import worker_pool
+        from app.webhooks.queue.redis_streams import webhook_queue
+
+        try:
+            await worker_pool.stop()
+        except Exception:
+            pass
+        try:
+            await webhook_queue.shutdown()
+        except Exception:
+            pass
+
 
 
 app = FastAPI(

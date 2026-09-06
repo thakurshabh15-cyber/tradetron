@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.auth import get_optional_current_user
 from app.core.logging import get_logger
 from app.db.session import get_db
 from app.models.trading import StrategyRecord, TradeRecord
@@ -28,11 +31,37 @@ _COMPLETED_TASKS: set[str] = {"marketplace_setup", "broker_setup"}
 
 
 @router.get("/summary")
-async def get_dashboard_summary(db: AsyncSession = Depends(get_db)):
-    """Unified dashboard summary including weekReturn, monthReturn, topStrategies, and pendingTasks."""
+async def get_dashboard_summary(
+    db: AsyncSession = Depends(get_db),
+    user: Optional[UserRecord] = Depends(get_optional_current_user),
+):
+    """Unified dashboard summary including weekReturn, monthReturn, topStrategies, and pendingTasks.
+
+    Two contractual views:
+
+    * **Authenticated** — every metric (PnL, returns, top strategies and trade
+      counts) is strictly tenant-scoped to the server-derived ``user.id`` from
+      the bearer token.  Another tenant's trades/strategies never appear, and a
+      client-supplied ``user_id`` is never consulted.
+    * **Anonymous** — the landing page fetches this endpoint via
+      ``publicFetch`` so guests can render the demo dashboard; the global demo
+      aggregates are the intentional public behavior and are preserved as-is.
+
+    (Making the anonymous view disappear would break the intentional guest
+    landing experience — see the frontend ``{ public: true }`` usage in
+    ``client/src/pages/Dashboard.jsx``.)
+    """
     from datetime import timedelta
 
-    trades_res = await db.execute(select(TradeRecord).order_by(TradeRecord.executed_at.desc()))
+    trades_stmt = select(TradeRecord).order_by(TradeRecord.executed_at.desc())
+    strat_stmt = select(StrategyRecord).order_by(StrategyRecord.created_at.desc())
+
+    if user is not None:
+        # Server-derived tenant scope for authenticated callers.
+        trades_stmt = trades_stmt.where(TradeRecord.user_id == user.id)
+        strat_stmt = strat_stmt.where(StrategyRecord.user_id == user.id)
+
+    trades_res = await db.execute(trades_stmt)
     all_trades = trades_res.scalars().all()
 
     total_realized_pnl = sum(t.pnl for t in all_trades if t.pnl is not None)
@@ -64,7 +93,7 @@ async def get_dashboard_summary(db: AsyncSession = Depends(get_db)):
     month_return = round((month_pnl / base_capital) * 100, 2) if base_capital else 0.0
 
     # 2. Fetch or mock top strategies
-    strat_res = await db.execute(select(StrategyRecord))
+    strat_res = await db.execute(strat_stmt)
     strat_records = strat_res.scalars().all()
 
     top_strategies = []

@@ -112,3 +112,15 @@ class DMAOrderRequest(BaseModel):
     mode: Literal["PAPER", "LIVE"] = "PAPER"
     broker_account_id: Optional[str] = None
     strategy_id: Optional[str] = None
+    client_order_id: Optional[str] = Field(
+        None,
+        min_length=8,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9._-]{8,64}$",
+        description=(
+            "Optional caller-supplied idempotency key. When provided the order "
+            "is durably claimed (PENDING) before broker dispatch; retries with "
+            "the same key replay the previous result instead of executing again. "
+            "Must be unique per authenticated user."
+        ),
+    )

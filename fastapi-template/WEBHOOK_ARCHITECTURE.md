@@ -771,12 +771,26 @@ class WebhookQueue:
         if webhook.attempt >= route.max_retries:
             # Send to DLQ
             await self._send_to_dlq(webhook, error)
+            # The delivered-but-failed entry has been superseded by the DLQ
+            # copy above.  Resolve it now: it must not linger in the pending
+            # entries list (PEL) where a Redis XAUTOCLAIM/XCLAIM reclaim would
+            # re-process it from attempt=1 - duplicating the effect, losing the
+            # retry history, and growing the PEL without bound.
+            await self._redis.xack(queue_name, "workers", entry_id)
         else:
             # Requeue with incremented attempt
             webhook.attempt += 1
             webhook.last_error = error
             await self._redis.xadd(queue_name, webhook.to_stream_entry())
-            await self._redis.hincrby("webhook:metrics:retried", queue_name, 1)
+            # Resolve the original pending entry immediately after the retry
+            # copy is durably written - and BEFORE the best-effort metric call
+            # below, so a metric failure can never re-leak the entry into the
+            # PEL and cause a duplicate execution on reclaim.
+            await self._redis.xack(queue_name, "workers", entry_id)
+            try:
+                await self._redis.hincrby("webhook:metrics:retried", queue_name, 1)
+            except Exception as exc:
+                logger.warning("Best-effort metric update failed for %s: %s", queue_name, exc)
     
     async def _send_to_dlq(self, webhook: QueuedWebhook, error: str) -> None:
         """Send failed webhook to dead letter queue"""
@@ -787,7 +801,10 @@ class WebhookQueue:
             "original_queue": resolve_route(webhook.envelope.provider, webhook.envelope.event_type).queue_name,
         }
         await self._redis.xadd("webhooks:dlq", dlq_entry)
-        await self._redis.hincrby("webhook:metrics:dlq", "total", 1)
+        try:
+            await self._redis.hincrby("webhook:metrics:dlq", "total", 1)
+        except Exception as exc:
+            logger.warning("Best-effort DLQ metric update failed: %s", exc)
         logger.error("Webhook %s sent to DLQ after %d attempts: %s", 
                      webhook.envelope.event_id, webhook.attempt, error)
     
@@ -902,29 +919,106 @@ class WorkerPool:
         webhook: QueuedWebhook
     ) -> None:
         start_time = asyncio.get_event_loop().time()
-        
+
+        route = resolve_route(webhook.envelope.provider, webhook.envelope.event_type)
+
+        # --- Worker-side duplicate-suppression guard (P0-2b) ------------------
+        # Before executing any side-effecting handler, check whether this
+        # webhook's idempotency key is ALREADY completed.  This guards a
+        # duplicate execution when an entry is re-delivered from the PEL by a
+        # future XAUTOCLAIM/XCLAIM/recovery reclaim, or when the same key was
+        # already processed to completion by another worker.
+        #
+        # Semantics (see IdempotencyStore.is_completed — read-only, fail-safe):
+        #   * Already completed  -> do NOT run the handler; XACK the current
+        #     entry (so it leaves the PEL) and return.  Never nack/requeue,
+        #     never alter the completed record.
+        #   * Not completed      -> run the handler normally.
+        #   * Redis lookup error -> treat as NOT completed and run the handler
+        #     normally: for a trading/payment side-effect path, dropping a real
+        #     event on an indeterminate lookup is worse than a rare duplicate.
+        #   * Missing/empty key  -> skip the check entirely (legacy entries).
+        idempotency_key = webhook.envelope.idempotency_key
+        if idempotency_key:
+            try:
+                already_completed = await idempotency_store.is_completed(idempotency_key)
+            except Exception as exc:
+                logger.warning(
+                    "Worker duplicate-guard lookup failed for %s; proceeding "
+                    "with handler execution (fail-safe): %s",
+                    webhook.envelope.event_id, exc,
+                )
+                already_completed = False
+
+            if already_completed:
+                logger.info(
+                    "Duplicate webhook suppressed at worker: event_id=%s "
+                    "idempotency_key=%s already completed; XACKing entry %s",
+                    webhook.envelope.event_id, idempotency_key, entry_id,
+                )
+                record_webhook_received(
+                    webhook.envelope.provider, webhook.envelope.event_type, "duplicate"
+                )
+                # XACK the current stream entry so it leaves the PEL.  A failure
+                # is logged and left for the normal at-least-once reconcile.
+                await webhook_queue.ack(route.queue_name, entry_id)
+                return
+
         try:
             # Execute handler with timeout
-            route = resolve_route(webhook.envelope.provider, webhook.envelope.event_type)
             await asyncio.wait_for(
                 config.handler(webhook),
                 timeout=route.timeout_seconds
             )
-            
-            # Success
-            await webhook_queue.ack(route.queue_name, entry_id)
-            duration_ms = (asyncio.get_event_loop().time() - start_time) * 1000
-            logger.debug("Processed webhook %s in %.2fms", webhook.envelope.event_id, duration_ms)
-            
+
         except asyncio.TimeoutError:
             error = f"Handler timeout after {route.timeout_seconds}s"
             logger.error("Webhook %s timeout: %s", webhook.envelope.event_id, error)
             await webhook_queue.nack(route.queue_name, entry_id, webhook, error)
-            
+            return
+
         except Exception as e:
             error = f"{type(e).__name__}: {e}"
             logger.error("Webhook %s processing failed: %s", webhook.envelope.event_id, error)
             await webhook_queue.nack(route.queue_name, entry_id, webhook, error)
+            return
+
+        # Success — the handler completed and its side effects are committed.
+        # Transition the idempotency record from "processing" to "completed"
+        # BEFORE the XACK (P0-2).  The Lua stale-processing branch in
+        # check_and_mark_processing() DELETES any record left in "processing"
+        # for more than 5 minutes, after which a re-delivered webhook is
+        # treated as brand-new and the broker/payment side effect would be
+        # executed a SECOND time.  Completing the record extends the dedup
+        # window to the full idempotency TTL.  This is best-effort: a
+        # mark_completed failure must never block the XACK or fall into nack.
+        if idempotency_key:
+            try:
+                await idempotency_store.mark_completed(
+                    idempotency_key,
+                    {"status": "processed", "event_id": webhook.envelope.event_id},
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Best-effort idempotency mark_completed failed for %s: %s",
+                    webhook.envelope.event_id, exc,
+                )
+
+        # Do NOT let an ack failure below fall into a nack path: nack requeues
+        # the event, and requeueing an already-executed webhook would duplicate
+        # its broker/payment side effects.  If ack fails, log it loudly and let
+        # the at-least-once PEL reconcile handle the residue — never re-run the
+        # handler proactively.
+        try:
+            await webhook_queue.ack(route.queue_name, entry_id)
+        except Exception as e:
+            logger.error(
+                "Webhook %s processed successfully but ACK failed (%s); "
+                "entry %s left in PEL for reconciliation",
+                webhook.envelope.event_id, e, entry_id,
+            )
+        duration_ms = (asyncio.get_event_loop().time() - start_time) * 1000
+        logger.debug("Processed webhook %s in %.2fms", webhook.envelope.event_id, duration_ms)
     
     def health_check(self) -> bool:
         return self._running and len(self._tasks) > 0
@@ -1188,6 +1282,71 @@ worker_pool.register_pool(WorkerConfig(
     handler=handle_razorpay_webhook,
 ))
 ```
+
+#### 4.6.1 Queued Broker Postback Status Normalization
+
+The **queued webhook path** (`app/webhooks/handlers/broker_postback.py` ->
+`handle_broker_postback`) normalizes each broker's raw status token to the
+canonical order vocabulary **at ingress, before reconciliation**, via the shared
+classifier in `app/engine/order_reconciliation.py`:
+
+```python
+from app.engine.order_reconciliation import normalize_broker_status
+
+raw_status = payload.get("status", "")
+status = normalize_broker_status(raw_status)   # "FILLED" | "REJECTED" | "CANCELLED" | "OPEN" | None
+if status is None:
+    # Unknown status: fail-safe.  No fill fabricated, no terminal state guessed.
+    return
+```
+
+**Canonical status vocabulary** (single token-set source of truth in
+`app/engine/order_reconciliation.py`):
+
+| Raw broker token                            | Canonical status |
+|---------------------------------------------|------------------|
+| `FILLED`, `COMPLETE`, `COMPLETED`           | `FILLED`         |
+| `REJECTED`                                  | `REJECTED`       |
+| `CANCELLED`, `CANCELED`, `EXPIRED`, `CANCELLED/REJECTED` | `CANCELLED` |
+| `OPEN`, `NEW`, `PENDING`, `PENDING_NEW`, `PARTIALLY_FILLED`, `PARTIALLY FILLED`, `TRIGGER PENDING`, `TRIGGERED`, `PENDING APPROVAL`, `PENDING REVIEW`, `PENDING MIS` | `OPEN` |
+| anything else / missing                     | `None` (fail-safe) |
+
+**Unknown-status fail-safe behavior**: an unrecognized status yields `None` and
+the handler returns WITHOUT any DB mutation.  The event is acknowledged (XACK)
+rather than retried - an unparseable status is a data-quality problem, not a
+transient error, and retrying it forever would not help.  No fill is fabricated
+and no terminal state is guessed.
+
+**Normalized event -> existing reconciler**: every recognized event (including a
+Zerodha `COMPLETE` / Upstox `COMPLETED` fill) is passed to the SAME shared
+`reconcile_broker_postback()` used by the direct REST path:
+`duplicate guard -> atomic finalization CAS -> TradeRecord + PositionRecord -> XACK`.
+Normalization introduces NO second financial finalization path - it only makes
+the raw broker vocabulary reach the existing FILLED branch.  The reconciler's
+`FINALIZED_ORDER_STATUSES` duplicate/CAS semantics remain authoritative.
+
+**Direct REST postback**: converges on the same canonicalization.  The direct
+ingress (`app/api/brokers.py` -> `broker_postback_webhook`, routes
+`/api/brokers/webhooks|postback/{broker_name}`) applies the SAME
+`normalize_broker_status()` gate to the provider-normalized event before handing
+it to `reconcile_broker_postback()`.  For non-Zerodha brokers the raw token is
+canonicalized directly (a raw Upstox/Angel `COMPLETE` / `COMPLETED` now reaches
+the FILLED booking branch, previously it fell through); for Zerodha the gate is
+idempotent over `ZerodhaKiteBroker.process_postback`'s already-canonical output
+(`FILLED`/`CANCELLED`/`OPEN` -> themselves), so it introduces NO behavior change
+and NO double-normalization.  An UNKNOWN raw token is fail-closed: the endpoint
+returns HTTP 200 with `event_processed: False` / `reason: "unknown_status"` and
+ZERO DB mutation - no fabricated fill, no guessed terminal state, exactly the
+queued path's fail-safe.  Both paths converge on the SAME shared
+`reconcile_broker_postback()` reconciler.
+
+**Retry / DLQ semantics**: unchanged.  `handle_broker_postback` still raises
+`ValueError` only for a missing `broker_order_id` (NACK/retry); recognized and
+unknown-status events return normally (XACK), preserving the existing
+idempotency-first delivery contract in the worker pool.  The direct REST path
+returns the same 200 `ok` envelope for both processed and unknown-status events,
+so a broker that retries a legitimate fill is still de-duplicated by the
+reconciler's atomic CAS rather than double-booked.
 
 ### 4.7 Resiliency Layer
 
@@ -1647,6 +1806,30 @@ class IdempotencyStore:
             logger.warning("Idempotency check failed, allowing request: %s", e)
             return True, None  # Fail open
     
+    async def is_completed(self, key: str) -> bool:
+        # Read-only, NON-MUTATING check (plain GET): is this idempotency key
+        # already COMPLETED?  Deliberately NOT check_and_mark_processing(),
+        # which is mutating — it would reopen/re-mark/delete records.  Worker
+        # duplicate suppression must only ever CONSULT a completed record,
+        # never alter it.  FAIL-SAFE: any Redis error returns False (not
+        # completed), so an indeterminate lookup never falsely suppresses a
+        # trading/payment event.
+        if not key:
+            return False
+        try:
+            value = await self._redis.get(f"idempotency:{key}")
+        except Exception as exc:
+            logger.warning("Idempotency is_completed lookup failed for %s; "
+                           "treating as not-completed (fail-safe): %s", key, exc)
+            return False
+        if not value:
+            return False
+        try:
+            record = json.loads(value)
+        except (TypeError, ValueError):
+            return False
+        return record.get("status") == "completed"
+
     async def mark_completed(self, key: str, result: dict[str, Any]) -> None:
         redis_key = f"idempotency:{key}"
         record = {

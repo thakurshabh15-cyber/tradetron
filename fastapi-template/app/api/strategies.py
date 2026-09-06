@@ -3,7 +3,7 @@
 import json
 from typing import Optional, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,24 +20,6 @@ from app.schemas.trading import StrategyCreate, StrategyRead, StrategyUpdate
 logger = get_logger("api.strategies")
 
 router = APIRouter(prefix="/api/strategies", tags=["strategies"])
-
-
-async def _get_optional_user_id(request: Request) -> Optional[str]:
-    """Extract user_id from JWT token if present, without raising on missing auth."""
-    try:
-        from app.api.auth import get_current_user
-        from app.db.session import SessionLocal
-        async with SessionLocal() as _db:
-            # Reuse auth dependency by calling it directly with the request
-            from app.core.security import decode_token
-            auth_header = request.headers.get("Authorization", "")
-            if auth_header.startswith("Bearer "):
-                token = auth_header[7:]
-                payload = decode_token(token)
-                return payload.get("sub") if payload else None
-    except Exception:
-        pass
-    return None
 
 
 class DeployStrategyRequest(BaseModel):
@@ -275,26 +257,28 @@ _DEFAULT_MARKETPLACE_ITEMS = [
 @router.post("", response_model=StrategyRead, status_code=201)
 async def create_strategy(
     payload: StrategyCreate,
-    request: Request,
+    user: UserRecord = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Create a new trading strategy."""
+    """Create a trading strategy owned by the authenticated caller.
+
+    Ownership is ALWAYS server-derived from the token's ``sub``.  There is no
+    client-visible ``user_id`` in the payload and any such field is ignored;
+    the created record always belongs to ``user.id``.  Anonymous callers
+    receive 401.
+    """
     # ── Plan limit enforcement: count existing strategies for this user ───────
-    user_id = await _get_optional_user_id(request)
-    if user_id:
-        from app.engine.subscription import subscription_engine
-        count_stmt = select(StrategyRecord).where(
-            StrategyRecord.user_id == user_id
-        ) if hasattr(StrategyRecord, "user_id") else None
-        if count_stmt is not None:
-            count_res = await db.execute(count_stmt)
-            strat_count = len(count_res.scalars().all())
-            await subscription_engine.verify_access(user_id, "strategy_create", db, current_count=strat_count)
+    from app.engine.subscription import subscription_engine
+
+    count_stmt = select(StrategyRecord).where(StrategyRecord.user_id == user.id)
+    count_res = await db.execute(count_stmt)
+    strat_count = len(count_res.scalars().all())
+    await subscription_engine.verify_access(user.id, "strategy_create", db, current_count=strat_count)
     # ─────────────────────────────────────────────────────────────────────────
 
     record = StrategyRecord(
         name=payload.name,
-        user_id=user_id,
+        user_id=user.id,
         symbols_json=json.dumps([s.upper() for s in payload.symbols]),
         conditions_json=json.dumps([c.model_dump(mode="json") for c in payload.conditions]),
         action_json=json.dumps(payload.action.model_dump(mode="json")),
@@ -319,11 +303,21 @@ async def create_strategy(
 
 
 @router.get("", response_model=list[StrategyRead])
-async def list_strategies(db: AsyncSession = Depends(get_db)):
-    """List all strategies."""
-    result = await db.execute(
-        select(StrategyRecord).order_by(StrategyRecord.created_at.desc())
-    )
+async def list_strategies(
+    user: UserRecord = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """List the authenticated caller's OWN strategies (server-derived scope).
+
+    Regular users see only the strategies they created — another tenant's
+    configurations are never listed.  ADMIN/SUPERADMIN retain platform-wide
+    visibility.  Anonymous callers receive 401.
+    """
+    stmt = select(StrategyRecord).order_by(StrategyRecord.created_at.desc())
+    role = (getattr(user, "role", "") or "").upper()
+    if role not in ("ADMIN", "SUPERADMIN"):
+        stmt = stmt.where(StrategyRecord.user_id == user.id)
+    result = await db.execute(stmt)
     return [_row_to_read(r) for r in result.scalars().all()]
 
 
@@ -420,14 +414,24 @@ async def get_marketplace_strategies(
 @router.post("/marketplace/publish")
 async def publish_to_marketplace(
     req: PublishMarketplaceRequest,
+    user: UserRecord = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Publish a custom strategy to the public marketplace."""
+    """Publish one of the caller's OWN strategies to the public marketplace.
+
+    Requires authentication and ownership of the source strategy (admins may
+    publish any).  Anonymous callers receive 401; publishing another tenant's
+    strategy is rejected with 403.
+    """
     strat_stmt = select(StrategyRecord).where(StrategyRecord.id == req.strategy_id)
     res = await db.execute(strat_stmt)
     strat = res.scalar_one_or_none()
     if not strat:
         raise HTTPException(status_code=404, detail="Source strategy not found")
+
+    role = (getattr(user, "role", "") or "").upper()
+    if role not in ("ADMIN", "SUPERADMIN") and strat.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to publish this strategy")
 
     mkt_item = MarketplaceStrategyRecord(
         creator_name=req.creator_name,
@@ -455,14 +459,24 @@ async def publish_to_marketplace(
 @router.get("/{strategy_id}", response_model=StrategyRead)
 async def get_strategy(
     strategy_id: str,
+    user: UserRecord = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get a single strategy by ID."""
+    """Get one of the authenticated caller's OWN strategies.
+
+    Owner-only (admins may read any).  A strategy the caller does not own —
+    including engine/seed strategies with no owner — is reported as not found
+    so the endpoint never reveals another tenant's configuration.  Anonymous
+    callers receive 401.
+    """
     result = await db.execute(
         select(StrategyRecord).where(StrategyRecord.id == strategy_id)
     )
     row = result.scalar_one_or_none()
     if not row:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    role = (getattr(user, "role", "") or "").upper()
+    if role not in ("ADMIN", "SUPERADMIN") and row.user_id != user.id:
         raise HTTPException(status_code=404, detail="Strategy not found")
     return _row_to_read(row)
 

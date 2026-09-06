@@ -25,7 +25,7 @@ class TokenBucketRateLimiter:
     """Distributed token bucket rate limiter using Redis"""
     
     def __init__(self, redis_url: str | None = None):
-        self.redis_url = redis_url or settings.redis_url or "redis://localhost:6379/0"
+        self.redis_url = redis_url or settings.effective_redis_url or "redis://localhost:6379/0"
         self._redis: redis.Redis | None = None
         self._configs: dict[str, RateLimitConfig] = {}
         self._local_buckets: dict[str, tuple[float, float]] = {}  # key -> (tokens, last_refill)

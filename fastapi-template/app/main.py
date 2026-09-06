@@ -95,6 +95,12 @@ async def lifespan(application: FastAPI):  # noqa: ARG001
 
     broker_scheduler.start()
 
+    # 7. Start the bounded broker-order reconciliation scheduler (P1
+    #    crash-window read-back for stale keyed PENDING DMA/manual orders).
+    from app.engine.order_reconciliation import broker_order_reconciliation_scheduler
+
+    broker_order_reconciliation_scheduler.start()
+
     logger.info(
         "%s ready — broker=%s, symbols=%s",
         settings.app_name,
@@ -107,6 +113,7 @@ async def lifespan(application: FastAPI):  # noqa: ARG001
     # Shutdown
     logger.info("Shutting down %s…", settings.app_name)
     broker_scheduler.stop()
+    broker_order_reconciliation_scheduler.stop()
     if _engine:
         await _engine.stop()
     if _simulator:
