@@ -15,6 +15,21 @@ services:
     rootDir: fastapi-template
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'
+    # ── P0 SCHEMA MIGRATIONS (REQUIRED) ─────────────────────────────────────
+    # Production schema is owned EXCLUSIVELY by Alembic (P2-6): init_db()
+    # refuses to run create_all / ALTER TABLE when ENVIRONMENT=production, so
+    # migrations must be applied from a release step that runs BEFORE the new
+    # version starts serving. Without a releaseCommand, an existing Postgres
+    # created before a revision (e.g. 0003_orders_idempotency -> the
+    # orders.client_order_id idempotency columns) silently stays behind the ORM
+    # and startup queries die with UndefinedColumnError.
+    #
+    # `alembic upgrade head` is the canonical, idempotent mechanism: Alembic's
+    # version table makes re-runs a no-op, 0003 is inspector-guarded, and 0001
+    # uses create_all(checkfirst=True), so it is safe on first deploy, on
+    # legacy databases with no alembic_version table, and on every redeploy.
+    # DATABASE_URL (injected below) is available to release commands.
+    releaseCommand: alembic upgrade head
     healthCheckPath: /api/health
     envVars:
       - key: PORT

@@ -156,6 +156,11 @@ must pass before merge:
   ```bash
   alembic upgrade head
   ```
+  On **Render** this is now automated: `render.yaml` declares
+  `releaseCommand: alembic upgrade head`, so every deploy applies pending
+  migrations (idempotent — Alembic's version table makes re-runs a no-op)
+  **before** the web service starts. Non-Render hosts must still run the
+  command manually.
 - **Drift guard:** `python scripts/ci_alembic_check.py` validates the chain on
   an isolated temp DB (no network, no production datastore). Baseline
   `0001_baseline` generates the schema from the ORM (`Base.metadata.create_all`),
