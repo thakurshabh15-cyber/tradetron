@@ -82,14 +82,15 @@ class SimulatedBroker(BrokerClient):
         return {"status": "FILLED", "broker_order_id": broker_order_id}
 
     async def get_positions(self) -> list[dict[str, Any]]:
+        from app.brokers.position_normalizer import normalize_simulated_position
         return [
-            {
-                "symbol": symbol,
-                "quantity": data["quantity"],
-                "avg_price": data["avg_price"],
-            }
+            normalized
             for symbol, data in self._positions.items()
             if data["quantity"] != 0
+            and (normalized := normalize_simulated_position(
+                {"symbol": symbol, "quantity": data["quantity"],
+                 "avg_price": data["avg_price"]}
+            )) is not None
         ]
 
     async def get_margins(self) -> dict[str, Any]:

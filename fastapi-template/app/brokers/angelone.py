@@ -291,7 +291,12 @@ class AngelOneBroker(BrokerClient):
         result = await _sdk_call(self._client.position)
         if not result or not result.get("data"):
             return []
-        return result["data"]
+        from app.brokers.position_normalizer import normalize_angelone_position
+        return [
+            normalized
+            for pos in result["data"]
+            if (normalized := normalize_angelone_position(pos)) is not None
+        ]
 
     async def get_margins(self) -> dict[str, Any]:
         """Retrieve available cash and margin collateral from Angel One."""

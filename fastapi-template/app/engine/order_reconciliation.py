@@ -20,10 +20,14 @@ Hard rules (enforced by construction)
     errored status read leaves the row PENDING (no terminal write, no second
     submission).
   * ONLY reconciles keyed (``client_order_id`` NOT NULL), LIVE, PENDING rows
-    that carry a durable ``broker_order_id`` and are OLDER than the
-    conservative stale threshold.  Fresh PENDING orders are never touched
-    (an in-flight HTTP request always finishes well inside the dispatch
-    timeouts, which are all <= 30 s, far below the 120 s threshold).
+    that are OLDER than the conservative stale threshold.  Fresh PENDING
+    orders are never touched (an in-flight HTTP request always finishes well
+    inside the dispatch timeouts, which are all <= 30 s, far below the 120 s
+    threshold).  Rows with a ``broker_order_id`` are reconciled via the
+    broker's read-only ``get_order_status`` API.  Rows WITHOUT a
+    ``broker_order_id`` (Window-C: crash before the broker reference was
+    persisted) are reconciled via the broker's read-only ``get_positions``
+    API to detect confirmed live exposure.
   * Bounded: fixed batch size, fixed sleep interval, no unbounded scans, no
     busy loop; a per-cycle failure never crashes the loop; graceful shutdown
     via task cancellation.
@@ -32,8 +36,11 @@ Hard rules (enforced by construction)
     (same binding contract as ``app/brokers/postback.py``).
   * If the broker reference was never persisted (process died between broker
     acceptance and the reference commit, or the adapter returned no reference),
-    the order cannot be located at the broker and stays PENDING + unreconcilable
-    by design — no heuristic lookup is ever attempted.
+    the order is reconciled through Window-C recovery: the broker's READ-ONLY
+    ``get_positions()`` is queried for a (symbol, side, quantity) match.
+    Confirmed live exposure → finalize FILLED; no confident match (including
+    confirmed no exposure) → stay PENDING.  Never a heuristic lookup, never
+    a fabricated fill, never a new broker call.
 """
 
 from __future__ import annotations
@@ -182,7 +189,6 @@ class BrokerOrderReconciliationEngine:
                     OrderRecord.mode == "LIVE",
                     OrderRecord.status == "PENDING",
                     OrderRecord.client_order_id.is_not(None),
-                    OrderRecord.broker_order_id.is_not(None),
                     OrderRecord.created_at < cutoff,
                 )
                 .order_by(OrderRecord.created_at.asc())
@@ -225,12 +231,28 @@ class BrokerOrderReconciliationEngine:
         """Reconcile ONE stale keyed PENDING order.  Returns (outcome, detail)."""
         if not order.client_order_id:
             return "skipped", "unkeyed"
-        if not order.broker_order_id:
-            return "skipped", "no_broker_reference"
         if order.status != "PENDING":
             return "skipped", f"status:{order.status}"
         if order.mode != "LIVE":
             return "skipped", f"mode:{order.mode}"
+
+        # ── Window-B: broker ref present → existing get_order_status path ──
+        if order.broker_order_id:
+            return await self._reconcile_with_broker_ref(db, order)
+
+        # ── Window-C: no broker ref (crash before ref persist) ────────────
+        # Use read-only get_positions() to detect confirmed live exposure.
+        return await self._resolve_window_c(db, order)
+
+    async def _reconcile_with_broker_ref(
+        self, db: AsyncSession, order: OrderRecord
+    ) -> tuple[str, str]:
+        """Reconcile a stale PENDING order that HAS a broker reference.
+
+        Uses the broker's read-only get_order_status API (Window-B/D path).
+        """
+        if not order.broker_order_id:
+            return "skipped", "no_broker_reference"
 
         account = (
             await db.execute(
@@ -269,6 +291,102 @@ class BrokerOrderReconciliationEngine:
         if canonical in ("REJECTED", "CANCELLED"):
             return await self._mark_terminal(db, order, canonical)
         return "unknown", f"raw_status:{payload.get('status')!r}"
+
+    async def _resolve_window_c(
+        self, db: AsyncSession, order: OrderRecord
+    ) -> tuple[str, str]:
+        """Window-C recovery: no broker reference on the order row.
+
+        The broker accepted the order (confirmed by the durable claim being
+        committed before dispatch), but the process crashed before the broker
+        reference was persisted.  We use the broker's READ-ONLY
+        ``get_positions()`` to check for confirmed live exposure.
+
+        Adapters now return **canonical** position dicts with keys:
+            ``symbol`` (str), ``quantity`` (signed int), ``side``
+            (``"LONG"`` | ``"SHORT"``), ``average_price`` (float).
+
+        Resolution semantics:
+          - Confident match (same symbol, same side, sufficient quantity)
+            → finalize FILLED using broker-reported data.
+          - Everything else (no exposure, partial, opposite direction,
+            ambiguous multi-position, error, non-list)
+            → stay PENDING.  Never fabricate CANCELLED from a positions
+            snapshot: the order might have been rejected, might still be
+            working, or could have filled then immediately netted out.
+        """
+        account = (
+            await db.execute(
+                select(BrokerAccountRecord).where(
+                    BrokerAccountRecord.id == order.broker_account_id,
+                    BrokerAccountRecord.status == "CONNECTED",
+                    BrokerAccountRecord.is_active.is_(True),
+                    BrokerAccountRecord.user_id == order.user_id,
+                )
+            )
+        ).scalars().first()
+        if account is None:
+            return "unknown", "window_c_account_unavailable"
+
+        adapter = app.brokers.get_broker_adapter(account)
+
+        # Call the broker's READ-ONLY get_positions() to detect live exposure.
+        if not hasattr(adapter, "get_positions"):
+            return "unknown", "window_c_no_get_positions"
+
+        try:
+            positions = await adapter.get_positions()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Network / broker error → uncertain, never fabricate.
+            return "unknown", f"window_c_positions_error:{type(exc).__name__}"
+
+        if not isinstance(positions, list):
+            return "unknown", "window_c_positions_not_a_list"
+
+        # --- Canonical position matching --------------------------------
+        # Positions are already normalized by the adapter: every dict has
+        #   symbol (str), quantity (signed int), side (LONG|SHORT),
+        #   average_price (float).
+        target_symbol = order.symbol.upper()
+        target_qty = abs(order.quantity)
+        target_side = "LONG" if order.side.upper() == "BUY" else "SHORT"
+
+        matched_position = None
+        for pos in positions:
+            if not isinstance(pos, dict):
+                continue
+            pos_symbol = str(pos.get("symbol", "")).upper()
+            if pos_symbol != target_symbol:
+                continue
+            pos_side = str(pos.get("side", "")).upper()
+            if pos_side and pos_side != target_side:
+                continue
+            try:
+                pos_qty = abs(int(pos.get("quantity", 0)))
+            except (TypeError, ValueError):
+                continue
+            if pos_qty < target_qty:
+                continue
+            matched_position = pos
+            break
+
+        if matched_position is not None:
+            # Confirmed live exposure → finalize FILLED using broker data.
+            fill_price = _positive_float(matched_position.get("average_price")) or _positive_float(order.price)
+            if fill_price is None:
+                return "unknown", "window_c_confirmed_but_no_price"
+            return await self._finalize_filled(db, order, {
+                "status": "FILLED",
+                "average_price": fill_price,
+                "filled_quantity": target_qty,
+            })
+
+        # No confident match → uncertain.  Stay PENDING: the order might
+        # have been rejected, might still be working at the broker, or
+        # could have filled and been immediately netted out.
+        return "unknown", "window_c_no_confirmed_exposure"
 
     async def _finalize_filled(
             self, db: AsyncSession, order: OrderRecord, resp: dict[str, Any]
@@ -363,18 +481,25 @@ class BrokerOrderReconciliationEngine:
             return "filled", f"average_price={fill_price}"
 
     async def _mark_terminal(
-        self, db: AsyncSession, order: OrderRecord, canonical: str
+        self, db: AsyncSession, order: OrderRecord, canonical: str,
+        *,
+        message: str | None = None,
     ) -> tuple[str, str]:
         """Mark a broker-confirmed terminal state (REJECTED / CANCELLED) on the
-        local row.  Both are retryable states under the existing claim CAS."""
+        local row.  Both are retryable states under the existing claim CAS.
+
+        *message* optionally overrides the default error message; used by
+        Window-C resolution which bases the terminal state on
+        ``get_positions()`` rather than a broker order-status response."""
+        effective_msg = message or (
+            f"Broker status reconciliation: broker reports {canonical}"
+        )
         result = await db.execute(
             update(OrderRecord)
             .where(OrderRecord.id == order.id, OrderRecord.status == "PENDING")
             .values(
                 status=canonical,
-                error_message=(
-                    f"Broker status reconciliation: broker reports {canonical}"
-                ),
+                error_message=effective_msg,
             )
             .execution_options(synchronize_session=False)
         )

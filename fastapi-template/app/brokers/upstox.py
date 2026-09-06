@@ -211,16 +211,11 @@ class UpstoxBroker(BrokerClient):
                 resp = await client.get(url, headers=self._get_headers())
                 if resp.status_code == 200:
                     positions = resp.json().get("data", [])
+                    from app.brokers.position_normalizer import normalize_upstox_position
                     return [
-                        {
-                            "tradingsymbol": p.get("tradingsymbol", ""),
-                            "quantity": int(p.get("quantity", 0)),
-                            "average_price": float(p.get("buy_price", 0.0)),
-                            "pnl": float(p.get("pnl", 0.0)),
-                            "product": p.get("product", ""),
-                        }
+                        normalized
                         for p in positions
-                        if int(p.get("quantity", 0)) != 0
+                        if (normalized := normalize_upstox_position(p)) is not None
                     ]
         except Exception as exc:
             logger.error("Upstox positions query failed: %s", exc)

@@ -345,9 +345,11 @@ async def test_fresh_pending_order_is_not_reconciled(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_missing_broker_reference_not_reconciled(monkeypatch):
-    """A stale PENDING order WITHOUT a durable broker reference is left
-    untouched â€” no heuristic lookup, no status call, no placement."""
+async def test_missing_broker_reference_reconciled_via_positions(monkeypatch):
+    """A stale PENDING order WITHOUT a durable broker reference is recovered
+    read-only via Window-C: ``get_positions()`` detects live exposure.  No
+    heuristic lookup, no status call, no placement.
+    """
     await init_db()
     engine = BrokerOrderReconciliationEngine()
     sid = await _seed_broker_account(_uuid.uuid4().hex)
@@ -355,17 +357,25 @@ async def test_missing_broker_reference_not_reconciled(monkeypatch):
         sid, key="TST-REC-NOREF-01", broker_ref=None
     )
 
-    fake = _StatusBroker("FILLED", average_price=2505.0)
+    class _PosBroker(_StatusBroker):
+        async def get_positions(self):
+            # No live exposure for RELIANCE/BUY/10 → stays PENDING (uncertain).
+            return []
+
+    fake = _PosBroker("FILLED", average_price=2505.0)
     monkeypatch.setattr("app.brokers.get_broker_adapter",
                         lambda rec: fake)
 
     summary = await engine.reconcile_once()
 
-    assert fake.status_calls == 0
-    assert fake.place_calls == 0
+    assert fake.place_calls == 0  # reconciliation is strictly read-only
+    assert fake.status_calls == 0  # Window-C uses get_positions, not status
     order = await _fetch_order(oid)
+    # No live exposure found → the claim stays PENDING (uncertain; never
+    # fabricate CANCELLED from a positions snapshot).
     assert order.status == "PENDING"
-    assert summary["scanned"] == 0
+    assert summary["scanned"] == 1
+    assert summary["unknown"] >= 1
 
 
 # â”€â”€ 8. Reconciliation never calls place_order â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections import defaultdict, deque
 from decimal import Decimal
 from typing import Any, Optional
@@ -26,7 +27,7 @@ from app.engine.order_manager import OrderManager, Position, TradeExecution
 from app.engine.risk_manager import RiskManager
 from app.engine.strategy_evaluator import StrategyEvaluator
 from app.market_data.manager import ws_manager
-from app.models.trading import OrderRecord, StrategyRecord, TradeRecord
+from app.models.trading import OrderRecord, PositionRecord, StrategyRecord, TradeRecord
 from app.schemas.trading import OrderRequest, Side
 
 logger = get_logger("engine.core")
@@ -205,6 +206,27 @@ class StrategyExecutor:
             if active_pos
             else None,
         }
+
+
+def _strategy_client_order_id(
+    strategy_id: str,
+    symbol: str,
+    side: str,
+    quantity: int,
+    ts_sec: int,
+) -> str:
+    """Stable idempotency key for a strategy LIVE entry.
+
+    Pins identity to (strategy, symbol, side, quantity) and a coarse per-second
+    timestamp.  Two evaluations of the *same* triggered signal within the same
+    second collapse to one key (no double-dispatch); a genuinely new signal in a
+    later second gets a fresh key.  Fits the ``ux_orders_user_client_order_id``
+    partial unique index and the ``[A-Za-z0-9._-]{8,64}`` key charset.
+    """
+    import hashlib
+
+    raw = f"{strategy_id}:{symbol}:{side}:{quantity}:{ts_sec}"
+    return "strat-" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:40]
 
 
 class TradingEngine:
@@ -415,6 +437,12 @@ class TradingEngine:
         broker_account_id = strategy.get("broker_account_id")
         user_id = strategy.get("user_id")
 
+        # Durable-claim state for LIVE entries (see the LIVE gate below).  When a
+        # LIVE order is claimed, ``live_claim_id`` holds the committed PENDING
+        # OrderRecord id that must be finalized/rejected; ``None`` means either
+        # this is a PAPER/builtin path or the key was already handled (replay).
+        live_claim_id: Optional[str] = None
+
         order_req = OrderRequest(
             symbol=symbol,
             side=Side(side_str),
@@ -538,6 +566,43 @@ class TradingEngine:
                 logger.error("[LIVE] %s", err_msg)
                 await self._persist_rejected_order(strategy.get("id"), user_id, broker_account_id, symbol, side_str, quantity, price, mode, err_msg)
                 return
+            # ── 2a. Durable PENDING claim BEFORE broker dispatch ──────────
+            # Mirror the hardened manual/DMA entry: commit a keyed PENDING
+            # OrderRecord so a crash after broker acceptance is always
+            # recoverable by reconciliation.  The key is derived from the
+            # strategy signal identity so the same signal can never
+            # double-dispatch.  NO persistence happens after the broker call
+            # until this claim is durably on disk.
+            _claim_key = _strategy_client_order_id(
+                strategy.get("id"),
+                symbol,
+                side_str,
+                quantity,
+                int(time.time()),
+            )
+            live_claim_id = await self._claim_strategy_order(
+                user_id=user_id,
+                broker_account_id=broker_account_id,
+                strategy_id=strategy.get("id"),
+                symbol=symbol,
+                side=side_str,
+                quantity=quantity,
+                price=price,
+                mode=mode,
+                client_order_id=_claim_key,
+            )
+            if live_claim_id is None:
+                # A completed order already exists for this signal key (replay),
+                # or the same key is already in flight.  Either way we must NOT
+                # dispatch a second real order.
+                logger.info(
+                    "[LIVE] Strategy signal already handled (claim replay/in-progress) "
+                    "- skipping duplicate dispatch: %s %s %d",
+                    side_str,
+                    symbol,
+                    quantity,
+                )
+                return
 
         # ── 3. Place order via broker ─────────────────────────────────
         try:
@@ -551,28 +616,55 @@ class TradingEngine:
                 quantity,
                 exc,
             )
-            await self._persist_rejected_order(strategy.get("id"), user_id, broker_account_id, symbol, side_str, quantity, price, mode, str(exc))
+            if mode == "LIVE" and live_claim_id is not None:
+                await self._reject_strategy_claim(live_claim_id, str(exc))
+            else:
+                await self._persist_rejected_order(strategy.get("id"), user_id, broker_account_id, symbol, side_str, quantity, price, mode, str(exc))
             return
 
         filled_price = result.get("filled_price", price)
-        broker_order_id = result.get("broker_order_id", f"ORD_{mode[:3]}_{int(price)}")
+        broker_order_id = (
+            result.get("broker_order_id")
+            or result.get("order_id")
+            or f"ORD_{mode[:3]}_{int(price)}"
+        )
 
         # ── 4. Update risk state ──────────────────────────────────────
         self._risk.record_fill(symbol, side_str, quantity, filled_price)
 
         # ── 5. Persist to database ────────────────────────────────────
-        trade_data = await self._persist_trade(
-            strategy_id=strategy.get("id"),
-            strategy_name=strategy["name"],
-            symbol=symbol,
-            side=side_str,
-            quantity=quantity,
-            price=filled_price,
-            broker_order_id=broker_order_id,
-            user_id=user_id,
-            broker_account_id=broker_account_id,
-            mode=mode,
-        )
+        if mode == "LIVE" and live_claim_id is not None:
+            # LIVE path: finalize the durable claim (CAS-protected, broker-ref
+            # persisted in its own commit) so a crash at any point after broker
+            # acceptance is always recoverable.
+            trade_data = await self._persist_strategy_live_fill(
+                claim_id=live_claim_id,
+                strategy_id=strategy.get("id"),
+                strategy_name=strategy["name"],
+                broker_order_id=broker_order_id,
+                symbol=symbol,
+                side=side_str,
+                quantity=quantity,
+                filled_price=filled_price,
+                user_id=user_id,
+                broker_account_id=broker_account_id,
+                mode=mode,
+            )
+        else:
+            # PAPER / builtin SMA path: unchanged — a single FILLED commit
+            # after the fill (no pre-dispatch claim needed for paper orders).
+            trade_data = await self._persist_trade(
+                strategy_id=strategy.get("id"),
+                strategy_name=strategy["name"],
+                symbol=symbol,
+                side=side_str,
+                quantity=quantity,
+                price=filled_price,
+                broker_order_id=broker_order_id,
+                user_id=user_id,
+                broker_account_id=broker_account_id,
+                mode=mode,
+            )
 
         # ── 6. Broadcast to WebSocket (tenant-scoped) ───────────────────
         await ws_manager.broadcast_user("trades", trade_data.get("user_id"), trade_data)
@@ -587,6 +679,267 @@ class TradingEngine:
             filled_price,
             broker_order_id,
         )
+
+    # ── LIVE durable-claim helpers ────────────────────────────────────────────
+    async def _claim_strategy_order(
+        self,
+        *,
+        user_id: str,
+        broker_account_id: str,
+        strategy_id: str,
+        symbol: str,
+        side: str,
+        quantity: int,
+        price: float,
+        mode: str,
+        client_order_id: str,
+    ) -> Optional[str]:
+        """Durably claim an idempotency key for a LIVE strategy entry.
+
+        Must be called BEFORE broker dispatch.  Mirrors the hardened
+        manual/DMA ``_claim_or_replay_order`` pattern:
+          - Inserts a PENDING ``OrderRecord`` with the ``client_order_id``.
+          - Returns the claim row id on success (caller may dispatch).
+          - Returns ``None`` when the caller must NOT dispatch:
+            * A FILLED order already exists for this key (replay).
+            * A PENDING order already exists for this key (in-flight).
+          - On REJECTED/CANCELLED for the same key, CAS-reclaims and returns id.
+        Never raises on duplicate; the CAS prevents double-dispatch.
+        """
+        from sqlalchemy import select, update
+        from sqlalchemy.exc import IntegrityError
+
+        async with SessionLocal() as session:
+            existing = (
+                await session.execute(
+                    select(OrderRecord).where(
+                        OrderRecord.user_id == user_id,
+                        OrderRecord.client_order_id == client_order_id,
+                    )
+                )
+            ).scalar_one_or_none()
+
+            if existing is not None:
+                if existing.status in ("FILLED", "PENDING"):
+                    # Completed entry already booked, or same key is in-flight
+                    # (a concurrent dispatch).  Never double-dispatch.
+                    return None
+                # REJECTED / CANCELLED -- retryable state: re-claim via CAS.
+                retry = await session.execute(
+                    update(OrderRecord)
+                    .where(
+                        OrderRecord.user_id == user_id,
+                        OrderRecord.client_order_id == client_order_id,
+                        OrderRecord.status.not_in(("FILLED", "PENDING")),
+                    )
+                    .values(
+                        broker_account_id=broker_account_id,
+                        strategy_id=strategy_id,
+                        symbol=symbol,
+                        side=side,
+                        quantity=quantity,
+                        price=price,
+                        mode=mode,
+                        status="PENDING",
+                        error_message=None,
+                        broker_order_id=None,
+                        filled_price=None,
+                        filled_quantity=0,
+                        position_id=None,
+                    )
+                )
+                if retry.rowcount == 1:
+                    await session.commit()
+                    return existing.id
+                # Lost the CAS race: follow whatever the winner did.
+                await session.rollback()
+                return None
+
+            claim = OrderRecord(
+                user_id=user_id,
+                client_order_id=client_order_id,
+                broker_account_id=broker_account_id,
+                strategy_id=strategy_id,
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                price=price,
+                order_type="MARKET",
+                mode=mode,
+                status="PENDING",
+            )
+            session.add(claim)
+            try:
+                await session.commit()
+            except IntegrityError:
+                # Concurrent identical claim committed first -- never double-dispatch.
+                await session.rollback()
+                return None
+            return claim.id
+
+    async def _reject_strategy_claim(
+        self,
+        claim_id: str,
+        reason: str,
+    ) -> None:
+        """CAS-reject a LIVE strategy claim after broker dispatch failure."""
+        from sqlalchemy import update
+
+        async with SessionLocal() as session:
+            result = await session.execute(
+                update(OrderRecord)
+                .where(
+                    OrderRecord.id == claim_id,
+                    OrderRecord.status == "PENDING",
+                )
+                .values(
+                    status="REJECTED",
+                    error_message=reason,
+                )
+            )
+            if result.rowcount == 1:
+                await session.commit()
+            else:
+                await session.rollback()
+
+    async def _persist_strategy_live_fill(
+        self,
+        *,
+        claim_id: str,
+        strategy_id: str,
+        strategy_name: str,
+        broker_order_id: str,
+        symbol: str,
+        side: str,
+        quantity: int,
+        filled_price: float,
+        user_id: str,
+        broker_account_id: str,
+        mode: str,
+    ) -> dict[str, Any]:
+        """Finalize a LIVE strategy claim after broker acceptance.
+
+        Two-phase commit mirrors the manual/DMA postback pattern:
+          1. Persist broker_order_id in its own commit (window-D hardening).
+          2. CAS-update claim to FILLED and create Trade + Position.
+        If a concurrent worker/postback already finalized, the CAS rowcount
+        check detects it and returns the existing trade payload.
+        """
+        import uuid as _uuid
+        from datetime import datetime, timezone
+
+        from sqlalchemy import update
+
+        async with SessionLocal() as session:
+            # Phase 1: persist broker reference (its own commit).
+            claim = await session.get(OrderRecord, claim_id)
+            if claim is None:
+                raise RuntimeError(f"LIVE strategy claim {claim_id} not found")
+            if not claim.broker_order_id:
+                claim.broker_order_id = broker_order_id
+                await session.commit()
+
+            # Phase 2: CAS-finalize FILLED + create Trade + Position.
+            result = await session.execute(
+                update(OrderRecord)
+                .where(
+                    OrderRecord.id == claim_id,
+                    OrderRecord.status == "PENDING",
+                    OrderRecord.position_id.is_(None),
+                )
+                .values(
+                    status="FILLED",
+                    filled_price=filled_price,
+                    filled_quantity=quantity,
+                    broker_order_id=broker_order_id,
+                    error_message=None,
+                )
+            )
+            if result.rowcount != 1:
+                # Already finalized by a concurrent worker or broker postback.
+                await session.rollback()
+                finalized = await session.get(OrderRecord, claim_id)
+                exec_time = (
+                    finalized.updated_at.isoformat()
+                    if finalized and finalized.updated_at
+                    else datetime.now(timezone.utc).isoformat()
+                )
+                return {
+                    "event": "order_executed",
+                    "id": finalized.id if finalized else claim_id,
+                    "order_id": claim_id,
+                    "broker_order_id": broker_order_id or (
+                        finalized.broker_order_id if finalized else None
+                    ),
+                    "strategy_name": strategy_name,
+                    "symbol": symbol,
+                    "side": side,
+                    "quantity": quantity,
+                    "price": filled_price,
+                    "pnl": None,
+                    "user_id": user_id,
+                    "mode": mode,
+                    "executed_at": exec_time,
+                }
+
+            await session.flush()
+
+            trade = TradeRecord(
+                id=str(_uuid.uuid4()),
+                order_id=claim_id,
+                strategy_id=strategy_id,
+                strategy_name=strategy_name,
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                price=filled_price,
+                pnl=None,
+                mode=mode,
+                user_id=user_id,
+            )
+            position = PositionRecord(
+                id=str(_uuid.uuid4()),
+                user_id=user_id,
+                broker_account_id=broker_account_id,
+                symbol=symbol,
+                side="LONG" if side.upper() == "BUY" else "SHORT",
+                quantity=quantity,
+                entry_price=filled_price,
+                current_price=filled_price,
+                unrealized_pnl=0.0,
+                realized_pnl=0.0,
+                mode=mode,
+                status="OPEN",
+                opened_at=datetime.now(timezone.utc),
+            )
+            session.add(trade)
+            session.add(position)
+            await session.flush()
+
+            # Link position back to the order row.
+            claim.position_id = position.id
+            await session.commit()
+
+            exec_time = (
+                trade.executed_at.isoformat()
+                if trade.executed_at
+                else datetime.now(timezone.utc).isoformat()
+            )
+            return {
+                "event": "order_executed",
+                "id": trade.id,
+                "order_id": claim_id,
+                "broker_order_id": broker_order_id,
+                "strategy_name": strategy_name,
+                "symbol": symbol,
+                "side": side,
+                "quantity": quantity,
+                "price": filled_price,
+                "pnl": None,
+                "user_id": user_id,
+                "mode": mode,
+                "executed_at": exec_time,
+            }
 
     async def _persist_rejected_order(
         self,

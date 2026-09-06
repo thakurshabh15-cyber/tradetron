@@ -270,16 +270,11 @@ class ZerodhaKiteBroker(BrokerClient):
         try:
             positions = await asyncio.to_thread(self._kite.positions)
             net_positions = positions.get("net", [])
+            from app.brokers.position_normalizer import normalize_zerodha_position
             return [
-                {
-                    "tradingsymbol": p.get("tradingsymbol", ""),
-                    "quantity": int(p.get("quantity", 0)),
-                    "average_price": float(p.get("average_price", 0.0)),
-                    "pnl": float(p.get("pnl", 0.0)),
-                    "product": p.get("product", ""),
-                }
+                normalized
                 for p in net_positions
-                if int(p.get("quantity", 0)) != 0
+                if (normalized := normalize_zerodha_position(p)) is not None
             ]
         except Exception as exc:
             logger.error("Zerodha positions query failed: %s", exc)

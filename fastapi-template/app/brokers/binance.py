@@ -257,15 +257,15 @@ class BinanceBroker(BrokerClient):
         await self.connect()
         data = await self._api_request("GET", "/api/v3/account")
         balances = data.get("balances", [])
+        from app.brokers.position_normalizer import normalize_binance_position
         return [
-            {
+            normalized
+            for b in balances
+            if (float(b.get("free", 0)) > 0 or float(b.get("locked", 0)) > 0)
+            and (normalized := normalize_binance_position({
                 "symbol": b["asset"],
                 "positionAmt": b["free"],
-                "entryPrice": "0",  # Spot doesn't track entry price
-                "unrealizedProfit": "0",
-            }
-            for b in balances
-            if float(b.get("free", 0)) > 0 or float(b.get("locked", 0)) > 0
+            })) is not None
         ]
 
     async def get_margins(self) -> dict[str, Any]:
