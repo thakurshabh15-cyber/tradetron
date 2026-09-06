@@ -149,15 +149,25 @@ class Settings(BaseSettings):
         return self.upstash_redis_url.strip() or self.redis_url
 
     @staticmethod
-    def _validate_redis_url(url: str) -> None:
-        """Reject malformed Redis connection URLs (wrong scheme / no host)."""
+    def _validate_redis_url(url: str, label: str = "REDIS") -> None:
+        """Reject malformed Redis connection URLs (wrong scheme / no host).
+
+        Args:
+            url: The connection URL to validate.
+            label: Which configuration field the URL came from, so the failure
+                names the exact env var the operator must fix
+                (``UPSTASH_REDIS_URL`` vs ``REDIS_URL``).
+        """
         from urllib.parse import urlsplit
 
-        parsed = urlsplit(url)
+        parsed = urlsplit(url.strip())
         if parsed.scheme not in ("redis", "rediss") or not parsed.hostname:
+            sample = url[:120]
             raise ValueError(
-                "Invalid Redis URL: scheme must be 'redis' or 'rediss' and a "
-                f"host must be present (got scheme={parsed.scheme!r})."
+                f"Invalid {label} URL: scheme must be 'redis' or 'rediss' and a "
+                f"host must be present - received {sample!r} "
+                f"(got scheme={parsed.scheme!r}). Valid forms: "
+                f"redis://user:pass@host:6379 or rediss://user:pass@host:6379."
             )
 
     @model_validator(mode="after")
@@ -199,10 +209,15 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "ENVIRONMENT=production requires an explicit Redis URL — set "
                     "UPSTASH_REDIS_URL (preferred, e.g. a managed Upstash "
-                    "rediss://… endpoint) or a non-localhost REDIS_URL. Refusing "
-                    "to silently fall back to localhost Redis in production."
+                    "rediss://… endpoint) or a non-localhost REDIS_URL. On "
+                    "Render: create a Key Value instance at "
+                    "dashboard.render.com/new/redis, then link this service — "
+                    "REDIS_URL is injected automatically. Refusing to silently "
+                    "fall back to localhost Redis in production."
                 )
-            self._validate_redis_url(upstash or redis)
+            self._validate_redis_url(
+                upstash or redis, "UPSTASH_REDIS_URL" if upstash else "REDIS_URL"
+            )
         return self
 
     # ── Risk management ──────────────────────────────────────────────

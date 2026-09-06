@@ -127,8 +127,10 @@ def test_production_accepts_valid_redis_urls():
     ["http://cache.example:6379", "mysql://cache.example/db", "not-a-url", "rediss://"],
 )
 def test_invalid_redis_url_rejected(bad_url):
-    with pytest.raises(ValidationError, match="Invalid Redis URL"):
+    with pytest.raises(ValidationError, match="Invalid (UPSTASH_REDIS_URL|REDIS_URL) URL"):
         _prod_settings(upstash_redis_url=bad_url)
+    with pytest.raises(ValidationError, match="Invalid REDIS_URL URL"):
+        _prod_settings(upstash_redis_url="", redis_url=bad_url)
 
 
 def test_production_rejects_skip_signature_verification():

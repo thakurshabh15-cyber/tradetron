@@ -36,18 +36,27 @@ services:
         value: https://tradethrone.vercel.app,https://tradethron.vercel.app
       - key: BROKER_MODE
         value: simulated
-      # ── Phase 5D CACHE (REQUIRED — BLOCKED on external infrastructure) ────
-      # /readyz reports cache=false because no Redis URL is set, so the app
-      # falls back to redis://localhost:6379 (connection refused on Render).
-      # To reach cache=true, an operator MUST add a managed TLS Redis endpoint
-      # (e.g. Upstash rediss://…) as an environment variable named
-      # `UPSTASH_REDIS_URL` in the Render dashboard. Settings.effective_redis_url
-      # prefers it over the plain redis_url.
+      # ── Phase 5D CACHE (REQUIRED in production) ─────────────────────────────
+      # The app refuses to boot in production without an explicit Redis URL
+      # (no silent localhost fallback). Render Blueprints CANNOT auto-provision
+      # Key Value (Redis) instances — they must be created in the Dashboard and
+      # linked to this service:
       #
-      # NOTE: No UPSTASH_REDIS_URL value is committed here on purpose — the
-      # previous placeholder (rediss://REPLACE_WITH_UPSTASH_TLS_URL) must never
-      # be committed/applied. Add the real value in Render, then re-deploy and
-      # confirm /readyz reports cache=true.
+      #   A) Render Key Value (recommended — no external signup):
+      #      1. Create: https://dashboard.render.com/new/redis
+      #      2. Set the region to oregon (same as this service) and a plan.
+      #      3. Under "Linked Services" add `tradetron-backend`.
+      #      Render then auto-injects REDIS_URL (e.g. redis://red-xxxx:6379)
+      #      into this service — no manual secret entry needed.
+      #
+      #   B) External managed Redis (e.g. Upstash rediss://…):
+      #      Add UPSTASH_REDIS_URL as a secret in the Render dashboard.
+      #      `Settings.effective_redis_url` prefers it over the plain REDIS_URL.
+      #
+      # NOTE: No REDIS_URL / UPSTASH_REDIS_URL value is committed here on
+      # purpose — the previous placeholder (rediss://REPLACE_WITH_UPSTASH_TLS_URL)
+      # must never be committed/applied. Add the real value in Render, then
+      # re-deploy and confirm /readyz reports cache=true.
       # ── Phase 5D REAL MARKET DATA (crypto) ────────────────────────────────
       # Enables CoinGecko public REST API (no credentials). Real crypto ticks
       # are labeled LIVE/STALE by data_status; equities/forex/commodity remain
