@@ -677,10 +677,20 @@ async def close_position(
 
     await db.commit()
 
-    # Trigger Copy Trading Fan-out for all active followers of master trader
+    # Trigger Copy Trading Fan-out for all active followers of the trade
+    # owner.  P1-2: the fan-out identity must be the POSITION OWNER
+    # (pos.user_id) — never the authenticated caller.  When an
+    # ADMIN/SUPERADMIN closes another trader's position, keying the fan-out to
+    # the caller's id would (a) skip the owner's followers entirely (their
+    # mirrored OPEN position is left stale, diverging from the owner's book)
+    # and (b) mirror the close into the caller's OWN copy groups, phantom-
+    # closing unrelated follower positions.  This mirrors the P1-1 accounting
+    # rule: the same economic event resolves its owner once, from the position
+    # row.  For an owner closing their own position user.id == pos.user_id, so
+    # the common path is behavior-preserving.
     try:
         from app.engine.copy_trading import copy_trading_engine
-        master_uid = user.id if user else pos.user_id
+        master_uid = pos.user_id
         if master_uid:
             asyncio.create_task(
                 copy_trading_engine.mirror_close_position(
