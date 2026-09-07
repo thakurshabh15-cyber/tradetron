@@ -235,6 +235,8 @@ async def init_db() -> None:
         # step with the ORM model.
         ("orders", "client_order_id VARCHAR(64)"),
         ("orders", "position_id VARCHAR(36)"),
+        # P0-2 signal durable claim: tenant-less signal_key + global partial unique index
+        ("orders", "signal_key VARCHAR(64)"),
         ("trades", "user_id VARCHAR(36)"),
         ("trades", "pnl_pct FLOAT"),
         ("trades", "exit_reason VARCHAR(50)"),

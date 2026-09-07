@@ -45,6 +45,25 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _envelope_ts_sec(envelope) -> int:
+    """Coarse per-second identity for a webhook delivery.
+
+    The deterministic signal idempotency key (P0-2) is derived from the
+    ENVELOPE timestamp — stable for re-deliveries of the same event — rather
+    than the processing wall-clock, so a PEL/XAUTOCLAIM re-delivery of the
+    same signal collapses onto the same durable DB claim and can never
+    double-dispatch.
+    """
+    ts = envelope.timestamp
+    if ts is None:
+        import time
+
+        return int(time.time())
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return int(ts.timestamp())
+
+
 def _parse_side(action: str) -> Side:
     """Convert action string to Side enum."""
     action_upper = action.upper()
@@ -184,17 +203,26 @@ async def handle_tradethrone_signal(webhook: QueuedWebhook) -> None:
             charges["total_charges"], charges["brokerage"], charges["stt"], charges["gst"]
         )
     
-    # Place order via order manager (which uses broker)
+    # Place order via order manager (which uses broker) -- with a durable DB
+    # claim committed BEFORE dispatch and a CAS-finalize AFTER (P0-2).  The
+    # deterministic tenant-less signal_key is derived from the envelope
+    # timestamp so re-deliveries dedupe at the DB layer.
     try:
-        execution_result = await order_manager.place_order(order_request)
-        
+        execution_result = await order_manager.place_order(
+            order_request,
+            provider=envelope.provider,
+            strategy_name=payload.strategy_name,
+            signal=payload.signal,
+            ts_sec=_envelope_ts_sec(envelope),
+        )
+
         # Add strategy metadata to execution result
         if isinstance(execution_result, dict):
             execution_result["strategy_name"] = payload.strategy_name
             execution_result["signal_type"] = _parse_signal_type(payload.signal)
             execution_result["signal"] = payload.signal
             execution_result["tag"] = payload.tag
-        
+
         logger.info(
             "TradeThrone signal processed successfully: order_id=%s status=%s symbol=%s qty=%d",
             execution_result.get("order_id"),
@@ -202,7 +230,7 @@ async def handle_tradethrone_signal(webhook: QueuedWebhook) -> None:
             canonical_symbol,
             final_quantity,
         )
-        
+
     except Exception as e:
         logger.error("Failed to execute TradeThrone signal: %s", e)
         execution_result = {
@@ -211,7 +239,17 @@ async def handle_tradethrone_signal(webhook: QueuedWebhook) -> None:
             "order_id": None,
             "symbol": canonical_symbol,
         }
-    
+        await save_audit_log(
+            provider=envelope.provider,
+            payload=raw_payload,
+            execution=execution_result,
+        )
+        # FAIL CLOSED (P0-2): never acknowledge (XACK-as-success) a signal
+        # that was not durably processed.  Re-raise so the worker nacks /
+        # requeues; the durable DB claim + signal_key dedupe reconcile a
+        # retry without double-dispatch.
+        raise
+
     # Save audit log
     await save_audit_log(
         provider=envelope.provider,

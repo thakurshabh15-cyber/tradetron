@@ -20,6 +20,7 @@ from typing import Any, Optional
 from app.brokers.base import BrokerClient
 from app.brokers.simulated import SimulatedBroker
 from app.core.logging import get_logger
+from app.models.trading import OrderRecord
 from app.schemas.trading import OrderRequest, Side
 
 logger = get_logger("engine.order_manager")
@@ -115,6 +116,138 @@ class OrderManager:
         self.execution_history: list[TradeExecution] = []
         # Cumulative realized PnL
         self.realized_pnl: float = 0.0
+
+        # Pre-trade risk gate.  The TradingEngine wires ``self._risk`` here so
+        # the webhook handler's ``engine._order_manager.risk_manager.check()``
+        # shares ONE risk source; standalone usage may attach its own gate.
+        self.risk_manager: Optional[Any] = None
+
+    # ── Durable Signal Dispatch (P0-2) ───────────────────────────────────────
+
+    async def place_order(
+        self,
+        order_request: OrderRequest,
+        *,
+        provider: str = "tradethrone",
+        strategy_name: Optional[str] = None,
+        signal: Optional[str] = None,
+        ts_sec: Optional[int] = None,
+        mode: str = "PAPER",
+        price: Optional[float] = None,
+    ) -> dict[str, Any]:
+        """Place a signal order with a durable DB claim (P0-2 webhook fix).
+
+        The signal-created order must survive a process restart/scale, so the
+        order state CANNOT live only in this process-local in-memory manager.
+
+        Flow:
+          1. Derive a deterministic tenant-less ``signal_key``.
+          2. Durably claim a PENDING ``OrderRecord`` (committed) BEFORE any
+             broker dispatch; a duplicate/concurrent identical signal receives
+             the existing claim instead (no second dispatch).
+          3. Dispatch through the engine broker.
+          4. CAS-finalize the claim to FILLED (+ TradeRecord) or REJECTED.
+
+        On ANY persistence failure this RAISES so the caller can fail closed
+        (webhook nack/retry) instead of acknowledging the signal as processed.
+
+        ``mode`` is restricted to PAPER for this tenant-less signal path: LIVE
+        dispatch requires a user-owned broker account and is deliberately NOT
+        enabled from webhooks.
+        """
+        import time
+
+        from app.engine.durable_claims import (
+            claim_order_record,
+            fetch_claim_by_key,
+            finalize_order_claim,
+            reject_order_claim,
+            signal_client_order_key,
+        )
+
+        if mode != "PAPER":
+            raise RuntimeError(
+                "Live signal dispatch is not enabled: the TradeThrone webhook "
+                "path is tenant-less and cannot place user-owned LIVE orders."
+            )
+
+        derived_ts = int(time.time()) if ts_sec is None else int(ts_sec)
+        signal_key = signal_client_order_key(
+            provider=provider,
+            strategy_name=strategy_name,
+            symbol=order_request.symbol,
+            side=order_request.side.value,
+            quantity=int(order_request.quantity),
+            ts_sec=derived_ts,
+            signal=signal,
+        )
+
+        claim_values = {
+            "signal_key": signal_key,
+            "strategy_id": order_request.strategy_id,
+            "symbol": order_request.symbol,
+            "side": order_request.side.value,
+            "quantity": int(order_request.quantity),
+            "price": float(price) if price is not None else None,
+            "order_type": order_request.order_type,
+            "mode": mode,
+        }
+
+        claim_id = await claim_order_record(
+            key_predicate=OrderRecord.signal_key == signal_key,
+            claim_values=claim_values,
+        )
+        if claim_id is None:
+            # Duplicate / in-flight signal: replay the durable state rather
+            # than dispatch a second order (DB is the source of truth).
+            existing = await fetch_claim_by_key(OrderRecord.signal_key == signal_key)
+            return {
+                "event": "duplicate_signal",
+                "status": "duplicate",
+                "order_id": existing.id if existing else None,
+                "broker_order_id": (
+                    existing.broker_order_id if existing else None
+                ),
+                "symbol": order_request.symbol,
+                "side": order_request.side.value,
+                "quantity": int(order_request.quantity),
+                "strategy_name": strategy_name,
+                "mode": mode,
+            }
+
+        # Broker dispatch (guarded by BROKER_MODE inside broker adapters).
+        try:
+            fill_result = await self.broker.place_order(order_request)
+        except Exception as exc:
+            logger.error(
+                "Signal order dispatch failed (claim %s rejected): %s",
+                claim_id,
+                exc,
+            )
+            await reject_order_claim(claim_id, str(exc))
+            raise
+
+        filled_price = float(fill_result.get("filled_price", price or 0.0))
+        broker_order_id = (
+            fill_result.get("broker_order_id")
+            or fill_result.get("order_id")
+            or f"ORD_SIG_{int(price or 0)}"
+        )
+
+        return await finalize_order_claim(
+            claim_id=claim_id,
+            strategy_id=order_request.strategy_id,
+            strategy_name=strategy_name or "",
+            broker_order_id=str(broker_order_id),
+            symbol=order_request.symbol,
+            side=order_request.side.value,
+            quantity=int(order_request.quantity),
+            filled_price=filled_price,
+            user_id=None,
+            broker_account_id=None,
+            mode=mode,
+            create_position=False,
+        )
 
     # ── Risk Validation ──────────────────────────────────────────────────────────
 

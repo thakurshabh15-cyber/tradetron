@@ -100,6 +100,18 @@ class OrderRecord(Base):
             "so a retry can never double-execute."
         ),
     )
+    signal_key: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        doc=(
+            "Tenant-less durable idempotency key for signal-created orders "
+            "(TradeThrone webhook path, see ux_orders_signal_key partial "
+            "index). GLOBALLY unique — webhook signals have no owning user — "
+            "and distinct from the per-user client_order_id, so a tenant-less "
+            "signal can never collide with a user-scoped order or another "
+            "tenant's identical key string."
+        ),
+    )
     position_id: Mapped[str | None] = mapped_column(
         String(36),
         nullable=True,
@@ -124,6 +136,19 @@ class OrderRecord(Base):
             unique=True,
             sqlite_where=text("client_order_id IS NOT NULL"),
             postgresql_where=text("client_order_id IS NOT NULL"),
+        ),
+        # Tenant-less signal idempotency (P0-2): a webhook signal claim must be
+        # unique GLOBALLY because signals carry no owning user.  Partial so
+        # legacy rows (NULL signal_key) never collide.  Deliberately SEPARATE
+        # from the per-user client_order_id index: the same key string used by
+        # two different users (or by a user as their DMA key) stays legal while
+        # the tenant-less key space is unambiguous.
+        Index(
+            "ux_orders_signal_key",
+            "signal_key",
+            unique=True,
+            sqlite_where=text("signal_key IS NOT NULL"),
+            postgresql_where=text("signal_key IS NOT NULL"),
         ),
     )
 
