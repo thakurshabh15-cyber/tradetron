@@ -661,10 +661,19 @@ async def close_position(
     )
     db.add(trade)
 
-    if pos.mode == "PAPER" and user:
-        current_bal = getattr(user, "paper_balance", 1000000.0)
-        user.paper_balance = round(current_bal + realized_pnl, 2)
-        db.add(user)
+    owner_balance: Optional[float] = None
+    if pos.mode == "PAPER":
+        # ── P1-1 PAPER accounting hardening ──────────────────────────────
+        # The realized P&L of a PAPER close ALWAYS belongs to the account
+        # that OWNS the position (pos.user_id) — never the authenticated
+        # caller.  An admin/operator closing another user's position must not
+        # credit the operator's own balance (cross-user accounting
+        # corruption).  Missing owner => no credit (fail-safe).  The credit
+        # commits atomically with the CAS claim above, so a replay/concurrent
+        # close can never double-book it.
+        from app.engine.paper_account import credit_paper_pnl
+
+        owner_balance = await credit_paper_pnl(db, pos.user_id, realized_pnl)
 
     await db.commit()
 
@@ -693,7 +702,7 @@ async def close_position(
         "realized_pnl": realized_pnl,
         "pnl_pct": pnl_pct,
         "status": "CLOSED",
-        "paper_balance": getattr(user, "paper_balance", 1000000.0) if user else 1000000.0,
+        "paper_balance": owner_balance if owner_balance is not None else (getattr(user, "paper_balance", 1000000.0) if user else 1000000.0),
     }
 
 

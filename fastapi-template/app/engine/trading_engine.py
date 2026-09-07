@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import uuid
 from collections import defaultdict, deque
 from decimal import Decimal
 from typing import Any, Optional
@@ -655,8 +656,9 @@ class TradingEngine:
                 mode=mode,
             )
         else:
-            # PAPER / builtin SMA path: unchanged — a single FILLED commit
-            # after the fill (no pre-dispatch claim needed for paper orders).
+            # PAPER path: a single FILLED commit after the fill.  P1-1: owner-
+            # scoped PAPER fills also open their PositionRecord so the paper
+            # ledger is complete (the builtin SMA path stays tenant-less).
             trade_data = await self._persist_trade(
                 strategy_id=strategy.get("id"),
                 strategy_name=strategy["name"],
@@ -668,6 +670,7 @@ class TradingEngine:
                 user_id=user_id,
                 broker_account_id=broker_account_id,
                 mode=mode,
+                create_position=True,
             )
 
         # ── 6. Broadcast to WebSocket (tenant-scoped) ───────────────────
@@ -836,8 +839,17 @@ class TradingEngine:
         user_id: Optional[str] = None,
         broker_account_id: Optional[str] = None,
         mode: str = "PAPER",
+        create_position: bool = False,
     ) -> dict[str, Any]:
-        """Write order + trade records to SQLite database."""
+        """Write order + trade records to SQLite database.
+
+        ``create_position`` (P1-1): when True and the fill is owner-scoped
+        (``user_id`` present), also create an OPEN PositionRecord linked onto
+        the order so the position ledger is complete for user-scoped PAPER
+        fills (they can then be listed, squared off, and accounted).  The
+        builtin SMA path (tenant-less ``user_id=None``) and LIVE path (handled
+        by the durable claim) never set this.
+        """
         async with SessionLocal() as session:
             async with session.begin():
                 order = OrderRecord(
@@ -857,6 +869,28 @@ class TradingEngine:
                 )
                 session.add(order)
                 await session.flush()
+
+                if create_position and user_id:
+                    from datetime import datetime, timezone
+                    position = PositionRecord(
+                        id=str(uuid.uuid4()),
+                        user_id=user_id,
+                        strategy_id=strategy_id,
+                        broker_account_id=broker_account_id,
+                        symbol=symbol,
+                        side="LONG" if side.upper() == "BUY" else "SHORT",
+                        quantity=quantity,
+                        entry_price=price,
+                        current_price=price,
+                        unrealized_pnl=0.0,
+                        realized_pnl=0.0,
+                        mode=mode,
+                        status="OPEN",
+                        opened_at=datetime.now(timezone.utc),
+                    )
+                    session.add(position)
+                    await session.flush()
+                    order.position_id = position.id
 
                 trade = TradeRecord(
                     user_id=user_id,

@@ -40,7 +40,6 @@ from app.brokers import (
 from app.models.broker_account import BrokerAccountRecord
 from app.models.copy_trading import CopyFollowerRecord, CopyGroupRecord
 from app.models.trading import OrderRecord, PositionRecord, TradeRecord
-from app.models.user import UserRecord
 from app.schemas.trading import OrderRequest, Side
 
 logger = get_logger("engine.copy_trading")
@@ -1156,13 +1155,14 @@ class CopyTradingEngine:
                 )
                 db.add(trade)
 
-                # Update follower user's paper balance if paper mode
-                if p.mode == "PAPER" and p.user_id:
-                    user = await db.get(UserRecord, p.user_id)
-                    if user:
-                        current_bal = getattr(user, "paper_balance", 1000000.0)
-                        user.paper_balance = round(current_bal + realized_pnl, 2)
-                        db.add(user)
+                # Update the POSITION OWNER's paper balance if paper mode.
+                # P1-1 hardening: resolve the owner from the position row
+                # (p.user_id) via the ONE shared owner-scoped primitive — the
+                # caller/follower context can never redirect the credit.
+                if p.mode == "PAPER":
+                    from app.engine.paper_account import credit_paper_pnl
+
+                    await credit_paper_pnl(db, p.user_id, realized_pnl)
 
                 # Update follower aggregate stats
                 follower_stmt = select(CopyFollowerRecord).where(
