@@ -30,12 +30,36 @@ from __future__ import annotations
 
 import inspect
 import re
+import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
+from app.config import settings
+from app.db.session import SessionLocal, init_db
+from app.models.broker_account import BrokerAccountRecord
+from app.models.copy_trading import CopyFollowerRecord, CopyGroupRecord
+from app.models.trading import OrderRecord, PositionRecord, TradeRecord
+from app.models.user import UserRecord
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+@pytest.fixture(autouse=True)
+async def _reset_db_and_simulated_mode():
+    """Ensure the schema exists and LIVE dispatch is blocked by default."""
+    await init_db()
+    settings.broker_mode = "simulated"
+    yield
+    settings.broker_mode = "simulated"
+
+
+@pytest.fixture(autouse=True)
+def _mock_notify_trade_fill(monkeypatch):
+    """No Telegram/HTTP I/O from fill notifications during tests."""
+    monkeypatch.setattr("app.engine.alerts.notify_trade_fill", AsyncMock())
 
 
 # ── 1. Webhook signal handler → engine startup broker ──────────────────────
@@ -117,95 +141,145 @@ def test_copy_trading_engine_holds_no_broker(monkeypatch):
     assert not hasattr(engine, "order_manager")
 
 
-def test_copy_trading_executor_rejects_live_fill_without_owned_broker(monkeypatch):
-    """The per-follower executor must NOT fabricate FILLED/OPEN for a LIVE follower.
+def test_copy_trading_executor_rejects_live_fill_without_owned_broker():
+    """A LIVE follower with no owned CONNECTED broker is rejected - never a phantom fill.
 
-    ``_execute_single_follower_order`` is the innermost execution step. For a
-    LIVE-mode follower the engine must resolve a CONNECTED broker account owned
-    by ``follower.follower_user_id`` from the DB before dispatching. Here the
-    capture session yields no owned broker row, so the executor must persist a
-    REJECTED order and create NO Trade/Position - never a phantom fill.
+    The durable-claim live executor runs a two-phase state machine:
+
+        PENDING claim -> broker dispatch -> CAS finalize FILLED
+
+    For a LIVE-mode follower whose ``broker_account_id`` does NOT resolve to a
+    CONNECTED broker owned by ``follower.follower_user_id``, the dispatch step
+    returns ``no_owned_broker`` and the durable PENDING claim must be
+    CAS-rejected to REJECTED. No TradeRecord / PositionRecord may be created -
+    FILLED/OPEN state can only come from a confirmed broker fill.
     """
+    from sqlalchemy import select
+
+    from app.core.security import hash_password
     from app.engine.copy_trading import CopyTradingEngine
-    from app.models.trading import OrderRecord, TradeRecord, PositionRecord
 
-    class _CaptureSession:
-        def __init__(self):
-            self.added: list[object] = []
-            self._committed = False
+    # LIVE dispatch: turn the BROKER_MODE=simulated guard off so we actually
+    # reach broker resolution (otherwise we'd be testing the guard, not the
+    # no-owned-broker path).
+    settings.broker_mode = "live"
 
-        async def __aenter__(self):
-            return self
+    async def _run():
+        # Master + follower users.
+        master = UserRecord(
+            id=str(uuid.uuid4()),
+            email=f"lr_master_{uuid.uuid4().hex[:8]}@tradetron.io",
+            hashed_password=hash_password("Pass12345!"),
+            full_name="LR Master",
+            role="trader",
+            is_active=True,
+            is_verified=True,
+            paper_balance=0.0,
+        )
+        follower_user = UserRecord(
+            id=str(uuid.uuid4()),
+            email=f"lr_follower_{uuid.uuid4().hex[:8]}@tradetron.io",
+            hashed_password=hash_password("Pass12345!"),
+            full_name="LR Follower",
+            role="trader",
+            is_active=True,
+            is_verified=True,
+            paper_balance=0.0,
+        )
+        group = CopyGroupRecord(master_user_id=master.id, name="LR Group")
+        # A DISCONNECTED broker owned by the follower: present in the DB but NOT
+        # an owned *connected* broker, so the server-side resolution must refuse.
+        follower_broker = BrokerAccountRecord(
+            user_id=follower_user.id,
+            broker_name="SIMULATED",
+            account_name="LR Disconnected Acct",
+            client_id="LR_DISCONNECTED_01",
+            status="DISCONNECTED",
+            is_active=True,
+        )
+        follower_broker.set_credentials(
+            api_key="LRTESTKEY123", api_secret="LRTESTSECRET123", access_token="LRTESTTOKEN123"
+        )
+        async with SessionLocal() as db:
+            db.add_all([master, follower_user, group, follower_broker])
+            await db.flush()
+            follower_user_id = follower_user.id
+            broker_account_id = follower_broker.id  # populated now
+            follower_row = CopyFollowerRecord(
+                group_id=group.id,
+                follower_user_id=follower_user_id,
+                mode="LIVE",
+                broker_account_id=broker_account_id,
+                multiplier=1.0,
+                status="ACTIVE",
+                max_allocation=1_000_000.0,
+            )
+            db.add(follower_row)
+            await db.flush()
+            follower_row_id = follower_row.id
+            await db.commit()
 
-        async def __aexit__(self, *exc):
-            return False
+        # Detached snapshot - the engine re-opens its own sessions.
+        snap = SimpleNamespace(
+            id=follower_row_id,
+            follower_user_id=follower_user_id,
+            mode="LIVE",
+            broker_account_id=broker_account_id,
+            multiplier=1.0,
+            max_allocation=1_000_000.0,
+            total_copied_trades=0,
+        )
 
-        def add(self, obj):
-            self.added.append(obj)
-
-        async def commit(self):
-            self._committed = True
-
-        async def execute(self, stmt):
-            return _Scalar()
-
-        async def get(self, model, pk):
-            return None  # no follower_row / broker row resolvable
-
-        async def flush(self):
-            return None
-
-    class _Scalar:
-        def scalars(self):
-            return self
-
-        def first(self):
-            return None  # no owned broker account resolves
-
-        def all(self):
-            return []
-
-    class _Follower:
-        follower_user_id = "follower-1"
-        multiplier = 2.0
-        max_allocation = None
-        mode = "LIVE"            # worst case: a LIVE-mode follower
-        broker_account_id = "live-account-1"
-        id = "f1"
-        total_copied_trades = 0
-
-    session = _CaptureSession()
-    monkeypatch.setattr("app.engine.copy_trading.SessionLocal", lambda: session)
-    # notify_trade_fill is imported locally inside the executor - patch its source.
-    monkeypatch.setattr("app.engine.alerts.notify_trade_fill", AsyncMock())
-
-    engine = CopyTradingEngine()
-    assert not hasattr(engine, "broker"), "engine must not carry a broker"
+        return (
+            await CopyTradingEngine()._execute_single_follower_order(
+                follower=snap,
+                symbol="NIFTY50",
+                side="BUY",
+                master_qty=10,
+                order_type="MARKET",
+                price=250.0,
+                master_mode="LIVE",
+                master_order_id="LR-WORSTCASE-7",
+            ),
+            follower_user_id,
+        )
 
     import asyncio
 
-    outcome = asyncio.run(
-        engine._execute_single_follower_order(
-            follower=_Follower(),
-            symbol="NIFTY",
-            side="BUY",
-            master_qty=10,
-            order_type="MARKET",
-            price=250.0,
-            master_mode="LIVE",
-        )
-    )
+    outcome, follower_user_id = asyncio.run(_run())
+
     assert outcome.get("success", False) is False, outcome
     assert outcome.get("reason") == "no_owned_broker", outcome
 
-    orders = [r for r in session.added if isinstance(r, OrderRecord)]
-    trades = [r for r in session.added if isinstance(r, TradeRecord)]
-    positions = [r for r in session.added if isinstance(r, PositionRecord)]
-    assert len(orders) == 1, "exactly one REJECTED order record expected"
-    assert orders[0].status == "REJECTED", "must never fabricate a FILLED order"
+    # The durable claim existed (PENDING) then was CAS-rejected to REJECTED, and
+    # mover must not fabricate FILLED/OPEN bookkeeping.
+    async def _verify():
+        async with SessionLocal() as db:
+            orders = (
+                await db.execute(
+                    select(OrderRecord).where(OrderRecord.user_id == follower_user_id)
+                )
+            ).scalars().all()
+            trades = (
+                await db.execute(
+                    select(TradeRecord).where(TradeRecord.user_id == follower_user_id)
+                )
+            ).scalars().all()
+            positions = (
+                await db.execute(
+                    select(PositionRecord).where(PositionRecord.user_id == follower_user_id)
+                )
+            ).scalars().all()
+            return orders, trades, positions
+
+    orders, trades, positions = asyncio.run(_verify())
+    assert len(orders) == 1, f"exactly one durable claim order expected, got {len(orders)}"
+    assert orders[0].status == "REJECTED", f"must never fabricate FILLED/OPEN: {orders[0].status}"
+    assert orders[0].broker_account_id is None, (
+        "REJECTED claim must not retain any broker account reference"
+    )
     assert not trades, "no fabricated trade record"
     assert not positions, "no fabricated OPEN position"
-    assert session._committed is True
 
 
 # ── 3. visual_strategy.execute_legs is a latent (unwired) primitive ─────────
