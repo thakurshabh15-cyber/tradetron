@@ -45,6 +45,29 @@ async def lifespan(application: FastAPI):  # noqa: ARG001
     logger = get_logger("main")
     logger.info("Starting %s…", settings.app_name)
 
+    # 0. Non-negotiable pre-flight: apply pending Alembic migrations BEFORE
+    #    anything else.  On Render Free there is no Pre-Deploy / Release hook,
+    #    so the schema is brought to head here; the uvicorn / FastAPI lifespan
+    #    model guarantees no request is served until this block completes.
+    #    Uses a subprocess (same pattern as scripts/ci_alembic_check.py)
+    #    because alembic/env.py calls asyncio.run() which cannot run from
+    #    inside a live event loop.
+    from app.db.migrations import MigrationError, run_migrations
+
+    try:
+        run_migrations()
+        logger.info("Alembic migrations up to date (upgrade head).")
+    except MigrationError as exc:
+        logger.critical(
+            "Refusing to start %s — Alembic migration failed: %s. "
+            "The application will NOT serve any request until the schema is "
+            "brought to head.",
+            settings.app_name,
+            exc,
+            exc_info=True,
+        )
+        raise
+
     # 1. Initialise database (create tables and seed data)
     from app.db.session import init_db
 

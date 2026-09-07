@@ -156,11 +156,22 @@ must pass before merge:
   ```bash
   alembic upgrade head
   ```
-  On **Render** this is now automated: `render.yaml` declares
-  `releaseCommand: alembic upgrade head`, so every deploy applies pending
-  migrations (idempotent — Alembic's version table makes re-runs a no-op)
-  **before** the web service starts. Non-Render hosts must still run the
-  command manually.
+- **Automatic migrate-before-serve (all plans):** `app/db/migrations.py`
+  provides `run_migrations()` which the FastAPI lifespan executes as its
+  **first** startup step, before `init_db()` and before any request can be
+  served (uvicorn does not accept connections until the lifespan completes).
+  Every boot therefore runs `alembic upgrade head` using the same runtime
+  `DATABASE_URL`; on an already-current schema it is an idempotent no-op.
+  If the migration fails the app **fails closed** — startup aborts and no
+  request is served ($7.5 recovery runbook). This is what makes the **Render
+  Free tier** self-healing: Free has no Pre-Deploy / Release command and the
+  dashboard-created service ignores `render.yaml`, so the app-startup gate is
+  the only reliable migration hook available.
+- **Blueprint-only releaseCommand (paid plans):** `render.yaml` also declares
+  `releaseCommand: alembic upgrade head` as a best practice for Blueprint-managed
+  services on paid plans (idempotent — Alembic's version table makes re-runs a
+  no-op). Both mechanisms coexist safely; the startup gate is authoritative on
+  Free.
 - **Drift guard:** `python scripts/ci_alembic_check.py` validates the chain on
   an isolated temp DB (no network, no production datastore). Baseline
   `0001_baseline` generates the schema from the ORM (`Base.metadata.create_all`),

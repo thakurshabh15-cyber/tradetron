@@ -2,17 +2,32 @@
 
 Handles real-time concurrent trade mirroring via asyncio.gather for sub-50ms execution latency.
 Applies lot multipliers, risk caps, and supports dual Paper/Live broker execution modes.
+
+LIVE durable-claim hardening (P0):
+    Every LIVE follower entry follows the same two-phase dispatch pattern as
+    keyed manual/DMA and autonomous strategy entries:
+
+      SIGNAL → DURABLE PENDING CLAIM → BROKER DISPATCH → PERSIST broker ref
+      (own commit) → CAS FINALIZE FILLED + Trade + Position → DONE
+
+    On any dispatch/guard failure the PENDING claim is CAS-rejected (no
+    duplicate unkeyed REJECTED rows).  A crash after broker acceptance but
+    before finalization leaves a recoverable PENDING row that the existing
+    order-reconciliation engine can resolve via Window-B (broker_order_id
+    present) or Window-C (broker_order_id absent → get_positions()).
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
@@ -29,6 +44,263 @@ from app.models.user import UserRecord
 from app.schemas.trading import OrderRequest, Side
 
 logger = get_logger("engine.copy_trading")
+
+
+# ── Copy-trading durable-claim helpers ──────────────────────────────────────
+
+
+def _copy_client_order_id(
+    master_order_id: str,
+    follower_user_id: str,
+    symbol: str,
+    side: str,
+    calc_qty: int,
+) -> str:
+    """Deterministic idempotency key for a copy-trading LIVE follower entry."""
+    raw = f"{master_order_id}:{follower_user_id}:{symbol}:{side}:{calc_qty}"
+    return "cpy-" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:40]
+
+
+async def _claim_copy_follower_order(
+    *,
+    follower_user_id: str,
+    broker_account_id: str | None,
+    symbol: str,
+    side: str,
+    quantity: int,
+    order_type: str,
+    price: float,
+    mode: str,
+    client_order_id: str,
+) -> Optional[str]:
+    """Durably claim an idempotency key for a LIVE copy-trading follower entry.
+
+    Returns claim row id on success, None when caller must NOT dispatch.
+    """
+    async with SessionLocal() as session:
+        existing = (
+            await session.execute(
+                select(OrderRecord).where(
+                    OrderRecord.user_id == follower_user_id,
+                    OrderRecord.client_order_id == client_order_id,
+                )
+            )
+        ).scalar_one_or_none()
+
+        if existing is not None:
+            if existing.status in ("FILLED", "PENDING"):
+                return None
+            retry = await session.execute(
+                update(OrderRecord)
+                .where(
+                    OrderRecord.user_id == follower_user_id,
+                    OrderRecord.client_order_id == client_order_id,
+                    OrderRecord.status.not_in(("FILLED", "PENDING")),
+                )
+                .values(
+                    broker_account_id=broker_account_id,
+                    symbol=symbol,
+                    side=side,
+                    quantity=quantity,
+                    order_type=order_type,
+                    price=price,
+                    mode=mode,
+                    status="PENDING",
+                    error_message=None,
+                    broker_order_id=None,
+                    filled_price=None,
+                    filled_quantity=0,
+                    position_id=None,
+                )
+            )
+            if retry.rowcount == 1:
+                await session.commit()
+                return existing.id
+            await session.rollback()
+            return None
+
+        claim = OrderRecord(
+            user_id=follower_user_id,
+            client_order_id=client_order_id,
+            broker_account_id=broker_account_id,
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            order_type=order_type,
+            price=price,
+            mode=mode,
+            status="PENDING",
+        )
+        session.add(claim)
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            return None
+        return claim.id
+
+
+async def _persist_copy_follower_broker_ref(
+    claim_id: str,
+    broker_order_id: str,
+) -> None:
+    """Persist the broker reference on the PENDING claim in its own commit.
+
+    Window-D hardening: the reference must survive a crash before finalization
+    so reconciliation's Window-B path (get_order_status) can read it back.
+    """
+    async with SessionLocal() as session:
+        claim = await session.get(OrderRecord, claim_id)
+        if claim is None:
+            return
+        if not claim.broker_order_id:
+            claim.broker_order_id = broker_order_id
+            await session.commit()
+
+
+async def _reject_copy_follower_claim(
+    claim_id: str,
+    reason: str,
+) -> None:
+    """CAS-reject a LIVE copy-trading follower claim after dispatch failure."""
+    async with SessionLocal() as session:
+        result = await session.execute(
+            update(OrderRecord)
+            .where(
+                OrderRecord.id == claim_id,
+                OrderRecord.status == "PENDING",
+            )
+            # A rejected claim is terminal (never reconciled) and the follower
+            # order must not retain any broker account reference — in particular
+            # a cross-tenant ref must never leak onto a REJECTED order row.  The
+            # claim is cleared before finalization only after a confirmed fill.
+            .values(
+                status="REJECTED",
+                error_message=reason,
+                broker_account_id=None,
+            )
+        )
+        if result.rowcount == 1:
+            await session.commit()
+        else:
+            await session.rollback()
+
+
+async def _persist_copy_follower_live_fill(
+    *,
+    claim_id: str,
+    broker_order_id: str,
+    symbol: str,
+    side: str,
+    quantity: int,
+    filled_price: float,
+    follower_user_id: str,
+    broker_account_id: str,
+    multiplier: float,
+    follower_id: str,
+) -> dict[str, Any]:
+    """Finalize a LIVE copy-trading follower claim after broker acceptance.
+
+    Two-phase commit:
+      1. Persist broker_order_id on the PENDING claim (its own commit).
+      2. CAS-finalize FILLED + create Trade + Position atomically.
+    """
+    async with SessionLocal() as session:
+        # Phase 1: persist broker reference (its own commit).
+        claim = await session.get(OrderRecord, claim_id)
+        if claim is None:
+            raise RuntimeError(f"LIVE copy-trading claim {claim_id} not found")
+        if not claim.broker_order_id:
+            claim.broker_order_id = broker_order_id
+            await session.commit()
+
+        # Phase 2: CAS-finalize FILLED + create Trade + Position.
+        result = await session.execute(
+            update(OrderRecord)
+            .where(
+                OrderRecord.id == claim_id,
+                OrderRecord.status == "PENDING",
+                OrderRecord.position_id.is_(None),
+            )
+            .values(
+                status="FILLED",
+                filled_price=filled_price,
+                filled_quantity=quantity,
+                broker_order_id=broker_order_id,
+                error_message=None,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            await session.rollback()
+            finalized = await session.get(OrderRecord, claim_id)
+            return {
+                "success": True,
+                "follower_user_id": follower_user_id,
+                "quantity": quantity,
+                "order_id": claim_id,
+                "broker_order_id": (
+                    finalized.broker_order_id if finalized else broker_order_id
+                ),
+                "duplicate": True,
+            }
+
+        await session.flush()
+
+        trade = TradeRecord(
+            id=str(uuid.uuid4()),
+            order_id=claim_id,
+            strategy_name=f"Copy Trading ({multiplier}x)",
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            price=filled_price,
+            entry_price=filled_price,
+            pnl=0.0,
+            mode="LIVE",
+            user_id=follower_user_id,
+        )
+        position = PositionRecord(
+            id=str(uuid.uuid4()),
+            user_id=follower_user_id,
+            broker_account_id=broker_account_id,
+            symbol=symbol,
+            side="LONG" if side.upper() == "BUY" else "SHORT",
+            quantity=quantity,
+            entry_price=filled_price,
+            current_price=filled_price,
+            unrealized_pnl=0.0,
+            realized_pnl=0.0,
+            mode="LIVE",
+            status="OPEN",
+            opened_at=datetime.now(timezone.utc),
+        )
+        session.add(trade)
+        session.add(position)
+        await session.flush()
+
+        # Link position back to the order row.
+        claim_obj = await session.get(OrderRecord, claim_id)
+        if claim_obj:
+            claim_obj.position_id = position.id
+            await session.flush()
+
+        # Update follower aggregate stats.
+        follower_row = await session.get(CopyFollowerRecord, follower_id)
+        if follower_row:
+            follower_row.total_copied_trades = (
+                (follower_row.total_copied_trades or 0) + 1
+            )
+            session.add(follower_row)
+
+        await session.commit()
+
+        return {
+            "success": True,
+            "follower_user_id": follower_user_id,
+            "quantity": quantity,
+            "order_id": claim_id,
+        }
 
 
 class CopyTradingEngine:
@@ -53,6 +325,7 @@ class CopyTradingEngine:
             order_type = master_order.order_type
             price = master_order.price or master_order.filled_price or 1000.0
             mode = master_order.mode
+            master_order_id = master_order.id
         else:
             symbol = master_order.get("symbol", "NIFTY50")
             side = master_order.get("side", "BUY")
@@ -60,6 +333,11 @@ class CopyTradingEngine:
             order_type = master_order.get("order_type", "MARKET")
             price = master_order.get("price") or master_order.get("filled_price") or 1000.0
             mode = master_order.get("mode", "PAPER")
+            # Deterministic fallback for dict callers without a persisted order id.
+            master_order_id = master_order.get("id", "")
+            if not master_order_id:
+                _raw = f"{symbol}:{side}:{master_qty}:{order_type}:{price}:{mode}"
+                master_order_id = "dict-" + hashlib.sha256(_raw.encode("utf-8")).hexdigest()[:32]
 
         clean_sym = symbol.upper().strip()
 
@@ -110,6 +388,7 @@ class CopyTradingEngine:
                     order_type=order_type,
                     price=price,
                     master_mode=mode,
+                    master_order_id=master_order_id,
                 )
                 for follower in followers
             ]
@@ -154,77 +433,72 @@ class CopyTradingEngine:
         order_type: str,
         price: float,
         master_mode: str,
+        master_order_id: str,
     ) -> dict[str, Any]:
-        """Execute a single follower order inside an isolated session."""
+        """Execute a single follower order.
+
+        LIVE follower entries follow the durable-claim state machine:
+
+            SIGNAL -> DURABLE PENDING CLAIM -> BROKER DISPATCH -> PERSIST
+            broker ref (own commit) -> CAS FINALIZE FILLED + Trade + Position
+            -> DONE
+
+        A crash at any point after the claim leaves a recoverable PENDING row
+        the order-reconciliation engine can resolve.
+        """
+        # 1. Calculate lot-multiplier scaled quantity
+        multiplier = follower.multiplier or 1.0
+        calc_qty = max(1, int(round(master_qty * multiplier)))
+
+        # 2. Risk check: Max allocation cap
+        total_val = calc_qty * price
+        if follower.max_allocation and total_val > follower.max_allocation:
+            if price > 0:
+                calc_qty = max(1, int(follower.max_allocation / price))
+            else:
+                calc_qty = 1
+
+        # 3. Follower execution mode.
+        #    ── Safety invariant (C/E): A PAPER master signal can never
+        #    manufacture a LIVE fill for a follower, so a paper master
+        #    always fans out as PAPER bookkeeping. Only a LIVE master
+        #    with a LIVE follower may reach a real broker.
+        follower_mode = (
+            "PAPER" if master_mode != "LIVE" else (follower.mode or "PAPER")
+        )
+
+        if follower_mode == "LIVE":
+            return await self._execute_live_follower_order(
+                follower=follower,
+                symbol=symbol,
+                side=side,
+                calc_qty=calc_qty,
+                order_type=order_type,
+                price=price,
+                master_order_id=master_order_id,
+                multiplier=multiplier,
+            )
+
         async with SessionLocal() as db:
             try:
-                # 1. Calculate lot-multiplier scaled quantity
-                multiplier = follower.multiplier or 1.0
-                calc_qty = max(1, int(round(master_qty * multiplier)))
-
-                # 2. Risk check: Max allocation cap
-                total_val = calc_qty * price
-                if follower.max_allocation and total_val > follower.max_allocation:
-                    if price > 0:
-                        calc_qty = max(1, int(follower.max_allocation / price))
-                    else:
-                        calc_qty = 1
-
-                # 3. Follower execution mode.
-                #    ── Safety invariant (C/E): A PAPER master signal can never
-                #    manufacture a LIVE fill for a follower, so a paper master
-                #    always fans out as PAPER bookkeeping. Only a LIVE master
-                #    with a LIVE follower may reach a real broker.
-                follower_mode = (
-                    "PAPER" if master_mode != "LIVE" else (follower.mode or "PAPER")
-                )
-
-                # LIVE dispatch state, resolved below (invariant A/B/D).
-                broker_account_id: str | None = None
-                broker_order_id_ref: str | None = None
-                filled_price: float | None = price
-
-                if follower_mode == "LIVE":
-                    # ── Safety invariant (A/B/C/D): resolve the follower's OWN
-                    #    connected broker account from server data, gate the LIVE
-                    #    dispatch behind assert_live_dispatch_allowed(), and only
-                    #    persist FILLED/OPEN after a confirmed broker fill.
-                    _live_outcome = await self._dispatch_live_follower_order(
-                        db=db,
-                        follower=follower,
-                        symbol=symbol,
-                        side=side,
-                        calc_qty=calc_qty,
-                        order_type=order_type,
-                        price=price,
-                    )
-                    if not _live_outcome["success"]:
-                        return _live_outcome
-                    broker_account_id = _live_outcome["broker_account_id"]
-                    broker_order_id_ref = _live_outcome["broker_order_id_ref"]
-                    filled_price = _live_outcome["filled_price"]
-
-                # 4. Persist Follower OrderRecord (FILLED only after confirmed fill;
-                #    PAPER fills immediately as before)
+                # PAPER path: persist FILLED OrderRecord + Trade + Position
                 order_id = f"CPY_ORD_{int(datetime.now(timezone.utc).timestamp())}_{str(uuid.uuid4())[:6]}"
                 order = OrderRecord(
                     id=str(uuid.uuid4()),
                     user_id=follower.follower_user_id,
-                    broker_account_id=broker_account_id,
-                    broker_order_id=broker_order_id_ref or order_id,
                     symbol=symbol,
                     side=side,
                     quantity=calc_qty,
                     order_type=order_type,
                     price=price,
-                    filled_price=filled_price,
+                    filled_price=price,
                     filled_quantity=calc_qty,
                     status="FILLED",
-                    mode=follower_mode,
+                    mode="PAPER",
                 )
                 db.add(order)
 
-                # 5. Persist Follower TradeRecord
+                # Persist Follower TradeRecord
                 trade = TradeRecord(
                     id=str(uuid.uuid4()),
                     order_id=order_id,
@@ -232,34 +506,33 @@ class CopyTradingEngine:
                     symbol=symbol,
                     side=side,
                     quantity=calc_qty,
-                    price=filled_price or price,
-                    entry_price=filled_price or price,
+                    price=price,
+                    entry_price=price,
                     pnl=0.0,
-                    mode=follower_mode,
+                    mode="PAPER",
                     user_id=follower.follower_user_id,
                 )
                 db.add(trade)
 
-                # 6. Persist Follower Open PositionRecord
-                pos_side = "LONG" if side == "BUY" else "SHORT"
+                # Persist Follower Open PositionRecord
                 position = PositionRecord(
                     id=str(uuid.uuid4()),
                     user_id=follower.follower_user_id,
-                    broker_account_id=broker_account_id,
                     symbol=symbol,
-                    side=pos_side,
+                    side="LONG" if side == "BUY" else "SHORT",
                     quantity=calc_qty,
-                    entry_price=filled_price or price,
-                    current_price=filled_price or price,
+                    entry_price=price,
+                    current_price=price,
                     unrealized_pnl=0.0,
                     realized_pnl=0.0,
-                    mode=follower_mode,
+                    mode="PAPER",
                     status="OPEN",
                     opened_at=datetime.now(timezone.utc),
                 )
                 db.add(position)
+                order.position_id = position.id
 
-                # 7. Update Follower stats
+                # Update Follower stats
                 follower_row = await db.get(CopyFollowerRecord, follower.id)
                 if follower_row:
                     follower_row.total_copied_trades = (follower_row.total_copied_trades or 0) + 1
@@ -273,8 +546,8 @@ class CopyTradingEngine:
                     symbol=symbol,
                     side=side,
                     quantity=calc_qty,
-                    price=filled_price or price,
-                    mode=follower_mode,
+                    price=price,
+                    mode="PAPER",
                 )
 
                 return {
@@ -291,9 +564,169 @@ class CopyTradingEngine:
                 )
                 return {"success": False, "error": str(exc)}
 
+    async def _execute_live_follower_order(
+        self,
+        *,
+        follower: CopyFollowerRecord,
+        symbol: str,
+        side: str,
+        calc_qty: int,
+        order_type: str,
+        price: float,
+        master_order_id: str,
+        multiplier: float,
+    ) -> dict[str, Any]:
+        """Execute a single LIVE follower order with the durable-claim machine.
+
+        Safety invariants preserved:
+          A. The broker account is re-derived server-side from the follower row
+             and MUST be owned by ``follower.follower_user_id``.
+          B. ``assert_live_dispatch_allowed()`` runs BEFORE any broker call.
+          C. FILLED/OPEN state is persisted ONLY after a confirmed broker fill.
+          D. A claim helper returning None (duplicate/in-flight) NEVER dispatches.
+        """
+        # Invariant A (pre-claim): a follower with no linked broker account can
+        # never reach a broker.  No claim is created in that case.
+        if not follower.broker_account_id:
+            logger.warning(
+                "Copy trade REJECTED for follower %s on %s: no linked broker account",
+                follower.follower_user_id,
+                symbol,
+            )
+            return {
+                "success": False,
+                "follower_user_id": follower.follower_user_id,
+                "reason": "no_owned_broker",
+            }
+
+        # Durable PENDING claim BEFORE broker dispatch.
+        claim_key = _copy_client_order_id(
+            master_order_id,
+            follower.follower_user_id,
+            symbol,
+            side,
+            calc_qty,
+        )
+        claim_id = await _claim_copy_follower_order(
+            follower_user_id=follower.follower_user_id,
+            broker_account_id=follower.broker_account_id,
+            symbol=symbol,
+            side=side,
+            quantity=calc_qty,
+            order_type=order_type,
+            price=price,
+            mode="LIVE",
+            client_order_id=claim_key,
+        )
+        if claim_id is None:
+            # Same key already FILLED or PENDING -- never dispatch a second
+            # real order for the same signal.
+            logger.info(
+                "Copy trade skipped for follower %s on %s: duplicate/in-flight claim",
+                follower.follower_user_id,
+                symbol,
+            )
+            return {
+                "success": True,
+                "follower_user_id": follower.follower_user_id,
+                "quantity": calc_qty,
+                "duplicate": True,
+            }
+
+        # Broker dispatch (validation + dispatch only; NO DB mutations).
+        outcome = await self._dispatch_live_follower_order(
+            follower=follower,
+            symbol=symbol,
+            side=side,
+            calc_qty=calc_qty,
+            order_type=order_type,
+            price=price,
+        )
+        if not outcome.get("success"):
+            # CAS-reject the SAME durable claim -- never a second unkeyed row.
+            await _reject_copy_follower_claim(
+                claim_id,
+                outcome.get("reason", "live_dispatch_failed"),
+            )
+            return outcome
+
+        broker_order_id_ref = outcome.get("broker_order_id_ref")
+        if not broker_order_id_ref:
+            # Ambiguous broker response: the broker may have accepted the order
+            # but returned no reference.  Leave the durable PENDING claim
+            # recoverable via the existing Window-C reconciliation path
+            # (get_positions).  NEVER fabricate a fill or a synthetic ref, and
+            # never dispatch again because the response was ambiguous.
+            logger.warning(
+                "Copy trade accepted WITHOUT broker reference for follower %s on %s; "
+                "claim %s left PENDING for Window-C reconciliation",
+                follower.follower_user_id,
+                symbol,
+                claim_id,
+            )
+            return {
+                "success": True,
+                "follower_user_id": follower.follower_user_id,
+                "quantity": calc_qty,
+                "order_id": claim_id,
+                "pending_recovery": True,
+            }
+
+        filled_price = outcome.get("filled_price")
+        if not filled_price:
+            # Reference known but fill state uncertain: persist the broker ref
+            # in its own commit and leave the claim PENDING for Window-B
+            # reconciliation (get_order_status).
+            await _persist_copy_follower_broker_ref(
+                claim_id, broker_order_id_ref,
+            )
+            logger.info(
+                "Copy trade accepted with broker ref %s for follower %s on %s; "
+                "fill unconfirmed, claim %s left PENDING for Window-B reconciliation",
+                broker_order_id_ref,
+                follower.follower_user_id,
+                symbol,
+                claim_id,
+            )
+            return {
+                "success": True,
+                "follower_user_id": follower.follower_user_id,
+                "quantity": calc_qty,
+                "order_id": claim_id,
+                "pending_recovery": True,
+            }
+
+        # Two-phase finalization: broker ref (own commit) then CAS FILLED.
+        try:
+            return await _persist_copy_follower_live_fill(
+                claim_id=claim_id,
+                broker_order_id=broker_order_id_ref,
+                symbol=symbol,
+                side=side,
+                quantity=calc_qty,
+                filled_price=filled_price,
+                follower_user_id=follower.follower_user_id,
+                broker_account_id=outcome["broker_account_id"],
+                multiplier=multiplier,
+                follower_id=follower.id,
+            )
+        except Exception as exc:
+            # Finalization failed AFTER broker acceptance.  The durable PENDING
+            # claim + broker ref keep the order recoverable by reconciliation.
+            logger.error(
+                "Failed to finalize copy trade for follower %s: %s",
+                follower.follower_user_id,
+                exc,
+            )
+            return {
+                "success": False,
+                "follower_user_id": follower.follower_user_id,
+                "reason": "finalization_failed_recoverable",
+                "order_id": claim_id,
+            }
+
     async def _dispatch_live_follower_order(
             self,
-            db: AsyncSession,
             follower: CopyFollowerRecord,
             symbol: str,
             side: str,
@@ -310,35 +743,13 @@ class CopyTradingEngine:
               B. ``assert_live_dispatch_allowed()`` is invoked before any broker call;
                  when the deployment is not explicitly ``BROKER_MODE=live`` the guard
                  raises ``BrokerModeBlockedError``.
-              C/D. On ANY guard block or broker failure a REJECTED OrderRecord is
-                 persisted and NO FILLED/OPEN Trade/Position state is created - a
-                 live copy-trade is never fabricated.
 
-            Returns an outcome dict: ``{"success": False, ...}`` with a REJECTED
-            order already committed, or ``{"success": True, broker_account_id,
-            broker_order_id_ref, filled_price}`` for a confirmed broker fill.
+            This helper performs NO database mutations.  The caller owns claim
+            persistence: on failure the durable PENDING claim is CAS-rejected.
             """
             if not follower.broker_account_id:
-                rejected = OrderRecord(
-                    id=str(uuid.uuid4()),
-                    user_id=follower.follower_user_id,
-                    symbol=symbol,
-                    side=side,
-                    quantity=calc_qty,
-                    order_type=order_type,
-                    price=price,
-                    filled_quantity=0,
-                    status="REJECTED",
-                    mode="LIVE",
-                    error_message=(
-                        "Copy-trade LIVE dispatch blocked: no broker account is linked "
-                        "to this follower."
-                    ),
-                )
-                db.add(rejected)
-                await db.commit()
                 logger.warning(
-                    "Copy trade REJECTED for follower %s on %s: no linked broker account",
+                    "Copy trade blocked for follower %s on %s: no linked broker account",
                     follower.follower_user_id,
                     symbol,
                 )
@@ -346,41 +757,22 @@ class CopyTradingEngine:
                     "success": False,
                     "follower_user_id": follower.follower_user_id,
                     "reason": "no_owned_broker",
-                    "order_id": rejected.id,
                 }
 
-            # Resolve the follower's own CONNECTED, active broker account - the
-            # ownership constraint enforced at the API layer is re-enforced here
-            # server-side so a stale/corrupt row can never route elsewhere.
-            broker_stmt = select(BrokerAccountRecord).where(
-                BrokerAccountRecord.id == follower.broker_account_id,
-                BrokerAccountRecord.user_id == follower.follower_user_id,
-                BrokerAccountRecord.status == "CONNECTED",
-                BrokerAccountRecord.is_active.is_(True),
-            )
-            broker_rec = (await db.execute(broker_stmt)).scalars().first()
+            # Resolve the follower's own CONNECTED, active broker account (server-
+            # side ownership re-enforcement, own session - never another user's).
+            async with SessionLocal() as broker_db:
+                broker_stmt = select(BrokerAccountRecord).where(
+                    BrokerAccountRecord.id == follower.broker_account_id,
+                    BrokerAccountRecord.user_id == follower.follower_user_id,
+                    BrokerAccountRecord.status == "CONNECTED",
+                    BrokerAccountRecord.is_active.is_(True),
+                )
+                broker_rec = (await broker_db.execute(broker_stmt)).scalars().first()
 
             if not broker_rec:
-                rejected = OrderRecord(
-                    id=str(uuid.uuid4()),
-                    user_id=follower.follower_user_id,
-                    symbol=symbol,
-                    side=side,
-                    quantity=calc_qty,
-                    order_type=order_type,
-                    price=price,
-                    filled_quantity=0,
-                    status="REJECTED",
-                    mode="LIVE",
-                    error_message=(
-                        "Copy-trade LIVE dispatch blocked: no CONNECTED broker account "
-                        "owned by this follower."
-                    ),
-                )
-                db.add(rejected)
-                await db.commit()
                 logger.warning(
-                    "Copy trade REJECTED for follower %s on %s: no owned connected broker",
+                    "Copy trade blocked for follower %s on %s: no owned connected broker",
                     follower.follower_user_id,
                     symbol,
                 )
@@ -388,7 +780,6 @@ class CopyTradingEngine:
                     "success": False,
                     "follower_user_id": follower.follower_user_id,
                     "reason": "no_owned_broker",
-                    "order_id": rejected.id,
                 }
 
             # Safety invariant (B): LIVE dispatch MUST pass the guard before any
@@ -396,24 +787,8 @@ class CopyTradingEngine:
             try:
                 assert_live_dispatch_allowed()
             except BrokerModeBlockedError as guard_exc:
-                rejected = OrderRecord(
-                    id=str(uuid.uuid4()),
-                    user_id=follower.follower_user_id,
-                    broker_account_id=broker_rec.id,
-                    symbol=symbol,
-                    side=side,
-                    quantity=calc_qty,
-                    order_type=order_type,
-                    price=price,
-                    filled_quantity=0,
-                    status="REJECTED",
-                    mode="LIVE",
-                    error_message=f"LIVE dispatch blocked: {guard_exc}",
-                )
-                db.add(rejected)
-                await db.commit()
                 logger.warning(
-                    "Copy trade REJECTED for follower %s on %s: LIVE dispatch blocked (%s)",
+                    "Copy trade blocked for follower %s on %s: LIVE dispatch blocked (%s)",
                     follower.follower_user_id,
                     symbol,
                     guard_exc,
@@ -422,7 +797,6 @@ class CopyTradingEngine:
                     "success": False,
                     "follower_user_id": follower.follower_user_id,
                     "reason": "live_dispatch_blocked",
-                    "order_id": rejected.id,
                 }
 
             # Confirm-before-fill: dispatch through the follower's own adapter.
@@ -436,24 +810,8 @@ class CopyTradingEngine:
             try:
                 broker_resp = await broker_client.place_order(broker_req)
             except Exception as broker_exc:
-                rejected = OrderRecord(
-                    id=str(uuid.uuid4()),
-                    user_id=follower.follower_user_id,
-                    broker_account_id=broker_rec.id,
-                    symbol=symbol,
-                    side=side,
-                    quantity=calc_qty,
-                    order_type=order_type,
-                    price=price,
-                    filled_quantity=0,
-                    status="REJECTED",
-                    mode="LIVE",
-                    error_message=f"Broker rejected copy order: {broker_exc}",
-                )
-                db.add(rejected)
-                await db.commit()
                 logger.error(
-                    "Copy trade REJECTED for follower %s on %s: broker dispatch failed (%s)",
+                    "Copy trade dispatch FAILED for follower %s on %s: %s",
                     follower.follower_user_id,
                     symbol,
                     broker_exc,
@@ -462,18 +820,22 @@ class CopyTradingEngine:
                     "success": False,
                     "follower_user_id": follower.follower_user_id,
                     "reason": "broker_dispatch_failed",
-                    "order_id": rejected.id,
                 }
 
-            # Confirmed successful broker dispatch - only now may the caller persist
-            # FILLED/OPEN state (safety invariant C).
+            # Confirmed successful broker dispatch - the caller may now persist
+            # FILLED/OPEN state, but ONLY from the broker's own returned data.
+            # Per the durable-claim design, a MISSING broker reference must
+            # NEVER be replaced by a synthetic one: a fabricated ref would make
+            # reconciliation's Window-B path query the broker for a fake id and
+            # be stuck forever; leaving the ref empty routes recovery through
+            # Window-C (get_positions) which can detect real exposure.
             broker_order_id_ref = (
                 broker_resp.get("order_id")
                 or broker_resp.get("broker_order_id")
-                or f"CPY_BROKER_{str(uuid.uuid4())[:6]}"
+                or None
             )
             resp_price = broker_resp.get("filled_price") or broker_resp.get("price")
-            filled_price = round(float(resp_price), 2) if resp_price else price
+            filled_price = round(float(resp_price), 2) if resp_price else None
             logger.info(
                 "Copy trade dispatched LIVE for follower %s on %s via broker %s: %s",
                 follower.follower_user_id,

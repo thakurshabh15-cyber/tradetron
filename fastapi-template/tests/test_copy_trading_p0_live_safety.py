@@ -315,6 +315,7 @@ async def test_live_follower_blocked_never_fabricates_fill(monkeypatch):
     outcome = await copy_trading_engine._execute_single_follower_order(
         follower=snap, symbol="NIFTY50", side="BUY", master_qty=10,
         order_type="MARKET", price=250.0, master_mode="LIVE",
+        master_order_id="M1",
     )
 
     assert outcome["success"] is False
@@ -333,7 +334,8 @@ async def test_live_follower_blocked_never_fabricates_fill(monkeypatch):
         ).scalars().all()
         assert len(orders) == 1
         assert orders[0].status == "REJECTED"
-        assert "LIVE broker order dispatch blocked" in (orders[0].error_message or "")
+        assert orders[0].error_message == "live_dispatch_blocked"
+        assert orders[0].broker_account_id is None  # REJECTED claim carries no broker ref
         assert orders[0].filled_quantity == 0
         assert orders[0].filled_price is None
         positions = (
@@ -365,6 +367,7 @@ async def test_live_follower_invokes_assert_live_dispatch_allowed(monkeypatch):
     outcome = await copy_trading_engine._execute_single_follower_order(
         follower=snap, symbol="NIFTY50", side="BUY", master_qty=10,
         order_type="MARKET", price=250.0, master_mode="LIVE",
+        master_order_id="M2",
     )
 
     assert guard_called["v"] is True, "assert_live_dispatch_allowed was never invoked"
@@ -393,6 +396,7 @@ async def test_live_follower_successful_dispatch_persists_correct_state(monkeypa
     outcome = await copy_trading_engine._execute_single_follower_order(
         follower=snap, symbol="NIFTY50", side="BUY", master_qty=10,
         order_type="MARKET", price=250.0, master_mode="LIVE",
+        master_order_id="M3",
     )
 
     assert outcome["success"] is True, outcome
@@ -460,6 +464,7 @@ async def test_live_follower_dispatch_failure_never_fabricates_fill(monkeypatch)
     outcome = await copy_trading_engine._execute_single_follower_order(
         follower=snap, symbol="NIFTY50", side="BUY", master_qty=10,
         order_type="MARKET", price=250.0, master_mode="LIVE",
+        master_order_id="M4",
     )
 
     assert outcome["success"] is False
@@ -477,7 +482,8 @@ async def test_live_follower_dispatch_failure_never_fabricates_fill(monkeypatch)
             )
         ).scalars().one()
         assert order.status == "REJECTED"
-        assert "Broker rejected copy order" in (order.error_message or "")
+        assert order.error_message == "broker_dispatch_failed"
+        assert order.broker_account_id is None  # REJECTED claim carries no broker ref
         positions = (
             await db.execute(select(PositionRecord).where(PositionRecord.user_id == user_id))
         ).scalars().all()
@@ -500,6 +506,7 @@ async def test_paper_follower_unchanged_no_broker_involved(monkeypatch):
     outcome = await copy_trading_engine._execute_single_follower_order(
         follower=snap, symbol="NIFTY50", side="BUY", master_qty=10,
         order_type="MARKET", price=250.0, master_mode="PAPER",
+        master_order_id="M5",
     )
 
     assert outcome["success"] is True, outcome
@@ -561,6 +568,7 @@ async def test_engine_uses_server_derived_identity_cannot_use_other_users_broker
     outcome = await copy_trading_engine._execute_single_follower_order(
         follower=snap, symbol="NIFTY50", side="BUY", master_qty=10,
         order_type="MARKET", price=250.0, master_mode="LIVE",
+        master_order_id="M6",
     )
 
     assert outcome["success"] is False
