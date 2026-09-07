@@ -50,9 +50,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if grep -rniE \
+          # Scan tracked source files only, not untracked/compiled artifacts:
+          # the pytest step above generates __pycache__/*.pyc binaries whose
+          # bytecode contains constant-folded credential-shaped literals from
+          # test fixtures/placeholders; a plain `grep -r` would falsely flag
+          # them. `git grep -nI` searches the tracked tree, ignores untracked
+          # files, and skips binary content (-I). All patterns are preserved.
+          if git grep -inIE \
             'sk_live_[A-Za-z0-9]{10,}|rzp_live_[A-Za-z0-9]{10,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN (RSA|OPENSSH|EC) PRIVATE KEY-----' \
-            app tests scripts 2>/dev/null; then
+            -- app tests scripts; then
             echo "::error::Credential-like pattern detected in source. Rotate and remove the secret before merging."
             exit 1
           fi
