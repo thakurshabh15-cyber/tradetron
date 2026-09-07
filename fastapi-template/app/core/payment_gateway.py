@@ -96,7 +96,15 @@ class RazorpayGateway:
         razorpay_payment_id: str,
         razorpay_signature: str,
     ) -> bool:
-        """Verify HMAC-SHA256 signature returned by Razorpay Checkout."""
+        """Verify HMAC-SHA256 signature returned by Razorpay Checkout.
+
+        Fail-closed in production: a simulated ``mock_sig_*`` signature is only
+        honoured in dev/test environments. A production deployment must never
+        validate against the publicly-known mock default secret either — if
+        ``RAZORPAY_KEY_SECRET`` is not configured, verification is rejected
+        (mirroring the webhook handler's fail-closed posture) rather than
+        trusting a forgery an attacker can reproduce with the public constant.
+        """
         if not razorpay_order_id or not razorpay_payment_id or not razorpay_signature:
             return False
 
@@ -104,9 +112,20 @@ class RazorpayGateway:
         message = f"{razorpay_order_id}|{razorpay_payment_id}".encode()
         expected_sig = hmac.new(secret.encode(), message, hashlib.sha256).hexdigest()
 
-        # In mock test mode, accept simulated signatures matching the format
-        if not self._is_live and razorpay_signature.startswith("mock_sig_"):
+        # In dev/test (non-production), the sandbox accepts simulated signatures
+        # for local UX flows. In production this bypass is NEVER allowed.
+        mock_bypass_allowed = settings.environment != "production"
+        if mock_bypass_allowed and razorpay_signature.startswith("mock_sig_"):
             return True
+
+        # Production must fail closed on an unconfigured key secret instead of
+        # comparing against the publicly-known fallback constant.
+        if settings.environment == "production" and not self.key_secret:
+            logger.error(
+                "RAZORPAY_KEY_SECRET not configured in production — rejecting "
+                "payment verification (fail-closed)."
+            )
+            return False
 
         return hmac.compare_digest(expected_sig, razorpay_signature)
 
