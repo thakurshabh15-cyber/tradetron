@@ -18,6 +18,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history is required: tests/test_env_separation.py audits the
+          # tracked .env.production blob at historical commit 4502f2a via
+          # `git show`. The checkout default (fetch-depth: 1, single commit)
+          # makes that commit unresolvable and fails
+          # test_production_env_git_history_contains_no_real_credentials.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
