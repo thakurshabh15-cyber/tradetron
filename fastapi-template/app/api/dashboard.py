@@ -98,53 +98,102 @@ async def get_dashboard_summary(
     week_return = round((week_pnl / base_capital) * 100, 2) if base_capital else 0.0
     month_return = round((month_pnl / base_capital) * 100, 2) if base_capital else 0.0
 
-    # 2. Fetch or mock top strategies
+    # 2. Top strategies.
+    #
+    # NO FABRICATED DATA EVER FOR AUTHENTICATED CALLERS.  The top-strategy list
+    # is strictly derived from the caller's OWN persisted strategies and their
+    # OWN executed trades.  A user with no strategies gets an honest empty list;
+    # a strategy with no fills reports zero pnl/winRate/tradesCount — never an
+    # invented "proof" figure.  (Until this change, an authenticated user with
+    # no strategies received three hardcoded demo strategies with invented PnL
+    # and winRate — misleading fake-product behavior.  See
+    # tests/test_dashboard_no_fake_strategies.py.)
+    #
+    # The one intentional exception is the ANONYMOUS guest landing view, which
+    # preserves the demo aggregate (public feature, see the docstring and the
+    # frontend `{ public: true }` usage in client/src/pages/Dashboard.jsx).
     strat_res = await db.execute(strat_stmt)
     strat_records = strat_res.scalars().all()
 
-    top_strategies = []
-    if strat_records:
+    if user is None:
+        # ── Anonymous guest: intentional demo top strategies ───────────────
+        if strat_records:
+            top_strategies = [
+                {
+                    "id": s.id,
+                    "name": s.name,
+                    "symbols": json.loads(s.symbols_json) if s.symbols_json else [],
+                    "pnl": round(total_realized_pnl * 0.6, 2),
+                    "winRate": 76.4,
+                    "tradesCount": max(total_trades_count, 12),
+                    "status": "Active" if s.enabled else "Paused",
+                }
+                for s in strat_records[:5]
+            ]
+        else:
+            top_strategies = [
+                {
+                    "id": "sma-cross-50-200",
+                    "name": "SMA (50/200) Golden Cross",
+                    "symbols": ["AAPL", "NVDA", "MSFT"],
+                    "pnl": 4820.50,
+                    "winRate": 78.2,
+                    "tradesCount": 34,
+                    "status": "Active",
+                },
+                {
+                    "id": "rsi-reversal-30",
+                    "name": "RSI Oversold Momentum",
+                    "symbols": ["GOOGL", "AMZN"],
+                    "pnl": 3190.00,
+                    "winRate": 71.4,
+                    "tradesCount": 21,
+                    "status": "Active",
+                },
+                {
+                    "id": "bb-squeeze-breakout",
+                    "name": "Bollinger Bands Volatility Squeeze",
+                    "symbols": ["NVDA", "AAPL"],
+                    "pnl": 2450.25,
+                    "winRate": 68.9,
+                    "tradesCount": 18,
+                    "status": "Active",
+                },
+            ]
+    else:
+        # ── Authenticated: honest, tenant-scoped, trade-derived metrics ────
+        strat_ids = [s.id for s in strat_records]
+        # Aggregate realized PnL and win outcomes per strategy from the caller's
+        # OWN executed trades (server-scoped to user.id above).
+        strat_pnl: dict[str, float] = {}
+        strat_wins: dict[str, int] = {}
+        strat_trades: dict[str, int] = {}
+        if strat_ids and all_trades:
+            for t in all_trades:
+                if not t.strategy_id or t.strategy_id not in strat_ids:
+                    continue
+                strat_trades[str(t.strategy_id)] = strat_trades.get(str(t.strategy_id), 0) + 1
+                if t.pnl is not None:
+                    strat_pnl[str(t.strategy_id)] = strat_pnl.get(str(t.strategy_id), 0.0) + float(t.pnl)
+                    if t.pnl > 0:
+                        strat_wins[str(t.strategy_id)] = strat_wins.get(str(t.strategy_id), 0) + 1
+
+        top_strategies = []
         for s in strat_records[:5]:
+            sid = str(s.id)
+            n_trades = strat_trades.get(sid, 0)
+            pnl = strat_pnl.get(sid, 0.0)
+            wins = strat_wins.get(sid, 0)
+            win_rate = round((wins / n_trades) * 100, 1) if n_trades > 0 else 0.0
             top_strategies.append({
                 "id": s.id,
                 "name": s.name,
                 "symbols": json.loads(s.symbols_json) if s.symbols_json else [],
-                "pnl": round(total_realized_pnl * 0.6, 2),
-                "winRate": 76.4,
-                "tradesCount": max(total_trades_count, 12),
+                "pnl": round(pnl, 2),
+                "winRate": win_rate,
+                "tradesCount": n_trades,
                 "status": "Active" if s.enabled else "Paused",
             })
-    else:
-        # Default top strategies from the engine
-        top_strategies = [
-            {
-                "id": "sma-cross-50-200",
-                "name": "SMA (50/200) Golden Cross",
-                "symbols": ["AAPL", "NVDA", "MSFT"],
-                "pnl": 4820.50,
-                "winRate": 78.2,
-                "tradesCount": 34,
-                "status": "Active",
-            },
-            {
-                "id": "rsi-reversal-30",
-                "name": "RSI Oversold Momentum",
-                "symbols": ["GOOGL", "AMZN"],
-                "pnl": 3190.00,
-                "winRate": 71.4,
-                "tradesCount": 21,
-                "status": "Active",
-            },
-            {
-                "id": "bb-squeeze-breakout",
-                "name": "Bollinger Bands Volatility Squeeze",
-                "symbols": ["NVDA", "AAPL"],
-                "pnl": 2450.25,
-                "winRate": 68.9,
-                "tradesCount": 18,
-                "status": "Active",
-            },
-        ]
 
     # 3. Tasks list (Pending vs Completed) — scoped to the authenticated user
     #    (or, for the anonymous/public guest view, a fixed empty baseline so
