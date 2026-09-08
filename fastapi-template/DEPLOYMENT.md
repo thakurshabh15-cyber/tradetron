@@ -84,10 +84,13 @@ railway variables set DATABASE_URL=… UPSTASH_REDIS_URL=… JWT_SECRET=…
 
 ### Option C: Docker (any host incl. Cloudflare Workers-facing LB)
 ```bash
-docker build -t tradethrone-api .
+cd fastapi-template
+docker build -t tradethrone-api .      # uses fastapi-template/Dockerfile
 docker run -p 8080:8080 --env-file .env.production tradethrone-api
 ```
-Behind Cloudflare proxy: enable *Full (strict)* SSL + "Always Use HTTPS".
+> Do NOT `docker build` from the repo root — the root `Dockerfile` has been
+> removed; the only container build context is `fastapi-template/`.
+> Behind Cloudflare proxy: enable *Full (strict)* SSL + "Always Use HTTPS".
 
 ---
 
@@ -212,9 +215,15 @@ and `BinanceBroker._api_request`), so a direct class-level call can never reach
 a broker while `BROKER_MODE != live`.
 
 ### 7.6 Repository-root hygiene (P2-8)
-Files at the repo root (`AUDIT.md`, `AUDIT_PROD.md`, `PRODUCTION_READINESS_AUDIT.md`,
-`Dockerfile`, `requirements.txt`, `init_db.py`) are **stale decoys** — the
-real, deployable application lives in `fastapi-template/`. Do not use the root
-copies. Untracked scratch artifacts (`trading.db`, `_scan*.txt`, `logs/`,
-`__pycache__/`, `_deployed_*.js`, `_ws_verify.py`) should be deleted by an
-operator; the P2 changes intentionally did not delete untracked files.
+Files at the repo root (`AUDIT.md`, `AUDIT_PROD.md`, `PRODUCTION_READINESS_AUDIT.md`)
+are documentation; the real, deployable application lives entirely in
+`fastapi-template/`.
+The **stale decoy deployment files** (`Dockerfile`, `requirements.txt`,
+`init_db.py`, `.dockerignore`) that previously sat at the repo root and would
+build a non-functional image (webhook-only entrypoint, 5-installed packages,
+legacy `create_all`) were **removed** in this pass, and the root `.gitignore`
+now covers `*.db-shm`/`*.db-wal` alongside `*.db`. Operators should never type
+`docker build .` / `pip install -r requirements.txt` at the repo root; the
+canonical Docker/build context is `fastapi-template/`. Untracked scratch
+artifacts (`trading.db`, `_scan*.txt`, `logs/`, `__pycache__/`,
+`_deployed_*.js`, `_ws_verify.py`) should be deleted by an operator.
