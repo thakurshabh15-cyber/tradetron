@@ -332,8 +332,8 @@ function AppShell() {
                   <Route path="/strategies" element={<Strategies />} />
                   <Route path="/history" element={<TradeHistory />} />
                   <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
-                  <Route path="/admin" element={<Admin />} />
-                  <Route path="/broker-sessions" element={<BrokerSessions />} />
+                  <Route path="/admin" element={<ProtectedRoute><Admin /></ProtectedRoute>} />
+                  <Route path="/broker-sessions" element={<ProtectedRoute><BrokerSessions /></ProtectedRoute>} />
                   <Route path="/pricing" element={<Pricing />} />
                   <Route path="/visual-builder" element={<ProtectedRoute><VisualBuilder /></ProtectedRoute>} />
                   <Route path="/quant-lab" element={<ProtectedRoute><QuantLab /></ProtectedRoute>} />
@@ -347,6 +347,13 @@ function AppShell() {
                 <Route path="/kyc" element={<KYC />} />
                 <Route path="/trade-journal" element={<ProtectedRoute><TradeJournal /></ProtectedRoute>} />
                 <Route path="/reality-mode" element={<BacktestLab />} />
+                <Route path="*" element={
+                  <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
+                    <div className="text-6xl font-mono text-slate-600">404</div>
+                    <p className="text-sm text-slate-400">This page does not exist.</p>
+                    <a href="/" className="text-xs text-brand-purple hover:underline">Return to Dashboard</a>
+                  </div>
+                } />
                 </Routes>
               </Suspense>
             </ErrorBoundary>

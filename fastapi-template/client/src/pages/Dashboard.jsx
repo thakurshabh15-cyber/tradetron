@@ -13,6 +13,7 @@ import { useApi } from "../hooks/useApi";
 import { useDebounce } from "../hooks/useDebounce";
 import { useMarket } from "../context/MarketContext";
 import { API_BASE } from "../config";
+import { useAuthStore } from "../stores/useAuthStore";
 import {
   RefreshCw,
   TrendingUp,
@@ -68,12 +69,22 @@ export default function Dashboard() {
   // Central Market Data Feed (Single WebSocket Session Feed)
   const { quotes: liveMarketMap, isConnected: isWsConnected, tickCount: liveTicksCount } = useMarket();
 
-  // Base API Data Fetchers
+  // Auth-aware data fetching: authenticated callers get user-scoped data;
+  // guests gracefully fall back to the public/demo view.
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const isGuest = !isAuthenticated;
+
+  // Base API Data Fetchers — market data and risk status are truly public
+  // (no per-user scoping), so always use publicFetch.  Trade, position, and
+  // dashboard-summary endpoints support optional auth: guests get the demo
+  // view while authenticated callers receive their own tenant-scoped data.
+  // /api/trades/positions REQUIRES auth, so it MUST use authFetch when
+  // logged in or the endpoint returns 401.
   const { loading: marketLoading, error: marketError, refetch: refetchMarket } = useApi("/api/market-data", { public: true });
   const { data: riskData, loading: riskLoading, error: riskError, refetch: refetchRisk } = useApi("/api/risk-status", { public: true });
-  const { data: initialTrades, loading: tradesLoading, error: tradesError, refetch: refetchTrades } = useApi("/api/trades?limit=20", { public: true });
-  const { data: summaryData, loading: summaryLoading, error: summaryError, refetch: refetchSummary } = useApi("/api/dashboard/summary", { public: true });
-  const { data: positionsData, loading: positionsLoading, error: positionsError, refetch: refetchPositions } = useApi("/api/trades/positions", { public: true });
+  const { data: initialTrades, loading: tradesLoading, error: tradesError, refetch: refetchTrades } = useApi("/api/trades?limit=20", { public: isGuest });
+  const { data: summaryData, loading: summaryLoading, error: summaryError, refetch: refetchSummary } = useApi("/api/dashboard/summary", { public: isGuest });
+  const { data: positionsData, loading: positionsLoading, error: positionsError, refetch: refetchPositions } = useApi("/api/trades/positions", { public: isGuest });
 
 
     // Public market widgets — fetched without auth so guests see live heatmaps

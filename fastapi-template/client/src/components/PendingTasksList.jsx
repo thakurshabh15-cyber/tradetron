@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { CheckCircle2, Clock, ArrowRight, ShieldAlert } from "lucide-react";
-import { API_BASE } from "../config";
+import { authFetch } from "../services/apiClient";
 
 export default function PendingTasksList({ initialTasks = [], onTaskToggled }) {
   const [tasks, setTasks] = useState(initialTasks);
@@ -9,12 +9,12 @@ export default function PendingTasksList({ initialTasks = [], onTaskToggled }) {
   const handleToggle = async (taskId, currentStatus) => {
     setTogglingId(taskId);
     try {
-      const res = await fetch(`${API_BASE}/api/dashboard/complete-task`, {
+      const res = await authFetch("/api/dashboard/complete-task", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ task_id: taskId, completed: !currentStatus }),
       });
-      if (res.ok) {
+      if (res && res.ok) {
         setTasks((prev) =>
           prev.map((t) =>
             t.id === taskId ? { ...t, is_completed: !currentStatus } : t
