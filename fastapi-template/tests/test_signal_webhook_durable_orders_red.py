@@ -137,24 +137,32 @@ async def _cleanup_signal_orders():
     tenant-less ``signal_key`` (written exclusively by the webhook signal
     path) are removed -- user-scoped DMA/strategy rows are never touched.
     Linked ``TradeRecord`` rows are removed first (FK ``order_id``).
+
+    Cleanup runs BOTH before and after each test to guarantee isolation from
+    other test files that leave stale rows in the shared persistent SQLite
+    database.
     """
     from app.models.trading import TradeRecord
 
+    async def _remove_signal_rows():
+        async with SessionLocal() as db:
+            order_ids = (
+                await db.execute(
+                    select(OrderRecord.id).where(OrderRecord.signal_key.is_not(None))
+                )
+            ).scalars().all()
+            if order_ids:
+                await db.execute(
+                    delete(TradeRecord).where(TradeRecord.order_id.in_(order_ids))
+                )
+                await db.execute(
+                    delete(OrderRecord).where(OrderRecord.id.in_(order_ids))
+                )
+                await db.commit()
+
+    await _remove_signal_rows()
     yield
-    async with SessionLocal() as db:
-        order_ids = (
-            await db.execute(
-                select(OrderRecord.id).where(OrderRecord.signal_key.is_not(None))
-            )
-        ).scalars().all()
-        if order_ids:
-            await db.execute(
-                delete(TradeRecord).where(TradeRecord.order_id.in_(order_ids))
-            )
-            await db.execute(
-                delete(OrderRecord).where(OrderRecord.id.in_(order_ids))
-            )
-            await db.commit()
+    await _remove_signal_rows()
 
 
 @pytest.fixture
@@ -180,6 +188,7 @@ async def test_valid_entry_signal_creates_durable_order_record(_fake_engine):
                 select(OrderRecord).where(
                     OrderRecord.symbol == _SYMBOL,
                     OrderRecord.side == _ACTION,
+                    OrderRecord.signal_key.is_not(None),
                 )
             )
         ).scalars().all()
@@ -211,6 +220,7 @@ async def test_duplicate_signal_delivery_does_not_duplicate_order(_fake_engine):
                 select(OrderRecord).where(
                     OrderRecord.symbol == _SYMBOL,
                     OrderRecord.side == _ACTION,
+                    OrderRecord.signal_key.is_not(None),
                 )
             )
         ).scalars().all()

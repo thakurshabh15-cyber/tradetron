@@ -125,25 +125,31 @@ async def _cleanup_signal_orders():
     ``TradeRecord`` rows are removed -- user-scoped DMA/strategy rows and the
     raw ``orders`` rows seeded via ``client_order_id`` are never touched.
     """
+    from app.models.trading import TradeRecord
+
+    async def _remove_signal_rows():
+        async with SessionLocal() as db:
+            order_ids = (
+                await db.execute(
+                    select(OrderRecord.id).where(OrderRecord.signal_key.is_not(None))
+                )
+            ).scalars().all()
+            if order_ids:
+                await db.execute(
+                    delete(TradeRecord).where(TradeRecord.order_id.in_(order_ids))
+                )
+                await db.execute(
+                    delete(OrderRecord).where(OrderRecord.id.in_(order_ids))
+                )
+            # Remove whole-suite rows seeded directly (user-scoped DMA row in H).
+            await db.execute(
+                delete(OrderRecord).where(OrderRecord.user_id == "tenant-u-1")
+            )
+            await db.commit()
+
+    await _remove_signal_rows()
     yield
-    async with SessionLocal() as db:
-        order_ids = (
-            await db.execute(
-                select(OrderRecord.id).where(OrderRecord.signal_key.is_not(None))
-            )
-        ).scalars().all()
-        if order_ids:
-            await db.execute(
-                delete(TradeRecord).where(TradeRecord.order_id.in_(order_ids))
-            )
-            await db.execute(
-                delete(OrderRecord).where(OrderRecord.id.in_(order_ids))
-            )
-        # Remove whole-suite rows seeded directly (user-scoped DMA row in H).
-        await db.execute(
-            delete(OrderRecord).where(OrderRecord.user_id == "tenant-u-1")
-        )
-        await db.commit()
+    await _remove_signal_rows()
 
 @pytest.mark.asyncio
 async def test_concurrent_duplicate_delivery_single_dispatch(monkeypatch):
@@ -174,6 +180,7 @@ async def test_concurrent_duplicate_delivery_single_dispatch(monkeypatch):
                 select(OrderRecord).where(
                     OrderRecord.symbol == _SYMBOL,
                     OrderRecord.side == _ACTION,
+                    OrderRecord.signal_key.is_not(None),
                 )
             )
         ).scalars().all()
@@ -211,6 +218,7 @@ async def test_restart_loses_in_memory_manager_not_order_state(monkeypatch):
                 select(OrderRecord).where(
                     OrderRecord.symbol == _SYMBOL,
                     OrderRecord.side == _ACTION,
+                    OrderRecord.signal_key.is_not(None),
                 )
             )
         ).scalars().all()
@@ -236,6 +244,7 @@ async def test_restart_loses_in_memory_manager_not_order_state(monkeypatch):
                 select(OrderRecord).where(
                     OrderRecord.symbol == _SYMBOL,
                     OrderRecord.side == _ACTION,
+                    OrderRecord.signal_key.is_not(None),
                 )
             )
         ).scalars().all()
@@ -283,6 +292,7 @@ async def test_persistence_failure_before_acknowledgement_raises(monkeypatch):
                 select(OrderRecord).where(
                     OrderRecord.symbol == _SYMBOL,
                     OrderRecord.side == _ACTION,
+                    OrderRecord.signal_key.is_not(None),
                 )
             )
         ).scalars().all()
@@ -354,6 +364,7 @@ async def test_crash_window_between_durable_claim_and_dispatch(monkeypatch):
                 select(OrderRecord).where(
                     OrderRecord.symbol == _SYMBOL,
                     OrderRecord.side == _ACTION,
+                    OrderRecord.signal_key.is_not(None),
                 )
             )
         ).scalars().all()
