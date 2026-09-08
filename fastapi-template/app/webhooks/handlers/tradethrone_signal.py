@@ -287,8 +287,6 @@ worker_pool.register_pool(WorkerConfig(
 
 
 # Register handler for custom_normal pool
-from app.webhooks.workers.pool import worker_pool, WorkerConfig
-
 worker_pool.register_pool(WorkerConfig(
     pool_name="custom_normal",
     queue_names=["webhooks:custom:normal"],

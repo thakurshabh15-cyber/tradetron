@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.logging import get_logger
 from app.db.session import SessionLocal
 from app.models.audit import TradeAuditRecord
+
+logger = get_logger("db.audit")
 
 
 async def save_audit_log(
@@ -28,7 +31,7 @@ async def save_audit_log(
     async with SessionLocal() as session:
         try:
             audit_record = TradeAuditRecord(
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(timezone.utc),
                 provider=provider,
                 symbol=payload.get("symbol", ""),
                 action=payload.get("action", ""),
@@ -43,4 +46,4 @@ async def save_audit_log(
         except Exception as e:
             await session.rollback()
             # Log error but don't raise - audit logging shouldn't break the main flow
-            print(f"Failed to save audit log: {e}")
+            logger.error("Failed to save audit log (provider=%s): %s", provider, e)

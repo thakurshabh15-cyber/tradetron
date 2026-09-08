@@ -13,7 +13,6 @@ import { useMarket } from "../context/MarketContext";
 import { API_BASE } from "../config";
 
 const TIMEFRAMES = ["1s", "1m", "5m", "15m", "1h", "1D"];
-const TF_SECONDS = { "1s": 1, "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "1D": 86400 };
 
 const DEFAULT_TOGGLES = {
   ema20: true, ema50: true, ema200: false, sma20: false,

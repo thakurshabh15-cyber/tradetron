@@ -55,7 +55,7 @@ async def list_plans(db: AsyncSession = Depends(get_db)):
         try:
             features = json.loads(p.features_json) if p.features_json else {}
         except Exception:
-            pass
+            logger.debug("Malformed features_json for plan %s, defaulting to empty", p.id)
 
         result.append({
             "id": p.id,
@@ -115,7 +115,7 @@ async def get_user_subscription(
         try:
             features = json.loads(plan_record.features_json)
         except Exception:
-            pass
+            logger.debug("Malformed features_json for plan %s, defaulting to empty", plan_record.id)
 
     return {
         "id": sub.id,

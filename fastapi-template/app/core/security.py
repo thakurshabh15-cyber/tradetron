@@ -367,7 +367,7 @@ def generate_otp_for_identifier(identifier: str) -> str:
     r = _redis()
     if r is not None:
         try:
-            r.setex(f"otp:{key}", 900, otp_code)  # 15 min TTL
+            r.set(f"otp:{key}", otp_code, ex=900)  # 15 min TTL
             return otp_code
         except Exception as exc:
             _logger.warning("Redis OTP store failed, using in-memory: %s", exc)

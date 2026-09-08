@@ -1,5 +1,5 @@
-﻿import React, { useState, useMemo } from "react";
-import { Zap, ShieldCheck, AlertCircle, Loader2, Gauge, Receipt } from "lucide-react";
+import React, { useState, useMemo } from "react";
+import { Zap, ShieldCheck, Loader2 } from "lucide-react";
 import { useMarketStore } from "../stores/useMarketStore";
 import { authFetch } from "../services/apiClient";
 import { useToast } from "./Toast";
@@ -52,7 +52,10 @@ function OrderTerminal({ symbol = "NIFTY50", currentPrice = 24850.0, onOrderPlac
   const [limitPrice, setLimitPrice] = useState("");
   const [slPct, setSlPct] = useState("0.5");
   const [tpPct, setTpPct] = useState("1.0");
-  const [mode, setMode] = useState("PAPER");
+  // PAPER-only terminal: LIVE execution is exclusively reachable through the
+  // server-side broker-mode + live-dispatch guard (BROKER_MODE=live). Keeping
+  // the terminal fixed at PAPER means this UI can never place a real order.
+  const mode = "PAPER";
   const [submitting, setSubmitting] = useState(false);
 
   const px = liveQuote?.price ?? currentPrice;

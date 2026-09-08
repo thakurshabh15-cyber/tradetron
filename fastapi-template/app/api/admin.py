@@ -7,10 +7,10 @@ strategy risk oversight, revenue metrics, and filterable audit trails.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, desc, func, select
 from sqlalchemy.exc import IntegrityError
@@ -90,21 +90,63 @@ class AdminKillSwitchRequest(BaseModel):
 @router.post("/login")
 async def admin_login(
     req: AdminLoginRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """Dedicated secure admin login endpoint."""
-    stmt = select(UserRecord).where(UserRecord.email == req.email.lower().strip())
+    """Dedicated secure admin login endpoint (with rate limiting + account lockout)."""
+    client_ip = request.client.host if request.client else "unknown"
+    ident = req.email.lower().strip()
+
+    # ── Brute-force protection (mirrors the user login endpoint): rate-limit
+    #    per IP+identifier and lock the admin account after repeated failures.
+    from app.core.security import check_rate_limit
+
+    if not check_rate_limit(f"admin_login:{client_ip}:{ident}", max_requests=5, window_seconds=60):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many admin login attempts. Please wait 60 seconds.",
+        )
+
+    stmt = select(UserRecord).where(UserRecord.email == ident)
     res = await db.execute(stmt)
     user = res.scalar_one_or_none()
 
     if not user or not user.hashed_password:
         raise HTTPException(status_code=401, detail="Invalid admin credentials")
 
+    # ── Account lockout check ──
+    _now = datetime.now(timezone.utc)
+    if user.locked_until:
+        if user.locked_until > _now:
+            minutes_left = int((user.locked_until - _now).total_seconds() / 60) + 1
+            raise HTTPException(
+                status_code=423,
+                detail=f"Admin account temporarily locked. Try again in {minutes_left} minutes.",
+            )
+        else:
+            user.locked_until = None
+            user.failed_login_attempts = 0
+
     if not verify_password(req.password, user.hashed_password):
+        user.failed_login_attempts += 1
+        if user.failed_login_attempts >= 5:
+            user.locked_until = _now + timedelta(minutes=15)
+            await db.commit()
+            logger.warning("ADMIN ACCOUNT LOCKED: %s after %d failed attempts", user.email, user.failed_login_attempts)
+            raise HTTPException(
+                status_code=423,
+                detail="Admin account temporarily locked for 15 minutes due to 5 consecutive failed attempts.",
+            )
+        await db.commit()
         raise HTTPException(status_code=401, detail="Invalid admin credentials")
 
     if user.role.upper() not in ("ADMIN", "SUPERADMIN"):
         raise HTTPException(status_code=403, detail="Account lacks administrative clearance")
+
+    # Reset failed attempts / lockout on success
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    await db.commit()
 
     # Generate admin token
     token = create_access_token({"sub": user.id, "email": user.email, "role": user.role})

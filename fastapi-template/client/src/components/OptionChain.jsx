@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Activity, Layers3, Loader2, Radio } from "lucide-react";
 import { API_BASE, getWsUrl } from "../config";
 
@@ -12,25 +12,45 @@ const INDEX_TABS = [
 const fmt = (v, d = 2) =>
   v == null || isNaN(v) ? "–" : Number(v).toLocaleString("en-IN", { maximumFractionDigits: d });
 
-/** Returns a Tailwind class that flashes green/red when a strike's LTP ticks up/down. */
-const flashCls = (type, strike, ltp, prevLtpRef) => {
-  const key = `${type}_${strike}`;
-  const prev = prevLtpRef?.current?.[key];
-  if (prev == null || ltp == null || prev === ltp) return "";
-  const direction = ltp > prev ? "text-emerald-300 animate-pulse" : "text-rose-300 animate-pulse";
-  if (prevLtpRef?.current) prevLtpRef.current[key] = ltp;
-  return direction;
-};
+/** Per-strike flash class computed from the PREVIOUS chain snapshot (state
+ * closure), so no ref is read or mutated during render. Returns
+ * "up"/"down"/"" so the render layer maps it to a tailwind class. */
+function computeFlashClass(prevRow, type, ltp) {
+  const prevLtp = prevRow?.[type]?.ltp;
+  if (prevLtp == null || ltp == null || prevLtp === ltp) return "";
+  return ltp > prevLtp ? "text-emerald-300 animate-pulse" : "text-rose-300 animate-pulse";
+}
 
 function OptionChain({ symbol = "NIFTY50" }) {
   const [activeSymbol, setActiveSymbol] = useState(symbol);
-  const [chain, setChain] = useState(null);
+  const [chainState, setChainState] = useState(null);
+  const chain = chainState ?? null;
   const [expiry, setExpiry] = useState("");
   const [loading, setLoading] = useState(true);
   const [wsState, setWsState] = useState("connecting"); // connecting | live | polling | error
-  const prevLtpRef = useRef({});
   const wsRef = useRef(null);
   const pollRef = useRef(null);
+
+  /** Merge a freshly-fetched chain snapshot with per-strike LED flashes derived
+   * purely from the PREVIOUS snapshot (state updater closure — no ref reads in
+   * render). Chain payloads are never JSON-serialized, so attaching an internal
+   * `_flashes` map is safe. */
+  const applyChain = useCallback((data) => {
+    if (!data || !Array.isArray(data?.rows)) {
+      setChainState(data || null);
+      return;
+    }
+    setChainState((prev) => {
+      const prevByStrike = new Map((prev?.rows || []).map((r) => [r.strike, r]));
+      const flashes = {};
+      for (const r of data.rows) {
+        const prevRow = prevByStrike.get(r.strike);
+        flashes[`CE_${r.strike}`] = computeFlashClass(prevRow, "CE", r.CE?.ltp);
+        flashes[`PE_${r.strike}`] = computeFlashClass(prevRow, "PE", r.PE?.ltp);
+      }
+      return { ...data, _flashes: flashes };
+    });
+  }, []);
 
   const loadRest = useCallback(async () => {
     try {
@@ -39,12 +59,12 @@ function OptionChain({ symbol = "NIFTY50" }) {
       const res = await fetch(`${API_BASE}/api/optionchain?${q}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      setChain(data);
+      applyChain(data);
       if (!expiry && data.expiry) setExpiry(data.expiry);
     } finally {
       setLoading(false);
     }
-  }, [activeSymbol, expiry]);
+  }, [activeSymbol, expiry, applyChain]);
 
   // First paint + expiry/symbol switches (REST snapshot)
   useEffect(() => {
@@ -76,7 +96,7 @@ function OptionChain({ symbol = "NIFTY50" }) {
       ws.onmessage = (e) => {
         try {
           const d = JSON.parse(e.data);
-          setChain(d);
+          applyChain(d);
         } catch { /* partial frame */ }
       };
       ws.onclose = () => {
@@ -95,7 +115,7 @@ function OptionChain({ symbol = "NIFTY50" }) {
       stopPolling();
       if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(); }
     };
-  }, [activeSymbol, expiry]);
+  }, [activeSymbol, expiry, applyChain]);
 
   const rows = chain?.rows || [];
   const maxOi = Math.max(1, ...rows.map((r) => Math.max(r.CE.oi, r.PE.oi)));
@@ -217,7 +237,7 @@ function OptionChain({ symbol = "NIFTY50" }) {
                     </td>
                     <td className={`pr-3 text-right text-slate-300${shade(ceItm)}`}>{fmt(r.CE.volume)}</td>
                     <td className={`pr-3 text-right text-fuchsia-300${shade(ceItm)}`}>{fmt(r.CE.iv_pct)}</td>
-                    <td className={`pr-3 text-right font-bold${shade(ceItm)} ${flashCls("CE", r.strike, r.CE.ltp, prevLtpRef)}`}>
+                    <td className={`pr-3 text-right font-bold${shade(ceItm)} ${chain?._flashes?.[`CE_${r.strike}`] || ""}`}>
                       {fmt(r.CE.ltp)}
                       <span className="ml-1 text-[9px] text-slate-500 font-normal">?{fmt(r.CE.delta)}</span>
                     </td>
@@ -227,7 +247,7 @@ function OptionChain({ symbol = "NIFTY50" }) {
                       {r.is_atm && <div className="text-[8px] text-cyan-500 tracking-widest">ATM</div>}
                     </td>
 
-                    <td className={`py-1.5 pl-3 text-left font-bold${shade(peItm)} ${flashCls("PE", r.strike, r.PE.ltp, prevLtpRef)}`}>
+                    <td className={`py-1.5 pl-3 text-left font-bold${shade(peItm)} ${chain?._flashes?.[`PE_${r.strike}`] || ""}`}>
                       {fmt(r.PE.ltp)}
                       <span className="ml-1 text-[9px] text-slate-500 font-normal">?{fmt(r.PE.delta)}</span>
                     </td>

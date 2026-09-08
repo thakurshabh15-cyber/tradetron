@@ -344,7 +344,10 @@ async def logout(
         try:
             await db.commit()
         except Exception:
-            pass  # Already revoked
+            # Best-effort: the revocation may already exist (unique constraint).
+            # Don't raise — logout must succeed even if revocation persistence
+            # fails (e.g. duplicate key on concurrent logout from multiple tabs).
+            logger.debug("Token revocation commit skipped (likely already revoked)")
 
     logger.info("User session logged out and token invalidated server-side")
     return {"success": True, "message": "Logged out successfully"}

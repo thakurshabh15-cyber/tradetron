@@ -48,10 +48,11 @@ async def validate_webhook_request(
     timestamp_str = json_body.get("timestamp") or json_body.get("created_at")
 
     try:
-        from datetime import datetime
-        timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00")) if timestamp_str else datetime.utcnow()
+        from datetime import datetime, timezone as _dt_tz
+        timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00")) if timestamp_str else datetime.now(_dt_tz.utc)
     except Exception:
-        timestamp = datetime.utcnow()
+        from datetime import datetime, timezone as _dt_tz
+        timestamp = datetime.now(_dt_tz.utc)
 
     # 4. Signature verification (skipped in local testing mode)
     logger.debug("webhook_local_mode=%s, provider=%s", settings.webhook_local_mode, provider)

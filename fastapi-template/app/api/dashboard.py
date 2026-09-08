@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.auth import get_optional_current_user
+from app.api.auth import get_current_user, get_optional_current_user
 from app.core.logging import get_logger
 from app.db.session import get_db
 from app.models.trading import StrategyRecord, TradeRecord
@@ -26,8 +26,14 @@ class CompleteTaskRequest(BaseModel):
     completed: bool = True
 
 
-# In-memory store for completed dashboard tasks
-_COMPLETED_TASKS: set[str] = {"marketplace_setup", "broker_setup"}
+# In-memory store of completed dashboard tasks, scoped PER USER so one
+# tenant can never see/reset another's onboarding progress.  Keyed by the
+# authenticated user id (server-derived identity, never client-supplied).
+# NOTE: this is intentionally in-memory (like the historical behavior) — it is
+# cosmetic onboarding state that resets on restart.  It is NOT financial
+# state.  A DB-backed version would require a schema migration that is not
+# justified for a purely cosmetic checklist.
+_COMPLETED_TASKS: dict[str, set[str]] = {}
 
 
 @router.get("/summary")
@@ -140,31 +146,36 @@ async def get_dashboard_summary(
             },
         ]
 
-    # 3. Tasks list (Pending vs Completed)
+    # 3. Tasks list (Pending vs Completed) — scoped to the authenticated user
+    #    (or, for the anonymous/public guest view, a fixed empty baseline so
+    #    the landing page never leaks another tenant's onboarding progress).
+    _user_tasks: set[str] = (
+        _COMPLETED_TASKS.get(user.id, set()) if user is not None else set()
+    )
     available_tasks = [
         {
             "id": "marketplace_setup",
             "title": "Subscribe to Marketplace Strategy",
             "description": "Choose a proven algorithmic strategy from the community marketplace.",
-            "is_completed": "marketplace_setup" in _COMPLETED_TASKS,
+            "is_completed": "marketplace_setup" in _user_tasks,
         },
         {
             "id": "broker_setup",
             "title": "Connect Broker API",
             "description": "Link your live Angel One or Simulated broker account credentials.",
-            "is_completed": "broker_setup" in _COMPLETED_TASKS,
+            "is_completed": "broker_setup" in _user_tasks,
         },
         {
             "id": "subscription_setup",
             "title": "Activate Pro Membership",
             "description": "Unlock unlimited multi-strategy execution and real-time alerts.",
-            "is_completed": "subscription_setup" in _COMPLETED_TASKS,
+            "is_completed": "subscription_setup" in _user_tasks,
         },
         {
             "id": "risk_limits_setup",
             "title": "Configure Max Drawdown Limit",
             "description": "Set auto-cutoff limits to prevent overnight account drawdowns.",
-            "is_completed": "risk_limits_setup" in _COMPLETED_TASKS,
+            "is_completed": "risk_limits_setup" in _user_tasks,
         },
     ]
 
@@ -184,16 +195,24 @@ async def get_dashboard_summary(
 
 
 @router.post("/complete-task")
-async def complete_task(req: CompleteTaskRequest):
-    """Mark a dashboard setup or onboarding task as completed or pending."""
+async def complete_task(
+    req: CompleteTaskRequest,
+    user: UserRecord = Depends(get_current_user),
+):
+    """Mark the AUTHENTICATED user's dashboard setup or onboarding task as
+    completed or pending.  Requires a bearer token — anonymous callers receive
+    401 (a task cannot be toggled without an identity).  State is scoped to the
+    server-derived ``user.id`` so one tenant can never alter another's progress.
+    """
+    tasks = _COMPLETED_TASKS.setdefault(user.id, set())
     if req.completed:
-        _COMPLETED_TASKS.add(req.task_id)
+        tasks.add(req.task_id)
     else:
-        _COMPLETED_TASKS.discard(req.task_id)
+        tasks.discard(req.task_id)
 
-    logger.info("Task %s completion state updated to %s", req.task_id, req.completed)
+    logger.info("User %s task %s completion state updated to %s", user.id, req.task_id, req.completed)
     return {
         "success": True,
         "task_id": req.task_id,
-        "is_completed": req.task_id in _COMPLETED_TASKS,
+        "is_completed": req.task_id in _COMPLETED_TASKS.get(user.id, set()),
     }
