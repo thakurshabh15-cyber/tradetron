@@ -20,6 +20,7 @@ from app.webhooks.validation.signatures import init_verifiers
 from app.webhooks.resiliency.circuit_breaker import init_circuit_breakers
 from app.webhooks.resiliency.bulkhead import init_bulkheads
 from app.webhooks.observability import setup_webhook_logging  # setup_tracing TEMPORARILY removed
+from app.core.cors import build_cors_config
 from app.core.logging import setup_logging, get_logger
 from app.config import settings
 from app.db.session import init_db
@@ -89,13 +90,29 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="TradeThrone Webhook Platform",
     version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc"
+    # Interactive docs are a development aid; hide the full endpoint/schema
+    # inventory when running under ENVIRONMENT=production.
+    docs_url="/docs" if settings.environment != "production" else None,
+    redoc_url="/redoc" if settings.environment != "production" else None,
+    openapi_url="/openapi.json" if settings.environment != "production" else None,
+)
+
+# CORS follows the same hardened posture as the main API: production uses exact
+# origins only (never a generic `*.vercel.app` regex, never a wildcard combined
+# with credentials).  The previous `settings.allowed_origins.split(",")` plus
+# `allow_credentials=True` silently became `["*"]` if ALLOWED_ORIGINS was ever
+# set to `*` in production.  Like the main API, the webhook platform is also
+# fronted by a proxy that must keep the exact-origin lock consistent.
+_cors = build_cors_config(
+    environment=settings.environment,
+    allowed_origins=settings.allowed_origins,
+    frontend_url=settings.frontend_url,
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.allowed_origins.split(","),
+    allow_origins=_cors.origins,
+    allow_origin_regex=_cors.origin_regex,
     allow_credentials=True,
     allow_methods=["POST", "GET", "HEAD"],
     allow_headers=["*"],

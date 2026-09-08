@@ -153,43 +153,33 @@ app = FastAPI(
     description="Algorithmic trading platform with real-time market data",
     version="1.0.0",
     lifespan=lifespan,
+    # Interactive docs (/docs, /redoc, /openapi.json) are a development aid but
+    # expose the complete endpoint/schema inventory to attackers in production.
+    docs_url="/docs" if settings.environment != "production" else None,
+    redoc_url="/redoc" if settings.environment != "production" else None,
+    openapi_url="/openapi.json" if settings.environment != "production" else None,
 )
+
 
 # Dynamic CORS Configuration
 # Hardened defaults: a wildcard origin is NEVER combined with credentials in
 # production — deployments without an explicit ALLOWED_ORIGINS lock to the
-# official TradeThrone domains automatically.
-_DEFAULT_PROD_ORIGINS = [
-    "https://tradethrone.vercel.app",
-    "https://tradethron.vercel.app",
-    "https://*.vercel.app",
-    # Local development frontends — safe to expose in production CORS since
-    # attacker pages live on random public domains, never on the victim's
-    # own localhost. Keeps `npm run dev` functional against any deployment.
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:3000",
-]
-cors_origins = [o.strip() for o in settings.allowed_origins.split(",") if o.strip()]
-if settings.frontend_url and settings.frontend_url not in cors_origins and "*" not in cors_origins:
-    cors_origins.append(settings.frontend_url)
+# official TradeThrone domains automatically, and the Vercel preview regex is
+# anchored to the two official project slugs (never generic `*.vercel.app`).
+from app.core.cors import build_cors_config
 
-if not cors_origins or cors_origins == ["*"]:
-    if settings.environment == "production":
-        cors_origins = _DEFAULT_PROD_ORIGINS.copy()
-        print(f"[SECURITY] ALLOWED_ORIGINS unset in production — locking CORS to {cors_origins}")
-    else:
-        cors_origins = ["*"]
-
-# Allow genuine wildcard Vercel preview/deploy subdomains in addition to the
-# explicit exact origins. Starlette matches origins exactly (no *. expansion),
-# so we also register an origin regex that accepts any *.vercel.app host.
-_ALLOW_VERCEL_REGEX = r"https://([a-z0-9-]+\.)*vercel\.app"
+_cors = build_cors_config(
+    environment=settings.environment,
+    allowed_origins=settings.allowed_origins,
+    frontend_url=settings.frontend_url,
+)
+if settings.environment == "production" and settings.allowed_origins.strip() in ("", "*"):
+    print(f"[SECURITY] ALLOWED_ORIGINS unset in production — locking CORS to exact origins only: {_cors.origins} (no *.vercel.app regex trust)")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins,
-    allow_origin_regex=_ALLOW_VERCEL_REGEX,
+    allow_origins=_cors.origins,
+    allow_origin_regex=_cors.origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

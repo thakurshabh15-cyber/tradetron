@@ -129,6 +129,8 @@ import asyncio
 import re
 from sqlalchemy.exc import IntegrityError
 from app.brokers import BrokerModeBlockedError, get_broker_adapter, assert_live_dispatch_allowed
+from app.config import settings
+from app.core.security import check_rate_limit
 from app.models.trading import OrderRecord, PositionRecord
 from app.models.broker_account import BrokerAccountRecord
 from app.market_data.unified_manager import unified_market_manager
@@ -735,6 +737,20 @@ async def place_manual_order(
     from app.engine.subscription import subscription_engine
     await subscription_engine.verify_feature_access(db, user.id, "trade_execution")
 
+    # P2: server-side per-user order-rate cap (mirror of the engine's
+    # MAX_ORDERS_PER_MINUTE).  The engine risk manager only gates
+    # engine/webhook-originated orders; this closes the direct-API flood
+    # path (a caller or leaked bearer token can otherwise dispatch far beyond
+    # the configured cap).  Closures are deliberately NOT throttled so exits
+    # that reduce risk are never trapped.
+    if not check_rate_limit(
+        f"order:{user.id}", max_requests=settings.max_orders_per_minute, window_seconds=60
+    ):
+        raise HTTPException(
+            status_code=429,
+            detail="Order rate limit exceeded — please wait before placing more orders.",
+        )
+
     clean_sym = req.symbol.upper().strip()
 
     # 1. Resolve real live market execution price from market provider / master
@@ -1000,6 +1016,16 @@ async def execute_dma_order(
     keep the legacy (non-idempotent) contract exactly.
     """
     t_start = perf_counter()
+
+    # P2: server-side per-user order-rate cap on the DMA path (same invariant
+    # as the manual order path / the engine's MAX_ORDERS_PER_MINUTE).
+    if not check_rate_limit(
+        f"order:{user.id}", max_requests=settings.max_orders_per_minute, window_seconds=60
+    ):
+        raise HTTPException(
+            status_code=429,
+            detail="Order rate limit exceeded — please wait before placing more orders.",
+        )
 
     clean_sym = req.symbol.upper().strip()
     quote = unified_market_manager.get_quote(clean_sym)
