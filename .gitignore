@@ -55,7 +55,7 @@ Thumbs.db
 # Dev / third-party folders
 agency-agents-main/
 OmniRoute-release*/
-# Scratch / local-scan artifacts (keep out of VCS until operator cleanup)
+# Scratch / diagnostic / credential-dump artifacts
 _scan*.txt
 _scan*.log
 _deployed_*.js
@@ -63,6 +63,20 @@ _ws_verify.py
 _prev_env_prod.txt
 _ci_*.db
 *.pid
+# Diagnostic probe / checkpoint artifacts (must never contain secrets)
+_diag.py
+_probe.py
+_ws_live_probe*.py
+_ws_root.py
+_scan_jsx.ps1
+annotations.json
+arts.json
+checkrun_full.json
+joblogs.txt
+jobpage.html
+jobs.json
+run_ci.json
+runlogs.zip
 
 # Coverage
 .coverage

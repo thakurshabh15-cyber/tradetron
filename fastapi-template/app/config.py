@@ -6,12 +6,42 @@ never hard-coded — the ``.env.example`` file ships with safe placeholders.
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent  # fastapi-template/
+
+
+# ── Known-compromised / insecure JWT secrets ─────────────────────────────────
+# SHA-256 digests of values that have appeared in this repo's git history or in
+# committed templates. Hashes are stored instead of the raw strings so that:
+#   1. The literal secret never lives in source (no secret-scan false flag).
+#   2. A future operator cannot accidentally boot production with a value that
+#      was already published in history.
+# These digests are of *placeholder* or *known-bad* values only — they are not
+# user secrets and are safe to commit.
+_KNOWN_BAD_JWT_SECRET_SHA256 = frozenset({
+    # The first five digests below are of the historical demo JWT values that
+    # were present in earlier docker-compose/docs and are NOT safe to reuse.
+    "5d04fecccf7c3f1cc8399b7abd1e1d53ea1af3b21f45e5d485dc4ae4db7c3358",
+    "5e98f3286a85023c6c026e8d4508cc7ccd5d909b3802360aa55e7e50ccde495a",
+    "7e30d33170a3cb03d4339bcd6142908e5d32ed9fb9786c27ded1d1c737392302",
+    "668c65515ab367aa48bddda8f77e37f891fe8335276db0f1572026ce34f4fa73",
+    "2cdfe705bed658d0be07fe993184335cc2242dcc001d161e7660ede39facf52a",
+    # Placeholder/fallback values that must never run in production
+    "4d78b7571bcbe399be85c7f8c10122bc15b17f293f66183d1ddc963092b48f8c",  # dev-only-jwt-change-me
+    "da975da03773ce23ec790eb88a9c3af4564f1cd19e6be8af51f6d8e383b5902a",  # UNCONFIGURED-CHANGE-ME
+    "68b9f3fb47212d934194cdc4c285b3bcc559d0346267ec58d8a0fe7e015a29fb",  # your_jwt_secret_here
+    "7a79d35630cfcf2a8a3dad1b2df6f6c91aec54db13057579ef8907ac06f7e3bf",  # a_secure_random_64_char_hex_secret
+    "9087dee4224e28388e1c8d496a2f0b75422f04ae353ea644c43a4e5450ff6395",  # replace_with_a_secure_random_64_char_hex_secret
+    "e2186dbdb1bb4193608605e84f33208765b5693b55edd4f730a719a100eeea6f",  # change-me
+    "057ba03d6c44104863dc7361fe4578965d1887360f90a0895882e58a6248fc86",  # changeme
+    "2bb80d537b1da3e38bd30361aa855686bde0eacd7162fef6a25fe97bf527a25b",  # secret
+    "e88040e7d0052eeb5dcf0fd834e4835ff329b275e6a9889058e8d16c38da9514",  # jwt_secret
+})
 
 
 class Settings(BaseSettings):
@@ -185,6 +215,21 @@ class Settings(BaseSettings):
                     "ENVIRONMENT=production requires a strong JWT_SECRET "
                     "(>= 32 random characters). Set JWT_SECRET in the "
                     "environment before booting."
+                )
+            # A known-bad value (placeholder/documentation token once committed
+            # to this repository's history) must never be reused in production
+            # even when it happens to be >= 32 characters long — the length gate
+            # alone is not enough. Compare SHA-256 digests so the raw strings
+            # never appear in source.
+            if hashlib.sha256(self.jwt_secret.strip().encode("utf-8")).hexdigest() in (
+                _KNOWN_BAD_JWT_SECRET_SHA256
+            ):
+                raise ValueError(
+                    "ENVIRONMENT=production JWT_SECRET matches a value that was "
+                    "previously committed/published to this repository's git "
+                    "history (or a documented placeholder). Treat it as "
+                    "compromised and generate a fresh random secret (e.g. "
+                    "`python -c \"import secrets; print(secrets.token_hex(32))\"`)."
                 )
             if self.skip_signature_verification:
                 raise ValueError(

@@ -46,23 +46,18 @@ jobs:
       - name: Alembic drift guard (isolated temp SQLite)
         run: python scripts/ci_alembic_check.py
 
-      - name: Secret scan (high-precision credential patterns)
+      - name: Secret scan (whole-repo credential patterns)
         shell: bash
         run: |
           set -euo pipefail
-          # Scan tracked source files only, not untracked/compiled artifacts:
-          # the pytest step above generates __pycache__/*.pyc binaries whose
-          # bytecode contains constant-folded credential-shaped literals from
-          # test fixtures/placeholders; a plain `grep -r` would falsely flag
-          # them. `git grep -nI` searches the tracked tree, ignores untracked
-          # files, and skips binary content (-I). All patterns are preserved.
-          if git grep -inIE \
-            'sk_live_[A-Za-z0-9]{10,}|rzp_live_[A-Za-z0-9]{10,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN (RSA|OPENSSH|EC) PRIVATE KEY-----' \
-            -- app tests scripts; then
-            echo "::error::Credential-like pattern detected in source. Rotate and remove the secret before merging."
-            exit 1
-          fi
-          echo "No credential patterns found."
+          # Deterministic whole-repo scan (docs/root included) via the Python
+          # scanner. It reads `git ls-files` output, skips binary artifacts and
+          # .env example templates, and flags live credential shapes (Stripe /
+          # Razorpay live keys, AWS/GitHub/Slack tokens, CoinGecko/Anthropic
+          # keys, private keys, 32+ char JWT_SECRET assignments and real
+          # env-file dumps). Replaces the old grep pair which could not cover
+          # docs and whose pathspec exclusions were brittle.
+          python scripts/ci_secret_scan.py
 
   frontend:
     name: Frontend (Vite production build)
