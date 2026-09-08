@@ -577,3 +577,71 @@ PRODUCTION_READINESS_AUDIT.md                             (this section)
 - **P2/LATENT** — `app/brokers/angelone.py:place_tradethrone_order` (and Zerodha equivalent) still contain a legacy simulated-fallback branch that could return a fabricated `COMPLETE` when live mode requests dispatch without credentials. It is **unreachable from production** because the only caller that exercises the fallback is `app/webhooks/ingress/router.py::_handle_local_mode`, and production **refuses to boot** with `WEBHOOK_LOCAL_MODE=true` (fail-closed guard). The production webhook worker routes signals through the durable-claim kernel instead. No change required; keep the fail-closed guard.
 - **Frontend lint warnings (P3)** — 25 `react-hooks/set-state-in-effect` warnings remain; non-fatal, intentional async-data-in-effect idiom.
 - **External operator actions (P0 gate)** — unchanged: credential rotation matrix (§1) + managed Redis provisioning + Render/Vercel deploy verification must be completed by the operator before any production boot.
+
+---
+
+## Section 20 — Phase 1 Completion: Remaining Gap Verification (2026-09-08)
+
+Independent re-verification of the remaining Phase 1 items identified in the previous pass:
+
+### k LiteConnect / autobahn dependency conflict — Severity Assessment
+
+| Property | Value |
+|----------|-------|
+| **Package** | `kiteconnect==5.2.1` (Zerodha SDK) |
+| **Conflict** | Pins `autobahn[twisted]==19.11.2`; installed `autobahn==26.7.1` |
+| **Production risk** | **NONE** — `kiteconnect` is **deliberately NOT declared** in `requirements.txt` or `pyproject.toml` (see P2-5 comment at pyproject.toml:41–43). CI installs from `requirements.txt` and never encounters the conflict. |
+| **Local-venv only** | Yes — manually installed for Zerodha live testing |
+| **Zerodha adapter behavior** | `from kiteconnect import KiteConnect` is wrapped in `try/except ImportError` → `KiteConnect = None`. The adapter logs a clear error and raises `RuntimeError` when the SDK is absent. |
+| **Resolution** | No code change required. Documented as local-venv drift. CI is unaffected. |
+
+### Copy-trading close fan-out safety — Verified
+
+`CopyTradingEngine.mirror_close_position()` and `_close_single_follower_position()` enforce four V3 safety invariants:
+
+| Invariant | Implementation |
+|-----------|---------------|
+| **A. Server-side broker re-resolution** | Follower's broker account is re-derived from the `CopyFollowerRecord` + `BrokerAccountRecord` server rows (must match `follower_user_id`, status `CONNECTED`, `is_active`). Request fields never influence routing. |
+| **B. LIVE dispatch gate** | `assert_live_dispatch_allowed()` runs before any LIVE broker close dispatch. |
+| **C. Broker confirmation mandatory** | CLOSED/Trade/PnL state for LIVE positions is persisted ONLY after the follower's broker adapter confirms the exit fill. Guard blocks and broker failures persist a REJECTED close and NEVER fabricate a successful close. |
+| **D. PAPER stays pure bookkeeping** | PAPER close positions remain bookkeeping only — no broker involved, PnL computed from exit price. |
+
+### Full test suite — Final confirmation
+
+```
+635 passed, 3 warnings in 137.13s
+```
+
+The 3 warnings are external/test-artifact only (StarletteDeprecationWarning, pythonjsonlogger deprecation, AsyncMockMixin never-awaited). No production code warnings.
+
+### CORS production posture — Verified
+
+`app/core/cors.py` (`build_cors_config`) correctly hardens production:
+- In production: `origin_regex` is set to `None` — no `*.vercel.app` regex wildcard.
+- Default production origins: exact matches only (`tradethrone.vercel.app`, `tradethron.vercel.app`, localhost dev).
+- `ALLOWED_ORIGINS="*"` in dev falls back to safe default origins in production (line 64–66).
+- The Vercel host regex (`DEV_VERCEL_REGEX`) is only active in non-production environments.
+
+### Production boot guards — Confirmed intact
+
+`app/config.py` (`Settings._validate_production_boot`) correctly refuses to boot if:
+- `JWT_SECRET` is missing or in the known-bad blocklist (14 SHA-256 digests)
+- `SKIP_SIGNATURE_VERIFICATION` is `true`
+- `WEBHOOK_LOCAL_MODE` is `true`
+- `DATABASE_URL` is missing or SQLite
+- Redis URL is missing or `localhost:6379/0`
+
+### Phase 1 completion status
+
+| Item | Status |
+|------|--------|
+| Fake-product dashboard bug (§19) | ✅ Fixed — honest trade-derived metrics |
+| 2FA login journey (§19) | ✅ Complete — `/2fa/complete` endpoint, frontend wiring, 8 tests |
+| k LiteConnect/autobahn conflict | ✅ Assessed — local-venv only, CI unaffected, no code change |
+| Copy-trading close fan-out safety | ✅ Verified — V3 invariants enforced |
+| CORS production hardening | ✅ Verified — exact origins only in production |
+| Full test suite | ✅ 635 passed, 0 failed, 3 warnings (all external) |
+| Frontend build/lint | ✅ Build clean, lint 0 errors / 25 warnings (intentional) |
+| Secret scan | ✅ Clean |
+| Alembic drift guards | ✅ Clean |
+| Git state | ✅ Clean, 9 commits ahead of origin/main |
