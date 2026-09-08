@@ -445,6 +445,140 @@ Applied the same protection as the user login endpoint:
 - 5 consecutive failed attempts → 15-minute account lockout → HTTP 423.
 - Successful login resets `failed_login_attempts` / `locked_until`.
 
+
+---
+
+## Section 21 — Phase 2: Production Infrastructure + Deployment Readiness (2026-09-08)
+
+Phase 2 independently re-audited the live runtime architecture and deployment
+path. Every important claim was re-verified against the **current** repository
+(not prior reports). No financial-safety, live-dispatch, idempotency, or
+tenant-isolation defect was found.
+
+### 21.1 Verification results (independently re-run)
+
+| Gate | Result |
+|------|--------|
+| Full backend suite | **635 passed, 0 failed, 3 external warnings** (StarletteDeprecation, pythonjsonlogger deprecation, AsyncMock never-awaited) |
+| Secret scan (`scripts/ci_secret_scan.py`) | Clean — 358 tracked files, exit 0 |
+| Alembic drift (`scripts/ci_alembic_check.py`) | Single head `0004_signal_durable_claim`; empty-DB upgrade clean; 23-table parity exact |
+| Python compile (`compileall -q app`) | Clean, exit 0 |
+| `pip check` | 1 conflict (`kiteconnect`→`autobahn==19.11.2`) — **local-venv only**; neither is in `requirements.txt` |
+| Frontend production build | Clean, exit 0 |
+| Frontend lint | 0 errors / 25 warnings (all `react-hooks/set-state-in-effect`) |
+| `git diff --check` | Clean, exit 0 |
+| CORS lock / docs-disabled / env-separation | 29 tests pass |
+
+### 21.2 Phase 2-B — Environment-variable contract matrix (verified)
+
+| VARIABLE | CONSUMER | REQ IN PROD | DEFAULT | FAIL MODE | DEPLOY CONFIGURED | STATUS |
+|----------|----------|-------------|---------|-----------|-------------------|--------|
+| `JWT_SECRET` | `config.py`+`security.py` | **Yes** (≥32 chars, not known-bad) | `""` | fail-closed boot | Render `generateValue` | VERIFIED IMPLEMENTED |
+| `DATABASE_URL` | `db/session.py` | **Yes** (Postgres, no SQLite) | SQLite | fail-closed boot | Render Postgres | VERIFIED IMPLEMENTED |
+| `UPSTASH_REDIS_URL`/`REDIS_URL` | `config.py`+`readyz` | **Yes** (non-localhost) | localhost | fail-closed boot | Render Key Value | EXTERNAL DEPENDENCY |
+| `ALLOWED_ORIGINS` | `core/cors.py` | prod exact origins | `*` (dev) | exact-only in prod | Render | VERIFIED IMPLEMENTED |
+| `BROKER_MODE` | `brokers/__init__.py` | simulated/live | `simulated` | live guarded | Render `simulated` | VERIFIED IMPLEMENTED |
+| `WEBHOOK_LOCAL_MODE`/`SKIP_SIGNATURE_VERIFICATION` | `config.py` | must be `false` | `false` | fail-closed boot | n/a | VERIFIED IMPLEMENTED |
+| `TRADETHRONE_WEBHOOK_SECRET` (+ providers) | webhook handlers | **Yes** for HMAC | `""` | fail-closed | operator secret | EXTERNAL DEPENDENCY |
+| `VITE_API_URL`/`VITE_WS_URL` | `client/config.js` | yes | hardcoded fallback | prod URL mismatch | Vercel build env | EXTERNAL DEPENDENCY |
+| `FRONTEND_URL` | CORS/docs | yes | localhost | — | Render | VERIFIED IMPLEMENTED |
+| Broker creds (Angel/Zerodha/Binance/etc.) | broker adapters | only if `live` | `""` | guarded | operator | EXTERNAL DEPENDENCY |
+| Razorpay/SMTP/Twilio/Sentry/etc. | payments/notify | optional | `""` | optional | operator | EXTERNAL DEPENDENCY |
+
+### 21.3 Phase 2-F — Frontend↔backend wiring: ONE defect found and FIXED
+
+**`client/src/components/StrategyBuilder.jsx`** used raw `axios.get("/api/brokers/accounts")`.
+`main.jsx` sets `axios.defaults.baseURL = API_BASE`, so the **URL** was correct, but
+raw axios attaches **no `Authorization` header** and there are no axios auth
+interceptors. `GET /api/brokers/accounts` requires `get_current_user` (a valid
+bearer token), so the call returned **401**, which `.catch(() => {})` silently
+swallowed. Result: **the LIVE broker-account selector in the Strategy Builder
+never populated** (silently degraded to "No connected broker"), so users could
+never pick a connected LIVE broker for strategy dispatch.
+
+- **Fix (P2):** replaced the raw `axios.get` with `authFetch("/api/brokers/accounts")`,
+  preserving the same response-shape handling and silent-failure-on-catch semantics.
+- **Verified:** `npm run lint` (0 errors) and `npm run build` (exit 0) both pass; no
+  new warnings introduced in `StrategyBuilder.jsx`.
+- **Files:** `client/src/components/StrategyBuilder.jsx` (+8/−4).
+- All other frontend API calls are correctly routed through `authFetch`/`publicFetch`
+  /`useApi`; the only remaining raw `axios` consumer is `main.jsx` (global baseURL
+  default) — no other unauthenticated private call exists.
+
+### 21.4 Phase 2-P — Fake/demo-data audit (authenticated surfaces)
+
+- **`AuthModal.jsx`→`demoLogin()`**: on a fetch network failure OR a CDN serving SPA
+  HTML for `/api`, the frontend fabricates a clearly-labelled **Demo Pilot** session
+  (fake token `demo_…`, `is_demo: true`). This is **INTENTIONAL DEMO** for offline
+  resilience and is clearly-labelled to the user ("you're in Demo Pilot mode"). The
+  fake `demo_…` token is **rejected by the backend** (`decode_token` requires a valid
+  HMAC signature — the JWT is signed with `JWT_SECRET`, so a fabricated token cannot
+  authorize real trading or read real data). The offline `simulateBacktest` /
+  `simulateQuantParse` / `simulateQuantHealth` fallbacks are intentionally-labelled
+  demo data on public/tool surfaces, not authenticated balances/positions. **No
+  authenticated production surface fabricates orders, P&L, balances, win-rates, or
+  fills.**
+
+### 21.5 Phase 2-D/2-E — Database, migrations, Redis
+
+- Alembic is single-head; `upgrade head` works on an empty DB; ORM↔schema parity is
+  exact (23 tables). Startup applies migrations in `app/main.py` lifespan before any
+  request is served; `render.yaml` also ships a `releaseCommand: alembic upgrade head`.
+- Durable order claims (PENDING claim → broker-ref commit → CAS finalize) survive
+  process restart (verified by `test_order_idempotency.py` + `test_order_reconciliation.py`,
+  52 combined passes). Reconciliation never calls `place_order`.
+- Redis is **fail-closed in production**: boot guard rejects missing/localhost Redis,
+  and `/readyz` requires `cache=true` in production. Multi-worker rate-limiter
+  consistency depends on the operator-provisioned managed Redis (EXTERNAL).
+
+### 21.6 Phase 2-T/2-U — Deployment configuration (dry-run + findings)
+
+- Backend: `render.yaml` (build `pip install`, release `alembic upgrade head`, start
+  `uvicorn app.main:app --proxy-headers`), `Procfile`, `Dockerfile` all consistent.
+- Frontend: `vite build` → `dist/`; env via `VITE_API_URL`/`VITE_WS_URL`.
+- **Deployment-config inconsistency (operator action):** `client/config.js`
+  hardcodes `PROD_API_URL = "https://tradetron-8jkz.onrender.com"` (the backend), while
+  `render.yaml` declares `FRONTEND_URL=http…/tradethrone.vercel.app` and the CORS
+  allowlist is locked to `tradethrone.vercel.app`/`tradethron.vercel.app`. The
+  authoritative production backend host must be confirmed against the live Render
+  service and set via `VITE_API_URL`/`VITE_WS_URL` at build time. Without live
+  deployment access this is classified **EXTERNAL DEPENDENCY — OPERATOR VERIFICATION
+  REQUIRED**.
+
+### 21.7 Phase 2 consolidation table
+
+| ID | SEV | AREA | FINDING | STATUS | EVIDENCE | FILES/FUNCTIONS | TEST COVERAGE | REMAINING ACTION |
+|----|-----|------|---------|--------|----------|-----------------|---------------|------------------|
+| P2-1 | P2 | Frontend wiring | `StrategyBuilder` broker selector unauth (401) & never populated | VERIFIED IMPLEMENTED (fixed) | lint/build pass; inspection | `StrategyBuilder.jsx` | frontend build | none |
+| P2-2 | — | Deployment | Prod backend URL mismatch (config.js vs render.yaml/CORS) | EXTERNAL DEPENDENCY | `config.js` L19-20 vs `render.yaml` L46-51 | `config.js`, `render.yaml` | N/A | operator confirms live host + sets VITE env |
+| P2-3 | — | Redis | Managed Redis not provisioned in production tree | EXTERNAL DEPENDENCY | `render.yaml` L54-74; boot guard | `render.yaml` | `test_p0_remediation` | operator provisions Render KV/Upstash |
+| P2-4 | P2 | Demo-data | Offline `demoLogin`/simulated fallbacks on authenticated tool surfaces | VERIFIED IMPLEMENTED (intentional, labelled) | `client/services/api.js`, `AuthModal.jsx` | `AuthModal.jsx`, `api.js` | N/A | none (labels; cannot authorize real actions) |
+| P2-5 | — | Infra | `kiteconnect`/`autobahn` pip conflict | EXTERNAL DEPENDENCY (local-venv only) | `pip check`; `requirements.txt` omits both | `zerodha.py`, `requirements.txt` | full suite | none (CI unaffected) |
+| P2-6 | — | Observability | `/api/health`, `/readyz`, `/metrics` present & dependency-aware | VERIFIED IMPLEMENTED | `app/main.py`, `app/core/metrics.py` | `main.py`, `metrics.py` | suite | none |
+| P2-7 | — | Boot guards | Prod fails closed on weak secret/SQLite/localhost Redis/unsafe webhooks/CORS | VERIFIED IMPLEMENTED | `config.py._validate_production_boot`, `core/cors.py` | `config.py`, `cors.py` | `test_p0_remediation` | none |
+
+### 21.8 Phase 2 final production classification
+
+**B. CODE-COMPLETE / EXTERNAL VERIFICATION REQUIRED.**
+
+All locally-actionable Phase 2 items are resolved (one P2 wiring fix shipped; no
+unexplained test/build/migration/secret failures). The platform cannot yet be
+declared "deployed and healthy" or "live-trading certified" because the remaining
+gates are genuinely external:
+1. **Credential rotation** (operator) — rotate JWT/broker/payment secrets.
+2. **Provision managed Redis** (operator) — `UPSTASH_REDIS_URL`/`REDIS_URL` so
+   `/readyz` and multi-worker rate limiting are correct.
+3. **Confirm production backend/frontend origin** (operator) — set `VITE_API_URL`/
+   `VITE_WS_URL` at build; verify CORS allowlist matches the live deploy.
+4. **Deploy + verify** `/api/health`, `/readyz`, `/metrics` on the live service.
+5. **Real broker certification** is a controlled, credential-requiring journey
+   (Journey 8) that must be executed only after the above.
+
+**Exact git state after Phase 2:** working tree contains the single P2-1 frontend
+fix (`StrategyBuilder.jsx`) plus this audit section; everything else is `HEAD`.
+Remaining items are documented, not code-changed, per the change policy and absence
+of deployment access.
+
 Lockout is persisted on the `users` table (`failed_login_attempts`, `locked_until`), so it survives restart and is shared across workers.
 
 ### P2 — Dashboard task API: per-user scoping & auth (NEW)

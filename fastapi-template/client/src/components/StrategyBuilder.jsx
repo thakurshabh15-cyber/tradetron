@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Plus, Trash2, Sliders, AlertTriangle, ShieldCheck, Zap } from "lucide-react";
-import axios from "axios";
+import { authFetch } from "../services/apiClient";
 
 const INDICATORS = [
   { value: "PRICE", label: "Market Price" },
@@ -34,16 +34,24 @@ function StrategyBuilderComponent({ onSubmit, isSubmitting }) {
   ]);
 
   useEffect(() => {
-    // Fetch connected broker accounts for Live Mode selection
-    axios.get("/api/brokers/accounts")
-      .then((res) => {
-        const accs = res.data?.accounts || [];
+    // Fetch connected broker accounts for Live Mode selection. Uses authFetch
+    // so the Authorization bearer token is attached — raw axios here was
+    // silently hitting /api/brokers/accounts unauthenticated and getting 401,
+    // so the LIVE broker selector never populated.
+    (async () => {
+      try {
+        const res = await authFetch("/api/brokers/accounts");
+        if (!res.ok) return;
+        const data = await res.json();
+        const accs = data?.accounts || [];
         setBrokerAccounts(accs);
         if (accs.length > 0) {
           setSelectedBrokerId(accs[0].id);
         }
-      })
-      .catch(() => {});
+      } catch {
+        // leave broker selector empty (backend unreachable / not authenticated)
+      }
+    })();
   }, []);
 
   const addCondition = useCallback(() => {
