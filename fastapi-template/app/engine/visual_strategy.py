@@ -6,6 +6,7 @@ from collections import defaultdict, deque
 from datetime import datetime
 from typing import Any
 
+from app.brokers import assert_live_dispatch_allowed
 from app.schemas.trading import OrderRequest, Side
 
 
@@ -88,7 +89,15 @@ class VisualStrategyEngine:
     async def execute_legs(
         self, broker: Any, underlying: str, legs: list[dict[str, Any]], lot_size: int = 1
     ) -> list[dict[str, Any]]:
-        """Submit every configured CE/PE leg and return normalized broker fills."""
+        """Submit every configured CE/PE leg and return normalized broker fills.
+
+        Defense-in-depth (PHASE4_REPORT §8 recommendations #2): this latent
+        dispatch primitive accepts an arbitrary broker client, so it must carry
+        the same fail-fast gate as every other real-broker dispatch path.  While
+        ``BROKER_MODE != live`` the broker is hard-blocked before the first leg
+        is touched — even if a future caller forgets the guard.
+        """
+        assert_live_dispatch_allowed()
         fills = []
         for leg in legs:
             option_symbol = f"{underlying.upper()}-{leg['strike']}-{leg['type'].upper()}"
