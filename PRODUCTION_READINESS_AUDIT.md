@@ -321,3 +321,76 @@ This is the strongest area of the codebase and a model to follow.
 ---
 
 *Full report generated from a read-only discovery audit of the working directory at `c:\Users\HP\Desktop\tradetron\fastapi-template\` and `agency-agents-main\`. No source files were modified during this audit.*
+
+---
+
+## Section 15 — P2 Production-Hardening Resolution Record (CORS lock, docs, REST order-rate cap) 🟡 PARTIAL (post-fix)
+
+> Added 2026-09-07 as the resolution record for the P2 security/config work:
+> commit `37870f50` ("fix(P2): lock CORS to exact origins, hide docs, cap REST order rate").
+> Status remains **NOT YET PRODUCTION READY** until the pre-existing test failures in
+> Section 16 are triaged and the external-infrastructure items in "Final status" are
+> operator-verified.
+
+### 1. CORS trust leak closed (main API **and** webhook platform)
+
+- **Finding (RED):** production registered `allow_origin_regex = https://([a-z0-9-]+\.)*vercel\.app` together with `allow_credentials=True`. Because `vercel.app` is a public hosting surface, any third-party project (including prefix-squats like `https://tradethrone-evil.vercel.app`) was granted credentialed browser access to the API.
+- **Remediation (GREEN):** new `app/core/cors.py` centralizes resolution via `build_cors_config(environment, allowed_origins, frontend_url)`. **Production uses exact origins only** (`origin_regex=None`); the two official Vercel hosts, operator-set `ALLOWED_ORIGINS`, and the localhost dev frontends are the only eligible origins. Development keeps `*` plus the broad Vercel regex. `app/main.py` and — newly hardened in the group-wide sweep — `app/webhooks/main.py` both consume the builder, so a misconfigured `ALLOWED_ORIGINS=*` in production can no longer silently become wildcard+credentials anywhere.
+- **Regression tests (`tests/test_p2_prod_cors_lock.py`, 14 tests):** real Starlette `CORSMiddleware` preflight probes against the resolved config — attacker Vercel pages and prefix-squats are rejected in production, official origins and localhost are allowed, dev stays permissive, and two subprocess probes assert the webhook platform applies the same exact-origin lock under `ENVIRONMENT=production`.
+### 2. Interactive API docs disabled in production
+
+- **Finding (RED):** `/docs`, `/redoc`, and `/openapi.json` were publicly served in production, exposing a complete endpoint/schema inventory.
+- **Remediation (GREEN):** both `app.main` and `app.webhooks.main` now construct with `docs_url/redoc_url/openapi_url=None` when `ENVIRONMENT=production` (kept enabled for development/testing).
+- **Regression tests (`tests/test_p2_docs_disabled_production.py`, 2 tests):** subprocess boot of both apps under production env asserts all three routes are `None`; the development path asserts they remain enabled.
+
+### 3. Server-side per-user order-rate cap on direct REST order endpoints
+
+- **Finding (RED):** `POST /api/trades/order` and `POST /api/v1/orders/execute-dma` had no server-side order-rate cap; the engine `RiskManager` only gates engine/webhook-originated orders, so a caller (or leaked bearer token) could flood broker dispatch beyond `MAX_ORDERS_PER_MINUTE`.
+- **Remediation (GREEN):** both endpoints now call `check_rate_limit(f"order:{user.id}", max_requests=settings.max_orders_per_minute, window_seconds=60)` **before** creating an order row; the budget is scoped per user, closures/exits are deliberately not throttled, and the cap returns HTTP 429 without side effects.
+- **Regression tests (`tests/test_p2_api_order_rate_limit.py`, 3 tests):** manual path returns `[200,200,200,429,429]` at budget 3 and creates exactly 3 order rows; DMA path returns `[200,200,429,429]` at budget 2; per-user budgets are independent.
+### Verification (CI-equivalent, run against the final committed tree)
+
+| Check | Result |
+|-------|--------|
+| P2 regression tests (the 3 new files) | **19 passed** |
+| Full backend suite (`BROKER_MODE=simulated`, `ENVIRONMENT=testing`) | **609 passed, 5 failed** — the 5 failures are the pre-existing webhook durable-order tests (reproduced identically at the baseline commit `e147278e`; see Section 16) |
+| Alembic drift guard (`scripts/ci_alembic_check.py`) | **Clean** — single head `0004_signal_durable_claim`, clean upgrade on empty DB, 23-table ORM/schema parity |
+| Secret scan (exact CI patterns `sk_live_`/`rzp_live_`/`AKIA`/`ghp_`/`xox`/`—BEGIN PRIVATE KEY`) | **Clean** — no matches in tracked source |
+| Frontend build (`client`, `npm run build`) | **Success** (built in 3.01s) |
+| `pip check` | Local-venv drift only: manually-installed `kiteconnect` (Zerodha SDK, deliberately not declared in `pyproject.toml`) pins legacy `autobahn==19.11.2`. CI installs from `requirements.txt` and is unaffected. |
+
+### Repo-wide adversarial sweep (same patterns rechecked)
+
+- Wildcard CORS + credentials: **no remaining `allow_origins=["*"]` literals**; the webhook platform now shares the exact-origin lock (§15.1).
+- Other apps exposing docs: only `app.main` and `app.webhooks.main` construct FastAPI apps in deployable code; both are now guarded. `fastapi-template/main.py` (repo root) is a **dead stub** — it calls an undefined `get_market_data()` and is not referenced by `Procfile` (`uvicorn app.main:app`); it is a candidate for deletion, not a live trust surface.
+- Order-dispatch paths beyond the REST endpoints: engine/webhook/copy-trade/strategy dispatch flows through the engine `RiskManager.pre_trade_check`, which enforces the same `max_orders_per_minute` cap process-globally (plus position/daily-loss/kill-switch gates). Documented as defense-in-depth; the new API cap adds the per-user layer.
+
+### Operational notes
+
+- Any **Vercel preview origin** that must reach the API in production must now be **explicitly added to `ALLOWED_ORIGINS`** (exact URL); no `*.vercel.app` host is auto-trusted.
+- `ENVIRONMENT=production` deployments must set `WEBHOOK_LOCAL_MODE=false` (enforced by a config validator that refuses to boot otherwise).
+
+---
+
+## Section 16 — Known pre-existing failures: signal-webhook durable-order tests 🔴 OPEN (not caused by P2 work)
+
+Reproduced **at the baseline commit `e147278e`** with the P2 changes stashed — these 5 failures pre-date and are independent of the P2 set:
+
+- `tests/test_signal_webhook_durable_orders_green.py::test_concurrent_duplicate_delivery_single_dispatch`
+- `tests/test_signal_webhook_durable_orders_green.py::test_restart_loses_in_memory_manager_not_order_state`
+- `tests/test_signal_webhook_durable_orders_green.py::test_persistence_failure_before_acknowledgement_raises`
+- `tests/test_signal_webhook_durable_orders_green.py::test_crash_window_between_durable_claim_and_dispatch`
+- `tests/test_signal_webhook_durable_orders_red.py::test_duplicate_signal_delivery_does_not_duplicate_order`
+
+**Action required before declaring production-ready:** triage these (durable claim/dispatch crash-window and duplicate-delivery semantics) and re-run the full suite to 0 failures.
+
+---
+
+## Final status: 🔴 NOT YET PRODUCTION READY
+
+Blocking items still open:
+
+1. **Triage and fix the 5 pre-existing webhook durable-order test failures** (Section 16).
+2. **Operator verification of external infrastructure:** real broker connectivity (Zerodha/Upstox/Angel One live adapters), Razorpay payment reachability, Upstash Redis, and the Render/Vercel deployment wiring.
+3. **Confirm the production `ALLOWED_ORIGINS`** value in the deployment env; any preview origin must be listed explicitly.
+4. Optional hygiene: delete the dead `fastapi-template/main.py` stub; remove the untracked CI-investigation scratch files in the repo root.
