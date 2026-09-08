@@ -93,7 +93,13 @@ def create_access_token(
         exp = now + (ACCESS_TOKEN_EXPIRE_MINUTES * 60)
 
     header = {"alg": JWT_ALGORITHM, "typ": "JWT"}
-    payload = {**to_encode, "exp": exp, "iat": now, "type": "access"}
+    payload = {**to_encode, "exp": exp, "iat": now}
+    # Preserve an explicit ``type`` claim passed by the caller (e.g. the
+    # ``2fa_pending`` login challenge token) — only default to ``access`` when
+    # none was provided.  get_current_user() requires type == "access" for
+    # bearer auth, so this default keeps every existing caller's behavior.
+    if "type" not in payload:
+        payload["type"] = "access"
 
     header_b64 = _b64_encode(json.dumps(header, separators=(",", ":")).encode("utf-8"))
     payload_b64 = _b64_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))

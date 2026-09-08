@@ -14,6 +14,7 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, notice = nul
   const [otpCode, setOtpCode] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [otpSent, setOtpSent] = useState(false);
+  const [pending2FAToken, setPending2FAToken] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
@@ -55,6 +56,7 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, notice = nul
         setSuccessMsg("2FA required. Please enter authenticator code.");
         setTab("otp");
         setOtpSent(true);
+        setPending2FAToken(data.temp_token || null);
         return;
       }
 
@@ -195,20 +197,41 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, notice = nul
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/auth/verify-otp`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          identifier: email.trim(),
-          otp_code: otpCode.trim(),
-          full_name: fullName || "Trader",
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Invalid OTP code");
-
-      setSuccessMsg("OTP Verified! Logging in...");
-      setTimeout(() => handleSaveTokens(data), 600);
+      let res;
+      let data;
+      if (pending2FAToken) {
+        // Authenticator 2FA challenge completion: verify the TOTP code against
+        // the pending 2FA login token. This is distinct from the email OTP
+        // path — the authenticator code must be validated server-side via the
+        // turn-only temp token, never against the email OTP store.
+        res = await fetch(`${API_BASE}/api/auth/2fa/complete`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            temp_token: pending2FAToken,
+            code: otpCode.trim(),
+          }),
+        });
+        data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Invalid authenticator code");
+        setPending2FAToken(null);
+        setSuccessMsg("2FA verified! Logging in...");
+        setTimeout(() => handleSaveTokens(data), 600);
+      } else {
+        res = await fetch(`${API_BASE}/api/auth/verify-otp`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            identifier: email.trim(),
+            otp_code: otpCode.trim(),
+            full_name: fullName || "Trader",
+          }),
+        });
+        data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Invalid OTP code");
+        setSuccessMsg("OTP Verified! Logging in...");
+        setTimeout(() => handleSaveTokens(data), 600);
+      }
     } catch (err) {
       setError(err.message);
     } finally {

@@ -66,6 +66,18 @@ class TwoFactorVerifyRequest(BaseModel):
     code: str = Field(..., min_length=6, max_length=6)
 
 
+class TwoFactorCompleteLoginRequest(BaseModel):
+    """Complete an in-progress 2FA login challenge.
+
+    ``temp_token`` is the short-lived ``2fa_pending`` JWT returned by
+    ``POST /api/auth/login`` when the account has authenticator 2FA enabled.
+    ``code`` is the 6-digit TOTP code from the user's authenticator app.
+    """
+
+    temp_token: str = Field(..., min_length=1)
+    code: str = Field(..., min_length=6, max_length=6)
+
+
 class VerifyRegistrationOtpRequest(BaseModel):
     identifier: str
     otp_code: str = Field(..., min_length=4, max_length=8)
@@ -88,6 +100,7 @@ class UserRead(BaseModel):
     is_active: bool
     is_verified: bool = False
     two_factor_enabled: bool = False
+    paper_balance: float = 1000000.0
     created_at: datetime
 
 

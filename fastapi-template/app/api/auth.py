@@ -39,6 +39,7 @@ from app.schemas.auth import (
     TokenResponse,
     TwoFactorSetupResponse,
     TwoFactorVerifyRequest,
+    TwoFactorCompleteLoginRequest,
     UserLoginRequest,
     UserRead,
     UserRegisterRequest,
@@ -64,6 +65,7 @@ def _user_to_read(u: UserRecord) -> UserRead:
         is_active=u.is_active,
         is_verified=getattr(u, "is_verified", True),
         two_factor_enabled=u.two_factor_enabled,
+        paper_balance=getattr(u, "paper_balance", 1000000.0),
         created_at=u.created_at,
     )
 
@@ -528,6 +530,75 @@ async def toggle_2fa(
     user.two_factor_enabled = not user.two_factor_enabled
     await db.commit()
     return {"success": True, "two_factor_enabled": user.two_factor_enabled}
+
+
+@router.post("/2fa/complete", response_model=TokenResponse)
+async def complete_2fa_login(
+    req: TwoFactorCompleteLoginRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Complete an in-progress 2FA login challenge and issue real tokens.
+
+    The account owner authenticated with a password on ``/login`` and received
+    a short-lived ``2fa_pending`` ``temp_token`` (5 minutes).  This endpoint
+    validates that the pending token is authentic, verifies the 6-digit TOTP
+    authenticator code against the account's stored secret, and — only then —
+    issues a real access/refresh token pair.
+
+    Without this step a 2FA-enabled account could never finish signing in (the
+    ``temp_token`` would be dead issuance), permanently locking the customer
+    out.  This endpoint closes that gap (P1 product blocker).
+    """
+    # Brute-force protection: cap TOTP attempts per address + IP.
+    client_ip = request.client.host if request.client else "unknown"
+    if not check_rate_limit(
+        f"2fa:{client_ip}", max_requests=8, window_seconds=60
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many 2FA verification attempts. Please wait 60 seconds.",
+        )
+
+    payload = decode_token(req.temp_token.strip())
+    if not payload or payload.get("type") != "2fa_pending":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired 2FA login token. Please sign in again.",
+        )
+
+    user_id = payload.get("sub")
+    stmt = select(UserRecord).where(UserRecord.id == user_id)
+    res = await db.execute(stmt)
+    user = res.scalar_one_or_none()
+    if not user or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User account not found or inactive",
+        )
+
+    if not user.two_factor_enabled or not user.totp_secret:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Two-factor authentication is not enabled on this account",
+        )
+
+    if not verify_totp_code(user.totp_secret, req.code.strip()):
+        logger.warning(
+            "2FA login failed (invalid TOTP) for user: %s", user.email
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid 6-digit authenticator code",
+        )
+
+    logger.info("2FA login completed successfully for user: %s", user.email)
+    # Reset any failed-password lockout state now that the second factor passed.
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    await db.commit()
+
+    return _generate_token_response(user)
 
 
 # ── OTP & OAUTH AUTHENTICATION (PRESERVED) ────────────────────────────────────

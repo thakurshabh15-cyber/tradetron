@@ -356,6 +356,7 @@ async def list_users(
             "kyc_status": u.kyc_status,
             "is_active": u.is_active,
             "two_factor_enabled": u.two_factor_enabled,
+            "paper_balance": getattr(u, "paper_balance", 1000000.0),
             "created_at": u.created_at.isoformat() if u.created_at else None,
         }
         for u in users
