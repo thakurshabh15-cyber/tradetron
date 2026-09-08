@@ -882,3 +882,61 @@ items — none of which are resolvable from this environment. This is an
 *End of Phase 20 report. The next entry in this document should be the operator's
 post-restore verification record (Section 23) confirming live health, pushed
 commits, and the reclassification to A.*
+---
+
+## 23. Post-Phase-20 Autonomous Verification Record (relaunch pass)
+
+**Date:** 2026-09-08 · **Local HEAD:** `c72cd7e0` → now `c9404ef7` (2 commits this pass) · **origin/main:** `8735bf5c` (15 commits behind)
+
+### 23.1 Re-verification — all gates green (nothing regressed)
+
+| Gate | Result | Evidence |
+|---|---|---|
+| Backend regression suite | ✅ **635 passed, 3 warnings** | `python -m pytest -q` from `fastapi-template/` (173.7 s) |
+| Alembic drift (isolated SQLite) | ✅ PASS | `scripts/ci_alembic_check.py`: single head `0004_signal_durable_claim`, clean `upgrade head`, **23 tables parity** with ORM |
+| Whole-repo secret scan | ✅ CLEAN | `scripts/ci_secret_scan.py`: 358 tracked files, no live credential shapes; only `.env.example` / `.env.production.example` tracked in git |
+| Frontend production build | ✅ `built in 4.36s` | `npm run build` (Vite 8 / rolldown) — 0 errors |
+| Frontend lint | ✅ 0 errors / 25 warnings | `npm run lint` — the 25 `react-hooks/set-state-in-effect` warnings are the documented P3 backlog (R9), unchanged |
+| `pip check` | ✅ only declared/accepted conflict | kiteconnect→autobahn pin (DEPLOYMENT.md §7.4) — only on a Zerodha-live host |
+| Production boot guard (local `.env.production`) | ✅ PASS | `Settings()` = ENVIRONMENT=production, BROKER_MODE=simulated, JWT 69 chars, WEBHOOK_LOCAL=off, SKIP_SIG=off, Postgres DB, **UPSTASH set**, **SENTRY still empty** (R4 unchanged) |
+
+### 23.2 Frontend↔Backend contract audit — CLEAN (0 mismatches)
+
+Programmatic cross-check: every `/api` + `/ws` path string in `client/src/` (97 unique references across 150+ components/hooks/services/stores) was normalized (`${id}` → `{param}`) and matched against the 156 http + 9 websocket templates derived from `app.main`. **Every reference resolves**; the only 3 non-exact hits are regex artifacts (a hardcoded example symbol `/ws/market/AAPL`, a template-splice `${query}`, a `${qp}` query-suffix) — all map to real backend templates. No dead frontend calls, no phantom routes. (Note: `/api/trades/api/positions` is an intentional legacy alias of `/api/trades/positions`.)
+
+### 23.3 New defect found & fixed this pass (1 commit)
+
+| ID | SEV | Finding | Remediation | Commit |
+|---|---|---|---|---|
+| F1 | P2 (ops) | Repo-root `Dockerfile`, `requirements.txt`, `init_db.py`, `.dockerignore` were stale decoys that would **build a non-functional image** (webhook-only entrypoint, 5 installed packages, legacy `create_all`) — a silent deployment trap | Removed all four orphans; DEPLOYMENT.md §4 Option C now builds from `fastapi-template/`; §7.6 records the removal; root `.gitignore` extended with `*.db-shm`/`*.db-wal` | `661d1cf0` |
+
+No other new code defects found in the adversarial re-read of order dispatch (manual/DMA/close/deploy/copy), auth (login/2FA/refresh/logout/admin RBAC), CORS/security headers, config boot guards, or the webhook pipeline. The prior Phase-16 security probes and Phase-20 P0/P1/P2 remediations remain in effect.
+
+### 23.4 Financial-safety spot audit (re-confirmed, no regression)
+
+- Manual orders & DMA: durable `client_order_id`/`Idempotency-Key` claims committed **before** broker dispatch; 409 on concurrent claim; replay returns stored result, never re-dispatches.
+- LIVE gating: `assert_live_dispatch_allowed()` at call-path, adapter (per-adapter `place_order`/`_api_request`) and connection (`connect()`) layers; `BROKER_MODE=simulated` today.
+- Position close: CAS `OPEN→CLOSED` committed before dispatch; broker failure reverts to `OPEN` with 502 (no fabricated close, retry-safe); owner (=`pos.user_id`) credited with PAPER PnL and copy-fanout keyed to owner identity; admin cross-tenant close guarded.
+- Payment verification: server-side Razorpay HMAC, order↔plan cross-check, replay idempotent (single grant/invoice), mock-signature forgery fail-closed in production (dedicated tests).
+- Strategy deploy/pause/kill-switch: user-scoped broker lookup, token-expiry check, admin-only platform kill switch.
+
+### 23.5 Remaining gate to A — unchanged, operator-owned (no credentials/console in this environment)
+
+| ID | SEV | Item | Action required |
+|---|---|---|---|
+| R1 | **P0 (ops)** | Live backend `tradetron-8jkz.onrender.com` HTTP 000 (crashed/frozen) | Operator: restart/redeploy, confirm `/api/health` → 200, `/readyz` → cache=true |
+| R2 | **P0 (ops)** | 15 local commits unpushed (`c72cd7e0…c9404ef7`) | Operator `git push` (pushes forbidden here by policy) |
+| R3 | P1 (ops) | Credential rotation for historical secrets | Operator action |
+| R4 | P1 (ops) | SENTRY_DSN empty — no crash monitoring | Operator sets DSN in Render env |
+| R5 | P1 (ops) | Managed Redis (Upstash) provisioning on Render unconfirmed (config side is set + fail-closed) | Operator verifies; `REDIS_URL`/`UPSTASH_REDIS_URL` on Render |
+| R6 | P2 (code) | `POST /api/trades` hardcoded `user_id=1` (server-side paper bookkeeping) | Pre-existing backlog |
+| R7 | P2 (code) | `GET /api/trades` anonymous public tape (scrubbed; `pnl/order_id/strategy_name` never exposed) | Intentional, verified safe |
+| R8 | P3 (ops) | Broker certification impossible (no live credentials; BROKER_MODE=simulated) | Business/operator gate |
+
+### 23.6 Classification (post-pass)
+
+**B — CODE-COMPLETE, deploy-blocked on operator actions.** The codebase was re-verified end-to-end at `HEAD=c9404ef7`: 635/635 tests, drift-free schema, secret-clean, contract-clean, and one ops hazard (broken root Docker artifacts) removed. No new engineering defects were introduced or discovered. The **only** remaining reasons the project is not classified **A** are identical to Phase 20: the unreachable live backend (Render restart needed), 15 unpushed commits, and operator-owned provisioning/rotation — **availability/deploy blockers, not engineering defects**.
+
+**Signed-off (audit tooling):** autonomous relaunch pass, all automated checks executed 2026-09-08 at local `HEAD=c9404ef7`; live infra unbootable from this environment.
+
+*End of Section 23. Next entry: operator's post-restore verification record (Section 24) confirming live health, pushed commits, Sentry/Redis provisioning, and reclassification to A.*
