@@ -531,3 +531,49 @@ fastapi-template/client/src/components/TradingChart.jsx   (P2: unused constant)
 ```
 
 **Verified (this pass):** `pytest --tb=short -q` **614 passed / 0 failed**; `npm run lint` **0 errors / 25 warnings** (warnings intentional); `npm run build` clean; `git diff --check` clean; `pip check` clean; Alembic drift check clean. Temporary audit script `_audit_extract.py` removed before commit.
+
+## Section 19 — Fake-product remediation: Dashboard top-strategies honesty (2026-09-08)
+
+Independent re-audit of the customer-visible dashboard found and closed a **P1 (deceptive / fake-product) gap** in `app/api/dashboard.py` — `GET /api/dashboard/summary`.
+
+### The bug (RED)
+
+`topStrategies` was fabricated for **all** callers:
+
+1. **No strategies at all** → returned three **hardcoded demo strategies** (`sma-cross-50-200`, `rsi-reversal-30`, `bb-squeeze-breakout`) with **invented PnL** (4820.50 / 3190.00 / 2450.25) and **invented win-rates** (78.2% / 71.4% / 68.9%). An authenticated customer with no strategies was shown fake platform strategies presented as real performance.
+2. **With strategies** → a strategy's `pnl` was fabricated as `total_realized_pnl * 0.6` and `winRate` was hardcoded to **76.4**, with `tradesCount` inflated to `max(real, 12)`. A strategy with zero fills reported 12 trades, 76.4% win-rate and invented PnL — classic deceptive performance data.
+
+### The fix (GREEN)
+
+- **Authenticated callers** now get an **honest, tenant-scoped, trade-derived** list:
+  - No strategies → `[]` (empty, not fake).
+  - A strategy with no fills → `pnl: 0`, `winRate: 0`, `tradesCount: 0` (never fabricated).
+  - With fills → real per-strategy realized PnL / win-rate / trade count computed **only from the caller's OWN trades** (`TradeRecord.strategy_id` matching the caller's strategies), preserving tenant isolation.
+- **Anonymous guests** keep the **intentional** demo aggregate so the public landing page still renders (`client/src/pages/Dashboard.jsx` uses `{ public: true }`), per the documented public contract.
+
+No financial state, authorization, or accounting logic was touched. The change is limited to the cosmetic-but-deceptive dashboard presentation layer.
+
+### RED → GREEN
+
+- `tests/test_dashboard_no_fake_strategies.py` (new) — 3 tests: authenticated-with-no-strategies must return `[]`; authenticated strategy-with-no-fills must show honest zero metrics (not invented winRate/tradesCount); the anonymous guest demo contract must be preserved. **RED** (2 failures) before the fix → **GREEN** after.
+- Existing dashboard/isolation suites still pass: `test_dashboard_summary.py`, `test_v2_reports_dashboard_strategies_isolation.py` (17 tests) — tenant-scoping and the public contract unchanged.
+
+### Also verified unchanged this pass
+
+- **633 backend tests** referenced (full suite run separately; this pass's targeted auth + dashboard suites all green): 2FA login-completion journey (#7), production-auth, auth, dashboard, isolation.
+- Frontend `npm run build` clean; `npm run lint` 0 errors / 25 warnings (all `set-state-in-effect`, intentional).
+- Live-dispatch / connect gates, durable-claim finalization, postback signature verification, proceed/PAPER invariants all untouched and remain covered by the existing P0/P1/P2 suites.
+
+### Files changed this pass
+
+```
+fastapi-template/app/api/dashboard.py                     (P1: honest top-strategies for authenticated callers)
+fastapi-template/tests/test_dashboard_no_fake_strategies.py  (RED→GREEN: dashboard honesty)
+PRODUCTION_READINESS_AUDIT.md                             (this section)
+```
+
+### Remaining known gaps (unchanged, documented)
+
+- **P2/LATENT** — `app/brokers/angelone.py:place_tradethrone_order` (and Zerodha equivalent) still contain a legacy simulated-fallback branch that could return a fabricated `COMPLETE` when live mode requests dispatch without credentials. It is **unreachable from production** because the only caller that exercises the fallback is `app/webhooks/ingress/router.py::_handle_local_mode`, and production **refuses to boot** with `WEBHOOK_LOCAL_MODE=true` (fail-closed guard). The production webhook worker routes signals through the durable-claim kernel instead. No change required; keep the fail-closed guard.
+- **Frontend lint warnings (P3)** — 25 `react-hooks/set-state-in-effect` warnings remain; non-fatal, intentional async-data-in-effect idiom.
+- **External operator actions (P0 gate)** — unchanged: credential rotation matrix (§1) + managed Redis provisioning + Render/Vercel deploy verification must be completed by the operator before any production boot.
