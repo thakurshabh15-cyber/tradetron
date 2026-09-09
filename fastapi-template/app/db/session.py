@@ -271,6 +271,11 @@ async def init_db() -> None:
         ("invoices", "plan_name VARCHAR(50) DEFAULT 'PRO'"),
         ("invoices", "gstin VARCHAR(50)"),
         ("invoices", "billing_address TEXT"),
+        # Phase 17 P1 fix (tenant scoping): strategy deployments now carry an
+        # owner_user_id (see 0005_strategy_deployments_owner).  This dev/test
+        # bootstrap keeps pre-existing local DBs in step with the ORM model
+        # (production schema is owned by the Alembic migration).
+        ("strategy_deployments", "owner_user_id VARCHAR(36)"),
     ]
 
     # Legacy idempotent column-adds — dev/testing only (P2-6, see above).

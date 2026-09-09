@@ -617,6 +617,9 @@ async def get_strategy_oversight(
             "multiplier": d.multiplier,
             "capital_allocated": d.capital_allocated,
             "status": d.status,
+            # Phase 17 P1 fix: expose the tenant owner so admin oversight is
+            # per-user accountable (a row deployed by user X is attributed to X).
+            "owner_user_id": d.owner_user_id,
             "created_at": d.deployed_at.isoformat() if d.deployed_at else None,
         }
         for d in deployments

@@ -153,13 +153,13 @@ def test_legacy_schema_upgraded_by_run_migrations(tmp_path):
     finally:
         _restore_env(original)
 
-    # Post-state: columns present, indexes present, version = 0004
+    # Post-state: columns present, indexes present, version = 0005
     assert "client_order_id" in _col_names(db, "orders")
     assert "position_id" in _col_names(db, "orders")
     assert "signal_key" in _col_names(db, "orders")
     assert "ux_orders_user_client_order_id" in _indexes(db, "orders")
     assert "ux_orders_signal_key" in _indexes(db, "orders")
-    assert _version(db) == "0004_signal_durable_claim"
+    assert _version(db) == "0005_strategy_deployments_owner"
 
     # Behavioral D: create_all did NOT run — no extra ORM tables
     tables = _tables(db)
@@ -182,12 +182,12 @@ def test_second_upgrade_head_is_idempotent(tmp_path):
     original = _patch_env(_set_db_env(db))
     try:
         run_migrations()
-        assert _version(db) == "0004_signal_durable_claim"
+        assert _version(db) == "0005_strategy_deployments_owner"
         run_migrations()  # second run: no-op
     finally:
         _restore_env(original)
 
-    assert _version(db) == "0004_signal_durable_claim"
+    assert _version(db) == "0005_strategy_deployments_owner"
     assert "client_order_id" in _col_names(db, "orders")
     assert "signal_key" in _col_names(db, "orders")
     assert "ux_orders_signal_key" in _indexes(db, "orders")

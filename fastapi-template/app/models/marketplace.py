@@ -51,6 +51,18 @@ class StrategyDeploymentRecord(Base):
     __tablename__ = "strategy_deployments"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    # Phase 17 P1 fix: tenant-scoping. A deployment belongs to the user who
+    # deployed it (derived server-side from the bearer token in
+    # ``app/api/strategies.py::deploy_strategy``).  Legacy rows populated
+    # before this migration are NULL - they carry no owner and are surfaced as
+    # such (fail-safe, never guessed).  Nullable so the add-column migration
+    # is a non-blocking online ALTER on Postgres.
+    owner_user_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     marketplace_strategy_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     strategy_name: Mapped[str] = mapped_column(String(150), nullable=False)
     execution_mode: Mapped[str] = mapped_column(String(20), default="PAPER")

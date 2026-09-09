@@ -618,6 +618,11 @@ async def deploy_strategy(
         multiplier=req.multiplier,
         capital_allocated=req.capital_allocated,
         status="RUNNING",
+        # Phase 17 P1 fix (tenant scoping): the deployment is attributed to the
+        # authenticated caller derived from the bearer token — never a
+        # client-supplied field.  This makes the deployment row owner-scoped so
+        # admin oversight / per-user halts can issue tenant-correct queries.
+        owner_user_id=user.id,
     )
     db.add(deployment)
 
