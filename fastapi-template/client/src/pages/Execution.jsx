@@ -14,7 +14,7 @@ export default function Execution() {
   const { data: risk } = useApi("/api/risk-status");
   const { data: positions, loading: posLoading } = useApi("/api/trades/positions");
 
-  useWebSocket("/ws/trades", {
+  const { isConnected: wsConnected } = useWebSocket("/ws/trades", {
     onMessage: (msg) => {
       setStream((prev) => [{ ...msg, _t: new Date().toLocaleTimeString("en-IN") }, ...prev].slice(0, 40));
     },
@@ -37,8 +37,8 @@ export default function Execution() {
           </div>
           <p className="text-xs text-slate-400 mt-0.5">Real-time algorithmic execution audit trail, engine telemetry and Risk Sentinel.</p>
         </div>
-        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold border border-emerald-500/30 bg-emerald-500/10 text-emerald-400">
-          <Radio size={10} className="animate-pulse" /> STREAM CONNECTED
+        <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold ${wsConnected ? "border border-emerald-500/30 bg-emerald-500/10 text-emerald-400" : "border border-amber-500/30 bg-amber-500/10 text-amber-400"}`}>
+          <Radio size={10} className="animate-pulse" /> {wsConnected ? "STREAM CONNECTED" : "RECONNECTING..."}
         </span>
       </div>
 

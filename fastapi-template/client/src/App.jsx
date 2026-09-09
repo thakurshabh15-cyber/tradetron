@@ -344,7 +344,7 @@ function AppShell() {
                 <Route path="/portfolio" element={<ProtectedRoute><PortfolioPage /></ProtectedRoute>} />
                 <Route path="/execution" element={<ProtectedRoute><ExecutionPage /></ProtectedRoute>} />
                 <Route path="/risk-center" element={<ProtectedRoute><ExecutionPage /></ProtectedRoute>} />
-                <Route path="/kyc" element={<KYC />} />
+                <Route path="/kyc" element={<ProtectedRoute><KYC /></ProtectedRoute>} />
                 <Route path="/trade-journal" element={<ProtectedRoute><TradeJournal /></ProtectedRoute>} />
                 <Route path="/reality-mode" element={<BacktestLab />} />
                 <Route path="*" element={

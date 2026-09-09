@@ -106,6 +106,10 @@ export function clearTokens() {
   localStorage.removeItem("tradetron_access_token");
   localStorage.removeItem("tradetron_refresh_token");
   localStorage.removeItem("tradetron_user");
+  // P3-fix: also purge cross-user artefacts so a new login never inherits
+  // the previous occupant's custom symbols or admin session token.
+  localStorage.removeItem("tradetron_custom_symbols");
+  localStorage.removeItem("tradetron_admin_token");
   window.dispatchEvent(new CustomEvent("tradetron_auth_change", { detail: null }));
 }
 
@@ -198,20 +202,24 @@ export async function authFetch(url, options = {}) {
 
   let res = await fetchWithResilience(fullUrl, { ...options, headers });
 
-  // If 401 Unauthorized, try refreshing access token
+  // If 401 Unauthorized, try refreshing access token.
+  //
+  // Single-flight token refresh: the FIRST request to receive a 401 becomes
+  // the "leader" and performs POST /api/auth/refresh. Every request (the
+  // leader AND any that arrive while the refresh is in flight) registers its
+  // retry subscriber BEFORE the refresh starts. When the refresh settles —
+  // success OR failure — onRefreshed() fires every queued subscriber exactly
+  // once. This guarantees no authFetch retry promise is ever left unresolved
+  // (previously the leader awaited the refresh and called onRefreshed() BEFORE
+  // subscribing, so every 401-era request hung forever once the token expired).
   if (res.status === 401 && getRefreshToken()) {
-    if (!isRefreshing) {
-      isRefreshing = true;
-      const newToken = await refreshAccessToken();
-      isRefreshing = false;
-      if (newToken) {
-        onRefreshed(newToken);
-      }
-    }
-
     return new Promise((resolve) => {
+      // Register this request's retry BEFORE triggering the refresh so the
+      // leader's onRefreshed() resolves it (exactly once, success or failure).
       addRefreshSubscriber(async (newToken) => {
         if (!newToken) {
+          // Refresh failed/expired — surface the original 401 so the caller
+          // can degrade gracefully (e.g. session check prompts re-login).
           resolve(res);
           return;
         }
@@ -222,6 +230,22 @@ export async function authFetch(url, options = {}) {
         const retryRes = await fetchWithResilience(fullUrl, { ...options, headers: retryHeaders });
         resolve(retryRes);
       });
+
+      if (!isRefreshing) {
+        isRefreshing = true;
+        refreshAccessToken()
+          .then((newToken) => {
+            // Always flush the queue — on success with the fresh token, on
+            // failure with null so subscribers resolve with the original 401.
+            onRefreshed(newToken);
+          })
+          .catch(() => {
+            onRefreshed(null);
+          })
+          .finally(() => {
+            isRefreshing = false;
+          });
+      }
     });
   }
 

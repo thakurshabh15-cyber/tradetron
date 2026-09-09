@@ -73,7 +73,7 @@ function RiskGaugeComponent({ riskData, loading = false, error = null, onRetry =
             <div className="flex justify-between text-slate-400 mb-1">
               <span>Daily Loss Buffer</span>
               <span className="font-mono text-white">
-                ${Math.abs(Math.min(0, data.daily_pnl)).toFixed(2)} / ${Number(data.max_daily_loss).toFixed(2)}
+                ₹{Math.abs(Math.min(0, data.daily_pnl)).toLocaleString("en-IN", { maximumFractionDigits: 2 })} / ₹{Number(data.max_daily_loss).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
               </span>
             </div>
             <div className="h-2 w-full rounded-full bg-surface-800 overflow-hidden">

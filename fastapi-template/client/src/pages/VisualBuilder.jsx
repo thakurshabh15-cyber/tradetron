@@ -40,17 +40,22 @@ export default function VisualBuilder() {
   const saveStrategy = async (event) => {
     event.preventDefault();
     setMessage(null);
-    const response = await authFetch("/api/visual-strategies", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, underlying, entry_conditions: conditions, exit_conditions: { target_profit: targetProfit, max_loss: maxLoss }, legs, is_active: false, mode }),
-    });
-    if (!response.ok) {
-      setMessage({ error: "Could not save this visual strategy." });
-      return;
+    try {
+      const response = await authFetch("/api/visual-strategies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, underlying, entry_conditions: conditions, exit_conditions: { target_profit: targetProfit, max_loss: maxLoss }, legs, is_active: false, mode }),
+      });
+      if (!response.ok) {
+        setMessage({ error: "Could not save this visual strategy." });
+        return;
+      }
+      setMessage({ success: "Visual strategy saved." });
+      loadSaved();
+    } catch (err) {
+      console.error("[VisualBuilder] Save failed:", err);
+      setMessage({ error: "Could not connect to the server. Your strategy was not saved." });
     }
-    setMessage({ success: "Visual strategy saved." });
-    loadSaved();
   };
 
   return (

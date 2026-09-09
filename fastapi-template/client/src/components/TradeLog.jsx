@@ -23,7 +23,7 @@ const TradeItem = React.memo(function TradeItem({ trade }) {
 
       <div className="text-right">
         <div className="font-mono font-medium text-white">
-          {trade.quantity} @ ${Number(trade.price || 0).toFixed(2)}
+          {trade.quantity} @ ₹{Number(trade.price || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
         </div>
         <div className="text-[10px] text-slate-500">
           {trade.executed_at

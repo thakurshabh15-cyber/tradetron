@@ -13,6 +13,7 @@ import { useApi } from "../hooks/useApi";
 import { useDebounce } from "../hooks/useDebounce";
 import { useMarket } from "../context/MarketContext";
 import { API_BASE } from "../config";
+import { authFetch } from "../services/apiClient";
 import { useAuthStore } from "../stores/useAuthStore";
 import {
   RefreshCw,
@@ -205,10 +206,8 @@ export default function Dashboard() {
 
   const handleModifyRisk = async (positionId, field, newPrice) => {
     try {
-      const token = localStorage.getItem("tradetron_access_token");
-      const res = await fetch(`${API_BASE}/api/v1/orders/positions/${positionId}/risk-targets`, {
+      const res = await authFetch(`/api/v1/orders/positions/${positionId}/risk-targets`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ [field]: newPrice }),
       });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "Update failed");

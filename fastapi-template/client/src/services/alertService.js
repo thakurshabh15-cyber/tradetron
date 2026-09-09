@@ -4,7 +4,7 @@
  * Evaluates ABOVE/BELOW thresholds and dispatches notifications when conditions trigger.
  */
 
-import { API_BASE } from "../config";
+import { authFetch } from "./apiClient";
 
 class AlertService {
   constructor() {
@@ -20,7 +20,7 @@ class AlertService {
 
   async fetchAlerts() {
     try {
-      const res = await fetch(`${API_BASE}/api/watchlist/alerts/list`);
+      const res = await authFetch("/api/watchlist/alerts/list");
       if (res.ok) {
         this.alerts = await res.json();
         this.notifyListeners();
@@ -64,7 +64,10 @@ class AlertService {
 
   dispatchTriggerNotification(alert, currentPrice) {
     const title = `🚨 Price Alert Triggered: ${alert.symbol}`;
-    const message = `${alert.symbol} crossed ${alert.condition} $${alert.target_price.toFixed(2)} (Current: $${currentPrice.toFixed(2)})`;
+    const symbol = alert.symbol.toUpperCase();
+    const isINR = /NIFTY|BANKNIFTY|FINNIFTY|RELIANCE|TCS|GOLD|CRUDE|INR/.test(symbol);
+    const curr = isINR ? "₹" : "$";
+    const message = `${alert.symbol} crossed ${alert.condition} ${curr}${alert.target_price.toFixed(2)} (Current: ${curr}${currentPrice.toFixed(2)})`;
 
     console.info(`[AlertService] ${title} - ${message}`);
 
@@ -80,9 +83,8 @@ class AlertService {
 
   async createAlert(symbol, condition, targetPrice) {
     try {
-      const res = await fetch(`${API_BASE}/api/watchlist/alerts`, {
+      const res = await authFetch("/api/watchlist/alerts", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           symbol: symbol.toUpperCase(),
           condition: condition.toUpperCase(),
@@ -103,7 +105,7 @@ class AlertService {
 
   async deleteAlert(alertId) {
     try {
-      const res = await fetch(`${API_BASE}/api/watchlist/alerts/${alertId}`, {
+      const res = await authFetch(`/api/watchlist/alerts/${alertId}`, {
         method: "DELETE",
       });
       if (res.ok) {
@@ -118,7 +120,7 @@ class AlertService {
 
   async toggleAlert(alertId) {
     try {
-      const res = await fetch(`${API_BASE}/api/watchlist/alerts/${alertId}/toggle`, {
+      const res = await authFetch(`/api/watchlist/alerts/${alertId}/toggle`, {
         method: "PATCH",
       });
       if (res.ok) {

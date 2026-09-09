@@ -19,6 +19,7 @@ import { useDebounce } from "../hooks/useDebounce";
 import { useMarket } from "../context/MarketContext";
 import FastOrderPanel from "../components/FastOrderPanel";
 import { alertService } from "../services/alertService";
+import { authFetch } from "../services/apiClient";
 import { API_BASE } from "../config";
 import { useToast } from "../components/Toast";
 
@@ -117,9 +118,8 @@ export default function Watchlist() {
     setError(null);
     setAddSuccessMsg(null);
     try {
-      const res = await fetch(`${API_BASE}/api/watchlist`, {
+      const res = await authFetch("/api/watchlist", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ symbol: symbol.trim().toUpperCase(), notes: notes || "Added from Universal Search" }),
       });
       if (!res.ok) {
@@ -143,7 +143,7 @@ export default function Watchlist() {
 
   const handleDeleteSymbol = async (symbol) => {
     try {
-      const res = await fetch(`${API_BASE}/api/watchlist/${symbol}`, {
+      const res = await authFetch(`/api/watchlist/${symbol}`, {
         method: "DELETE",
       });
       if (res.ok) {

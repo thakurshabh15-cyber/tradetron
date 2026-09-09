@@ -94,7 +94,7 @@ export default function TradeHistory() {
               (stats?.total_pnl || 0) >= 0 ? "text-profit-400" : "text-loss-400"
             }`}
           >
-            ${Number(stats?.total_pnl || 0).toFixed(2)}
+            ₹{Number(stats?.total_pnl || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
           </div>
         </div>
       </div>
@@ -158,7 +158,7 @@ export default function TradeHistory() {
                     </td>
                     <td className="py-3 font-mono text-slate-200">{t.quantity}</td>
                     <td className="py-3 text-right font-mono font-medium text-white">
-                      ${Number(t.price).toFixed(2)}
+                      ₹{Number(t.price).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
                     </td>
                   </tr>
                 ))
