@@ -109,33 +109,47 @@ class MarketSimulator:
         try:
             while True:
                 for symbol in symbols:
-                    price = self._next_price(symbol)
-                    open_price = self._open_prices[symbol]
-                    change = round(price - open_price, 2)
-                    change_pct = round((change / open_price) * 100, 2) if open_price else 0
-                    now = datetime.now(timezone.utc)
+                    # Phase15 P1 resilience fix: contain per-symbol failures
+                    # (e.g. a transient broadcast error) so a single bad symbol
+                    # can NEVER kill the entire market-data stream — mirroring
+                    # the engine tick loop and every other long-running loop in
+                    # the codebase.
+                    try:
+                        price = self._next_price(symbol)
+                        open_price = self._open_prices[symbol]
+                        change = round(price - open_price, 2)
+                        change_pct = round((change / open_price) * 100, 2) if open_price else 0
+                        now = datetime.now(timezone.utc)
 
-                    tick = {
-                        "symbol": symbol,
-                        "price": price,
-                        "change": change,
-                        "change_pct": change_pct,
-                        "volume": random.randint(100, 50_000),
-                        "timestamp": now.isoformat(),
-                    }
+                        tick = {
+                            "symbol": symbol,
+                            "price": price,
+                            "change": change,
+                            "change_pct": change_pct,
+                            "volume": random.randint(100, 50_000),
+                            "timestamp": now.isoformat(),
+                        }
 
-                    # Feed into the engine
-                    await self._tick_queue.put(tick)
+                        # Feed into the engine
+                        await self._tick_queue.put(tick)
 
-                    # Update simulated broker price
-                    if self._broker and hasattr(self._broker, "update_price"):
-                        self._broker.update_price(symbol, price)
+                        # Update simulated broker price
+                        if self._broker and hasattr(self._broker, "update_price"):
+                            self._broker.update_price(symbol, price)
 
-                    # Broadcast to WebSocket subscribers
-                    await ws_manager.broadcast(f"market:{symbol}", tick)
+                        # Broadcast to WebSocket subscribers
+                        await ws_manager.broadcast(f"market:{symbol}", tick)
 
-                    # Broadcast to the global ticker-tape channel powering /ws/market/stream
-                    await ws_manager.broadcast("market:stream", tick)
+                        # Broadcast to the global ticker-tape channel powering /ws/market/stream
+                        await ws_manager.broadcast("market:stream", tick)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        logger.exception(
+                            "Simulator tick generation error for %s — "
+                            "contained, stream continues: %s",
+                            symbol, exc,
+                        )
 
                 await asyncio.sleep(settings.sim_tick_interval)
         except asyncio.CancelledError:

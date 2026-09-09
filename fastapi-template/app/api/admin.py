@@ -631,18 +631,33 @@ async def kill_switch_user(
     db: AsyncSession = Depends(get_db),
 ):
     """Emergency halt for a single user's live strategies."""
-    # Actually pause all RUNNING strategy deployments
-    from sqlalchemy import update
+    # Phase15 P1 fix (user-scoped): the halt must disable ONLY the target
+    # user's engine-honored strategy rows (~``pause_strategy`` but for every
+    # strategy the user owns).  The previous implementation swept EVERY
+    # RUNNING ``StrategyDeploymentRecord`` platform-wide — those records carry
+    # NO owner column, so pausing them (a) halted OTHER users' trading and
+    # (b) never actually stopped the target's engine dispatch.  Disabling the
+    # target user's ``StrategyRecord.enabled`` and reloading the engine is the
+    # genuine per-user halt: the engine only executes enabled strategies.
+    from sqlalchemy import true as _true, update
+
     pause_stmt = (
-        update(StrategyDeploymentRecord)
+        update(StrategyRecord)
         .where(
-            StrategyDeploymentRecord.status == "RUNNING",
+            StrategyRecord.user_id == user_id,
+            StrategyRecord.enabled == _true(),
         )
-        .values(status="PAUSED_ADMIN_HALT")
+        .values(enabled=False)
     )
     result = await db.execute(pause_stmt)
     paused_count = result.rowcount
     await db.commit()
+
+    # Make the halt take effect immediately on the live engine.
+    from app.main import get_engine
+    engine = get_engine()
+    if engine is not None and hasattr(engine, "reload_strategies"):
+        await engine.reload_strategies()
 
     await log_audit_event(
         db=db,

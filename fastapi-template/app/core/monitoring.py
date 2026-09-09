@@ -119,8 +119,21 @@ class MonitoringSentinel:
 
     @staticmethod
     def capture_exception(exc: Exception, context: Optional[Dict[str, Any]] = None):
-        """Captures unexpected exceptions and dispatches to Sentry and system log."""
-        logger.error("[EXCEPTION CAUGHT] %s | Context: %s", exc, context, exc_info=True)
+        """
+        Captures unexpected exceptions and dispatches to Sentry, Telegram
+        (if configured) and the structured system log.
+
+        Phase 14 / OBS-2: this was the only sentinel method that did not fire
+        the Telegram channel — a production crash stayed silent on the incident
+        channel unless Sentry was configured. Kept in parity with the other
+        sentinel alert methods (order failures, risk breaches, disconnects).
+        """
+        logger.error(
+            "[EXCEPTION CAUGHT] %s | Context: %s",
+            exc,
+            context,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
         if _sentry_initialized:
             try:
                 import sentry_sdk
@@ -131,6 +144,17 @@ class MonitoringSentinel:
                     sentry_sdk.capture_exception(exc)
             except Exception:
                 pass
+
+        if _telegram_configured:
+            ctx_brief = ", ".join(f"{k}={v}" for k, v in (context or {}).items())
+            telegram_msg = (
+                f"\U0001F6D1 <b>UNHANDLED EXCEPTION</b>\n\n"
+                f"<b>Type:</b> {type(exc).__name__}\n"
+                f"<b>Error:</b> {exc}\n"
+                f"<b>Context:</b> {ctx_brief}\n"
+                f"<b>Time:</b> {datetime.now(timezone.utc).isoformat()}"
+            )
+            _fire_and_forget_telegram(_redact_configured_secrets(telegram_msg))
 
     @staticmethod
     def capture_order_failure(

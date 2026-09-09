@@ -392,7 +392,7 @@ async def _manual_replay_response(db: AsyncSession, order: OrderRecord) -> dict:
         await db.execute(
             select(TradeRecord).where(
                 TradeRecord.user_id == order.user_id,
-                TradeRecord.order_id == order.broker_order_id,
+                TradeRecord.order_id == order.id,
             )
         )
     ).scalar_one_or_none()
@@ -538,6 +538,11 @@ async def close_position(
     pos.status = "CLOSED"
     pos.closed_at = datetime.now(timezone.utc)
 
+    # P0 FK FIX: the exit TradeRecord must reference a REAL OrderRecord row
+    # (trades.order_id -> orders.id). Broker close reference captured from the
+    # LIVE dispatch response below (None for PAPER closes).
+    close_broker_ref: Optional[str] = None
+
     # ── EXEC-02 Fix: Dispatch real closing order to broker before DB update ──
     if pos.mode == "LIVE":
         # A LIVE position MUST resolve its routing broker account before it may
@@ -606,6 +611,7 @@ async def close_position(
                 order_type="MARKET",
             )
             broker_resp = await broker_client.place_order(close_order_req)
+            close_broker_ref = broker_resp.get("order_id") or broker_resp.get("broker_order_id")
             filled_price = broker_resp.get("filled_price") or broker_resp.get("price")
             if filled_price:
                 exit_price = float(filled_price)
@@ -645,9 +651,33 @@ async def close_position(
 
     # Record offsetting closing trade
     closing_side = closing_side_for_broker
+
+    # P0 FK FIX: persist a FILLED close OrderRecord so the exit TradeRecord can
+    # reference a REAL OrderRecord row (trades.order_id -> orders.id). The
+    # pre-fix code stored a synthetic "EXIT_*" display string that matches NO
+    # orders.id UUID — a ForeignKeyViolation on Postgres (SQLite silently
+    # tolerates it because FKs are unenforced there, which is why the 635-test
+    # suite never caught it).
+    close_order = OrderRecord(
+        id=str(uuid.uuid4()),
+        user_id=pos.user_id,
+        broker_account_id=pos.broker_account_id,
+        broker_order_id=close_broker_ref,
+        symbol=pos.symbol,
+        side=closing_side,
+        quantity=pos.quantity,
+        order_type="MARKET",
+        price=exit_price,
+        filled_price=exit_price,
+        filled_quantity=pos.quantity,
+        status="FILLED",
+        mode=pos.mode,
+    )
+    db.add(close_order)
+
     trade = TradeRecord(
         id=str(uuid.uuid4()),
-        order_id=f"EXIT_{int(datetime.now(timezone.utc).timestamp())}",
+        order_id=close_order.id,
         strategy_name="Manual Position Exit",
         symbol=pos.symbol,
         side=closing_side,
@@ -678,6 +708,26 @@ async def close_position(
         owner_balance = await credit_paper_pnl(db, pos.user_id, realized_pnl)
 
     await db.commit()
+
+    # Phase 16 P1 fix: feed the realized P&L into the engine's auto-pilot
+    # RiskManager so manual/DMA closes count toward the consecutive-loss and
+    # intraday-drawdown kill-switch rules.  The CAS OPEN->CLOSED close already
+    # won and committed above, so this feed is exactly-once: a replay close
+    # (404, no CAS re-claim) can never reach this point.  Defensive:
+    #   * the risk manager is the process-global one from the running engine
+    #     (same source as /api/risk-guard), so the guard's daily_pnl / streak
+    #     state reflects the trader's manual result;
+    #   * a missing engine / risk manager (unit test / engine-less boot) skips
+    #     the feed without affecting the close response;
+    #   * exceptions in the guard never break the close (trader-facing flow).
+    try:
+        from app.main import get_engine as _get_engine
+        _engine = _get_engine()
+        _rm = getattr(_engine, "risk_manager", None) if _engine else None
+        if _rm is not None and hasattr(_rm, "record_trade_result"):
+            _rm.record_trade_result(realized_pnl)
+    except Exception as exc:  # never break the close flow
+        logger.debug("Auto-pilot risk feed skipped on close: %s", exc)
 
     # Trigger Copy Trading Fan-out for all active followers of the trade
     # owner.  P1-2: the fan-out identity must be the POSITION OWNER
@@ -888,7 +938,7 @@ async def place_manual_order(
     # 4. Create persistent TradeRecord
     trade = TradeRecord(
         id=str(uuid.uuid4()),
-        order_id=order_id,
+        order_id=order.id,
         strategy_name="DMA Fast Order",
         symbol=clean_sym,
         side=req.side,
@@ -1181,7 +1231,7 @@ async def execute_dma_order(
         order.filled_quantity = quantity
         order.status = "FILLED"
     trade = TradeRecord(
-        id=str(uuid.uuid4()), order_id=order_id, strategy_id=req.strategy_id,
+        id=str(uuid.uuid4()), order_id=order.id, strategy_id=req.strategy_id,
         strategy_name="Institutional DMA", symbol=clean_sym, side=req.side,
         quantity=quantity, price=executed_price, entry_price=executed_price,
         pnl=0.0, mode=req.mode, user_id=user.id,

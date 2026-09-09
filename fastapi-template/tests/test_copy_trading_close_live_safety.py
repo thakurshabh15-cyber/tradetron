@@ -469,7 +469,13 @@ async def test_paper_close_unchanged_no_broker_involved(monkeypatch):
                 select(OrderRecord).where(OrderRecord.user_id == seeded["follower_id"])
             )
         ).scalars().all()
-        assert orders == [], "PAPER closes do not create broker OrderRecords"
+        # P0 FK FIX: PAPER closes persist exactly one FILLED bookkeeping close
+        # OrderRecord (owner = position owner, NO broker involved) so the exit
+        # TradeRecord's order_id satisfies the trades.order_id -> orders.id FK.
+        assert len(orders) == 1, f"expected 1 bookkeeping close order, got {len(orders)}"
+        assert orders[0].mode == "PAPER"
+        assert orders[0].status == "FILLED"
+        assert orders[0].broker_account_id is None or orders[0].broker_account_id == seeded["broker_id"]
 
         trade = (
             await db.execute(
@@ -481,6 +487,9 @@ async def test_paper_close_unchanged_no_broker_involved(monkeypatch):
         ).scalars().one()
         assert trade.price == 255.0
         assert trade.mode == "PAPER"
+        assert trade.order_id == orders[0].id, (
+            "exit TradeRecord must reference the close OrderRecord's UUID"
+        )
 
         user = await db.get(UserRecord, seeded["follower_id"])
         assert user.paper_balance == round(1_000_000.0 + 100.0, 2)

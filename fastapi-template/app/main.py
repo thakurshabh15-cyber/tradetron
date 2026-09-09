@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -161,6 +161,45 @@ app = FastAPI(
 )
 
 
+# Phase 14 / OBS-1: unhandled-exception handling — inner middleware layer.
+# Registered FIRST (before CORS/security/metrics) because Starlette's
+# ``add_middleware`` prepends: the first-registered user middleware ends up
+# wrapping directly above ExceptionMiddleware (the innermost position). This
+# turns route-level exceptions into the app's JSON 500 INSIDE the chain, so the
+# normal response path completes — the 500 is counted by
+# ``tradetron_http_requests_total`` and hardened by the security-headers
+# middleware exactly like any other response.
+@app.middleware("http")
+async def catch_unhandled_errors(request, call_next):
+    """Convert route-level unhandled exceptions into the app's JSON 500."""
+    try:
+        return await call_next(request)
+    except Exception as exc:
+        _client = request.client
+        client_host = _client[0] if isinstance(_client, tuple) else None
+
+        logger = get_logger("main")
+        logger.error(
+            "Unhandled exception on %s %s: %s",
+            request.method,
+            request.url.path,
+            exc,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
+
+        from app.core.monitoring import monitoring_sentinel
+
+        monitoring_sentinel.capture_exception(
+            exc,
+            context={
+                "method": request.method,
+                "path": request.url.path,
+                "client_host": client_host,
+            },
+        )
+        return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+
 # Dynamic CORS Configuration
 # Hardened defaults: a wildcard origin is NEVER combined with credentials in
 # production — deployments without an explicit ALLOWED_ORIGINS lock to the
@@ -207,6 +246,54 @@ async def security_headers(request, call_next):
 from app.core.metrics import metrics_middleware
 
 app.middleware("http")(metrics_middleware)
+
+
+# Phase 14 / OBS-1: unhandled-exception handling — outer edge layer.
+#
+# Two complementary layers are needed because Starlette routes
+# ``@app.exception_handler(Exception)`` to the OUTERMOST ServerErrorMiddleware,
+# whose 500 response never flows back through the inner middleware chain
+# (metrics counter, security headers) and which ALWAYS re-raises the exception
+# for the server to log:
+#
+#   1. ``catch_unhandled_errors`` — registered FIRST in this file (above the
+#      CORS block), so it sits innermost, directly above ExceptionMiddleware.
+#      It converts route-level exceptions into a JSON 500 response INSIDE the
+#      chain where the normal response path completes (metrics + security
+#      headers).
+#   2. ``unhandled_exception_handler`` (this handler) — the last-resort edge
+#      handler: an exception that escapes every middleware (e.g. raised inside
+#      another middleware) becomes the JSON error convention instead of
+#      Starlette's bare plain-text "Internal Server Error".
+#
+# Both record the incident through the monitoring sentinel (structured log +
+# Sentry + Telegram) and never leak internals to the client. For the common
+# route-level case only the middleware layer fires (no double alerting).
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    method = getattr(request, "method", "WEBSOCKET")
+    url = getattr(request, "url", None)
+    path = getattr(url, "path", "?")
+    _client = getattr(request, "client", None)
+    client_host = _client[0] if isinstance(_client, tuple) else None
+
+    logger = get_logger("main")
+    logger.error(
+        "Unhandled exception on %s %s: %s",
+        method,
+        path,
+        exc,
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
+
+    from app.core.monitoring import monitoring_sentinel
+
+    monitoring_sentinel.capture_exception(
+        exc,
+        context={"method": method, "path": path, "client_host": client_host},
+    )
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
 
 # Mount routers
 from app.api import admin, alerts, auth, backtest, billing, brokers, broker_cron, compliance, copy_trading, dashboard, market_data, payouts, quant_lab, reports, risk_guard, strategies, subscriptions, trades, user, visual_strategies, watchlist, websocket  # noqa: E402

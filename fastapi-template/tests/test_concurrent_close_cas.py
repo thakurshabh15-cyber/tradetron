@@ -533,7 +533,15 @@ async def test_paper_single_close_still_works():
                 )
             )
         ).scalars().all()
-        # PAPER closes are pure bookkeeping — no broker OrderRecord is created
-        # (matches pre-fix behavior).
-        assert order_rows == []
+        # P0 FK FIX: PAPER closes now persist exactly one FILLED bookkeeping
+        # close OrderRecord so the exit TradeRecord references a REAL orders.id
+        # UUID (trades.order_id -> orders.id FK; SQLite does not enforce FKs,
+        # Postgres does — the pre-fix "no OrderRecord" contract produced a
+        # ForeignKeyViolation on deployed Postgres).
+        assert len(order_rows) == 1, f"expected 1 bookkeeping close order, got {len(order_rows)}"
+        assert order_rows[0].status == "FILLED"
+        assert order_rows[0].side == "SELL"
+        assert trades[0].order_id == order_rows[0].id, (
+            "exit TradeRecord must reference the close OrderRecord's UUID"
+        )
 

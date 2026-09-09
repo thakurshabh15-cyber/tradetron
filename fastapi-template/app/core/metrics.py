@@ -61,8 +61,24 @@ async def metrics_middleware(request: Request, call_next: Any):
 
     Works with the ``@app.middleware("http")`` registration style used in
     ``app/main.py``; never raises — metrics are best-effort.
+
+    Phase 14 / OBS-1 safety net: exceptions raised in middleware ABOVE
+    ``ExceptionMiddleware`` bypass the global exception handler. Count those
+    escaped 500s under the raw path so Prometheus scrapes never hide error
+    volume, then re-raise for the server to log. Route-level exceptions are
+    already normalised to 500 responses by the global handler and reach the
+    ordinary path below (no double counting).
     """
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception:
+        if _PROM_CLIENT_AVAILABLE and http_requests_total is not None:
+            http_requests_total.labels(
+                method=request.method,
+                route=request.url.path,
+                status="500",
+            ).inc()
+        raise
     if _PROM_CLIENT_AVAILABLE and http_requests_total is not None:
         route = getattr(request.scope.get("route"), "path", None) or request.url.path
         http_requests_total.labels(

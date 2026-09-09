@@ -500,7 +500,7 @@ class CopyTradingEngine:
                 # Persist Follower TradeRecord
                 trade = TradeRecord(
                     id=str(uuid.uuid4()),
-                    order_id=order_id,
+                    order_id=order.id,
                     strategy_name=f"Copy Trading ({multiplier}x)",
                     symbol=symbol,
                     side=side,
@@ -982,6 +982,12 @@ class CopyTradingEngine:
                 closing_side = "SELL" if is_long else "BUY"
                 effective_exit_price = float(exit_price)
 
+                # P0 FK FIX baseline: the LIVE branch below creates a REAL
+                # close OrderRecord; PAPER closes create theirs in the shared
+                # tail so the exit TradeRecord references an actual orders.id
+                # UUID (never a synthetic CPY_EXIT_* display string).
+                close_order: Optional[OrderRecord] = None
+
                 if p.mode == "LIVE":
                     # ── LIVE close: broker confirmation is mandatory ──────────────
                     # A. Resolve the follower's OWN CONNECTED, active broker account
@@ -1136,10 +1142,33 @@ class CopyTradingEngine:
                 p.unrealized_pnl = 0.0
                 db.add(p)
 
+                # P0 FK FIX: LIVE closes already persisted a FILLED close OrderRecord
+                # above; PAPER closes are pure bookkeeping with no broker
+                # dispatch, so create the bookkeeping close order now. Either
+                # way the exit TradeRecord must reference a REAL orders.id UUID
+                # (pre-fix it stored a synthetic CPY_EXIT_* display string that
+                # violates trades.order_id -> orders.id on Postgres).
+                if close_order is None:
+                    close_order = OrderRecord(
+                        id=str(uuid.uuid4()),
+                        user_id=p.user_id,
+                        broker_account_id=p.broker_account_id,
+                        symbol=p.symbol,
+                        side=closing_side,
+                        quantity=p.quantity,
+                        order_type="MARKET",
+                        price=effective_exit_price,
+                        filled_price=effective_exit_price,
+                        filled_quantity=p.quantity,
+                        status="FILLED",
+                        mode=p.mode,
+                    )
+                    db.add(close_order)
+
                 # Record closing trade
                 trade = TradeRecord(
                     id=str(uuid.uuid4()),
-                    order_id=f"CPY_EXIT_{int(datetime.now(timezone.utc).timestamp())}_{str(uuid.uuid4())[:6]}",
+                    order_id=close_order.id,
                     strategy_name="Copy Trading Exit",
                     symbol=p.symbol,
                     side=closing_side,
