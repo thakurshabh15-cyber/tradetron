@@ -116,7 +116,7 @@ function calcMACD(candles, fast = 12, slow = 26, signalP = 9) {
   return { macdOut, sigOut, hist };
 }
 
-function TradingChart({ symbol = "NIFTY50", currentPrice = 24850.0, positions = [], onModifyRisk }) {
+function TradingChart({ symbol = "NIFTY50", currentPrice = null, positions = [], onModifyRisk }) {
   const containerRef = useRef(null);
   const chartRef = useRef(null);
   const candleRef = useRef(null);

@@ -2,6 +2,7 @@ import React, { useState, useMemo } from "react";
 import { Zap, ShieldCheck, Loader2 } from "lucide-react";
 import { useMarketStore } from "../stores/useMarketStore";
 import { authFetch } from "../services/apiClient";
+import { getFeedPrice } from "../utils/priceFeed";
 import { useToast } from "./Toast";
 
 // Mirror of backend dma_engine constants for instant pre-trade preview
@@ -41,7 +42,7 @@ function estimateCharges(symbol, side, product, qty, price) {
 }
 const inr = (v, d = 2) => `₹${Number(v || 0).toLocaleString("en-IN", { minimumFractionDigits: d, maximumFractionDigits: d })}`;
 
-function OrderTerminal({ symbol = "NIFTY50", currentPrice = 24850.0, onOrderPlaced }) {
+function OrderTerminal({ symbol = "NIFTY50", currentPrice = null, onOrderPlaced }) {
   const liveQuote = useMarketStore((st) => st.quotes[String(symbol).toUpperCase().trim()]);
   const toast = useToast();
 
@@ -58,7 +59,7 @@ function OrderTerminal({ symbol = "NIFTY50", currentPrice = 24850.0, onOrderPlac
   const mode = "PAPER";
   const [submitting, setSubmitting] = useState(false);
 
-  const px = liveQuote?.price ?? currentPrice;
+  const px = getFeedPrice(liveQuote, currentPrice);
   const lotSize = getLotSize(symbol);
   const safeLots = Math.max(1, parseInt(lots, 10) || 1);
   const quantity = safeLots * lotSize;

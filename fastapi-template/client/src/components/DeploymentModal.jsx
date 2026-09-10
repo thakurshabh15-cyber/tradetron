@@ -2,16 +2,38 @@ import { useEffect, useState } from "react";
 import { AlertCircle, X, Play, Zap, CheckCircle2 } from "lucide-react";
 import { authFetch } from "../services/apiClient";
 import { useToast } from "./Toast";
+import { deployBrokerOptions, resolveDeployTarget } from "../utils/deployBroker";
 
 export default function DeploymentModal({ isOpen, onClose, strategy, onDeployed }) {
   const [executionMode, setExecutionMode] = useState("PAPER");
   const [brokerName, setBrokerName] = useState("Simulated");
+  const [brokerAccountId, setBrokerAccountId] = useState(null);
   const [multiplier, setMultiplier] = useState(1.0);
   const [capital, setCapital] = useState(strategy?.min_capital || 5000);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deployedSuccess, setDeployedSuccess] = useState(false);
   const [deployError, setDeployError] = useState(null);
+  const [connectedAccounts, setConnectedAccounts] = useState([]);
   const toast = useToast();
+
+  // Fetch connected broker accounts when modal opens
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await authFetch("/api/brokers/accounts");
+        if (!res.ok) throw new Error("Failed to load broker accounts");
+        const data = await res.json();
+        if (!cancelled) setConnectedAccounts(Array.isArray(data) ? data : data.accounts || []);
+      } catch {
+        if (!cancelled) setConnectedAccounts([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isOpen]);
+
+  const brokerOpts = deployBrokerOptions(connectedAccounts);
 
   // Reset transient state whenever a different strategy is deployed
   useEffect(() => {
@@ -20,6 +42,7 @@ export default function DeploymentModal({ isOpen, onClose, strategy, onDeployed 
       setDeployedSuccess(false);
       setExecutionMode("PAPER");
       setBrokerName("Simulated");
+      setBrokerAccountId(null);
       setCapital(strategy?.min_capital || 5000);
     }
   }, [isOpen, strategy]);
@@ -36,6 +59,7 @@ export default function DeploymentModal({ isOpen, onClose, strategy, onDeployed 
         body: JSON.stringify({
           execution_mode: executionMode,
           broker_name: brokerName,
+          broker_account_id: brokerAccountId,
           multiplier: Number(multiplier),
           capital_allocated: Number(capital),
         }),
@@ -117,7 +141,14 @@ export default function DeploymentModal({ isOpen, onClose, strategy, onDeployed 
                   type="button"
                   onClick={() => {
                     setExecutionMode("LIVE");
-                    setBrokerName("Angel One");
+                    const target = resolveDeployTarget("LIVE", connectedAccounts);
+                    if (target.unavailable) {
+                      setBrokerName(null);
+                      setBrokerAccountId(null);
+                    } else {
+                      setBrokerName(target.broker_name);
+                      setBrokerAccountId(target.broker_id);
+                    }
                   }}
                   className={`py-2 px-3 rounded-lg border text-xs font-semibold transition-all ${
                     executionMode === "LIVE"
@@ -125,7 +156,7 @@ export default function DeploymentModal({ isOpen, onClose, strategy, onDeployed 
                       : "bg-slate-800 text-slate-400 border-slate-700 hover:text-white"
                   }`}
                 >
-                  Live Broker (Angel One)
+                  Live Broker{brokerOpts.length > 0 ? ` (${brokerOpts[0].broker_name})` : ""}
                 </button>
               </div>
             </div>
@@ -136,12 +167,25 @@ export default function DeploymentModal({ isOpen, onClose, strategy, onDeployed 
                 Target Broker Account
               </label>
               <select
-                value={brokerName}
-                onChange={(e) => setBrokerName(e.target.value)}
+                value={brokerAccountId || "Simulated"}
+                onChange={(e) => {
+                  if (e.target.value === "Simulated") {
+                    setBrokerName("Simulated");
+                    setBrokerAccountId(null);
+                    setExecutionMode("PAPER");
+                  } else {
+                    const opt = brokerOpts.find((o) => o.broker_id === e.target.value);
+                    setBrokerName(opt?.broker_name || e.target.value);
+                    setBrokerAccountId(e.target.value);
+                    setExecutionMode("LIVE");
+                  }
+                }}
                 className="select-field w-full mt-1.5 text-xs"
               >
                 <option value="Simulated">Simulated Mock Broker</option>
-                <option value="Angel One">Angel One SmartAPI (Live)</option>
+                {brokerOpts.map((o) => (
+                  <option key={o.broker_id} value={o.broker_id}>{o.label}</option>
+                ))}
               </select>
             </div>
 

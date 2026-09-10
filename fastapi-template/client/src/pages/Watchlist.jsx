@@ -22,6 +22,7 @@ import { alertService } from "../services/alertService";
 import { authFetch } from "../services/apiClient";
 import { API_BASE } from "../config";
 import { useToast } from "../components/Toast";
+import { getFeedPrice } from "../utils/priceFeed";
 
 const SEGMENT_TABS = [
   { id: "ALL", label: "All Markets" },
@@ -458,7 +459,7 @@ export default function Watchlist() {
             </div>
             <FastOrderPanel
               symbol={activeOrderSymbol}
-              currentPrice={marketMap[activeOrderSymbol]?.price || 24850.0}
+              currentPrice={getFeedPrice(marketMap[activeOrderSymbol])}
               onOrderPlaced={() => setActiveOrderSymbol(null)}
             />
           </div>

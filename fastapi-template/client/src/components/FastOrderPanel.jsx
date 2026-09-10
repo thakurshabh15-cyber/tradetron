@@ -2,13 +2,14 @@ import React, { useState, useMemo, useCallback } from "react";
 import { useMarketStore } from "../stores/useMarketStore";
 import { useTradeStore } from "../stores/useTradeStore";
 import { useDebounce } from "../hooks/useDebounce";
+import { getFeedPrice } from "../utils/priceFeed";
 import { Zap, ShieldCheck, AlertCircle, ArrowUpRight, ArrowDownRight, CheckCircle2 } from "lucide-react";
 import { useToast } from "./Toast";
 
-function FastOrderPanelComponent({ symbol = "NIFTY50", currentPrice = 24850.0, onOrderPlaced }) {
+function FastOrderPanelComponent({ symbol = "NIFTY50", currentPrice = null, onOrderPlaced }) {
   // Selective Zustand subscription: only re-render when this specific symbol quote updates
   const liveQuote = useMarketStore((state) => state.quotes[String(symbol).toUpperCase().trim()]);
-  const effectiveLivePrice = liveQuote?.price ?? currentPrice;
+  const effectiveLivePrice = getFeedPrice(liveQuote, currentPrice);
 
   const executeOrder = useTradeStore((state) => state.executeOrder);
   const toast = useToast();

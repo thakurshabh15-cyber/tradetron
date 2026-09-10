@@ -222,7 +222,9 @@ export default function Dashboard() {
     return [...new Set([...userCustomSymbols, ...base])];
   }, [activeAssetTab, userCustomSymbols]);
 
-  const currentSelectedData = liveMarketMap[selectedSymbol] || { price: 24850.0 };
+  // Strictly resolve from REAL market data: when the feed has no quote for the
+  // selected symbol yet, show "awaiting feed" rather than a fabricated price.
+  const currentSelectedData = liveMarketMap[selectedSymbol] || null;
 
   const getExchangeColor = (exchange) => {
     switch (exchange) {
@@ -689,23 +691,27 @@ export default function Dashboard() {
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-xs font-mono font-bold text-white">
-                  LTP: ₹{Number(currentSelectedData.price || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                  {currentSelectedData?.price != null
+                    ? `LTP: ₹${Number(currentSelectedData.price).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`
+                    : "LTP: Awaiting feed…"}
                 </span>
-                <span
-                  className={`text-[11px] font-mono px-1.5 py-0.5 rounded font-bold ${
-                    (currentSelectedData.change ?? 0) >= 0
-                      ? "bg-emerald-500/15 text-emerald-400"
-                      : "bg-rose-500/15 text-rose-400"
-                  }`}
-                >
-                  {(currentSelectedData.change ?? 0) >= 0 ? "+" : ""}
-                  {Number(currentSelectedData.change_pct || 0).toFixed(2)}%
-                </span>
+                {currentSelectedData ? (
+                  <span
+                    className={`text-[11px] font-mono px-1.5 py-0.5 rounded font-bold ${
+                      (currentSelectedData.change ?? 0) >= 0
+                        ? "bg-emerald-500/15 text-emerald-400"
+                        : "bg-rose-500/15 text-rose-400"
+                    }`}
+                  >
+                    {(currentSelectedData.change ?? 0) >= 0 ? "+" : ""}
+                    {Number(currentSelectedData.change_pct || 0).toFixed(2)}%
+                  </span>
+                ) : null}
               </div>
             </div>
 
             <ErrorBoundary fallback={<div className="p-8 text-center text-xs text-slate-500 font-mono">Chart stream initializing...</div>}>
-              <TradingChart symbol={selectedSymbol} currentPrice={currentSelectedData.price || 24850.0} positions={positionsData || []} onModifyRisk={handleModifyRisk} />
+              <TradingChart symbol={selectedSymbol} currentPrice={currentSelectedData?.price} positions={positionsData || []} onModifyRisk={handleModifyRisk} />
             </ErrorBoundary>
           </div>
 
@@ -743,7 +749,7 @@ export default function Dashboard() {
           <ErrorBoundary>
             <OrderTerminal
               symbol={selectedSymbol}
-              currentPrice={currentSelectedData.price || 24850.0}
+              currentPrice={currentSelectedData?.price}
               onOrderPlaced={refreshAll}
             />
           </ErrorBoundary>
