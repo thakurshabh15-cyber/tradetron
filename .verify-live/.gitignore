@@ -1,0 +1,11 @@
+node_modules/
+e2e-shots/
+*.log
+*.png
+/*.js
+!/e2e-smoke.mjs
+!/repro-optionchain.mjs
+!/repro-optionchain2.mjs
+!/live-deploy-check.mjs
+!/rw-repro-local.mjs
+!/debug-nav.js

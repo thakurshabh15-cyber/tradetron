@@ -1,0 +1,34 @@
+<!doctype html>
+<html>
+  <head><meta charset="utf-8" /><title>LW OHLC probe</title></head>
+  <body>
+    <div id="chart" style="width:800px;height:400px;"></div>
+    <script src="../fastapi-template/client/node_modules/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+    <script>
+      window.__result = {};
+      const chart = LightweightCharts.createChart(document.getElementById("chart"), { autoSize: true });
+      const s = chart.addSeries(LightweightCharts.CandlestickSeries, {});
+      const now = Math.floor(Date.now() / 1000);
+      // Scenario A: valid candles
+      try {
+        const good = [{ time: now - 60, open: 100, high: 101, low: 99, close: 100.5, volume: 50 }];
+        s.setData(good);
+        window.__result.validCandles = "ok";
+      } catch (e) { window.__result.validCandles = e.message; }
+      // Scenario B: candle with undefined OHLC (1s seed before first price tick)
+      try {
+        const badO = [{ time: now + 60, open: undefined, high: undefined, low: undefined, close: undefined, volume: 100 }];
+        s.setData(badO);
+        window.__result.undefinedOHLC = "ok (no throw)";
+      } catch (e) { window.__result.undefinedOHLC = e.message; }
+      // Scenario C: setCrosshairPosition with real time from coordinateToTime (the FIX)
+      try {
+        const t = chart.timeScale().coordinateToTime(400);
+        const p = s.coordinateToPrice(200);
+        s.setData([{ time: now - 60, open: 100, high: 101, low: 99, close: 100.5, volume: 50 }]);
+        if (p != null && t != null) chart.setCrosshairPosition(p, t, s);
+        window.__result.fixedCrosshair = `ok (t=${t})`;
+      } catch (e) { window.__result.fixedCrosshair = e.message; }
+    </script>
+  </body>
+</html>

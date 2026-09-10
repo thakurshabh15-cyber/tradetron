@@ -1,0 +1,48 @@
+<!doctype html>
+<html>
+  <head><meta charset="utf-8" /><title>LW bug repro</title></head>
+  <body>
+    <div id="chart" style="width:800px;height:400px;"></div>
+    <div id="log"></div>
+    <script src="../fastapi-template/client/node_modules/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+    <script>
+      window.__result = { buggyThrew: null, fixedThrew: null, buggyThrewMessage: "", fixedThrewMessage: "" };
+      const chart = LightweightCharts.createChart(document.getElementById("chart"), {
+        autoSize: true,
+        layout: { background: { type: "solid", color: "transparent" } },
+      });
+      const s = chart.addSeries(LightweightCharts.CandlestickSeries, {});
+      const now = Math.floor(Date.now() / 1000);
+      const candles = [];
+      for (let i = 0; i < 50; i++) {
+        candles.push({ time: now - (50 - i) * 60, open: 100 + i, high: 102 + i, low: 99 + i, close: 101 + i, volume: 1000 });
+      }
+      s.setData(candles);
+      chart.timeScale().fitContent();
+
+      // ---- RED: exact app bug — setCrosshairPosition(price, undefined, series) ----
+      try {
+        const price = s.coordinateToPrice(200);
+        chart.setCrosshairPosition(price, undefined, s);
+        window.__result.buggyThrew = false;
+      } catch (e) {
+        window.__result.buggyThrew = true;
+        window.__result.buggyThrewMessage = e.message;
+      }
+
+      // ---- FIXED: guarded coordinateToTime, as in TradingChart.jsx fix ----
+      try {
+        const p = s.coordinateToPrice(200);
+        const t = chart.timeScale().coordinateToTime(400);
+        if (p != null && t != null) {
+          chart.setCrosshairPosition(p, t, s);
+        }
+        window.__result.fixedThrew = false;
+      } catch (e) {
+        window.__result.fixedThrew = true;
+        window.__result.fixedThrewMessage = e.message;
+      }
+      document.getElementById("log").textContent = JSON.stringify(window.__result);
+    </script>
+  </body>
+</html>

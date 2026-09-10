@@ -299,9 +299,21 @@ function TradingChart({ symbol = "NIFTY50", currentPrice = null, positions = [],
       const d = dragRef.current;
       const rect = container.getBoundingClientRect();
       const crossY = e.clientY - rect.top;
-      chart.setCrosshairPosition?.(candleSeries.coordinateToPrice(crossY), undefined, candleSeries);
-      if (!d) return;
+      const crossX = e.clientX - rect.left;
       const price = candleSeries.coordinateToPrice(crossY);
+      // lightweight-charts v5.2.1 crashes with "Cannot read properties of
+      // undefined (reading 'year')" when setCrosshairPosition receives an
+      // undefined horizontal `Time`: its BusinessDay converter (`En`)
+      // only rejects numbers and strings, so `undefined` reaches `.year`.
+      // Only sync the crosshair when both a real price and a real time on
+      // the time scale exist — never pass an undefined horizontal position.
+      if (price != null) {
+        const horzTime = chart.timeScale().coordinateToTime(crossX);
+        if (horzTime != null) {
+          chart.setCrosshairPosition(price, horzTime, candleSeries);
+        }
+      }
+      if (!d) return;
       if (price == null) return;
       d.line.applyOptions({ price, title: `${d.kind} → ${price.toFixed(2)}` });
       setDragBadge({ kind: d.kind, price });

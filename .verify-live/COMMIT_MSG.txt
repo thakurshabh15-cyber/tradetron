@@ -1,0 +1,19 @@
+fix(frontend): LIVE deploy broker_name null + lwc v5.2.1 crosshair year-crash; deterministic E2E
+
+DeploymentModal: send broker_name="Simulated" (never null) when no connected
+broker so the backend business-logic guard returns the canonical 400 instead of
+a Pydantic 422 malformed-request; normalize FastAPI validation detail arrays so
+the inline UI error renders readable messages instead of "[object Object]".
+
+TradingChart: stop passing undefined as the horizontal Time to
+setCrosshairPosition on lightweight-charts v5.2.1, which crashes with
+"Cannot read properties of undefined (reading 'year')" (its BusinessDay
+converter 'En' rejects only strings/numbers, so undefined reaches .year).
+Only sync the crosshair when coordinateToTime yields a real Time; proven with a
+local RED->FIXED harness + live production repro (page error on hover/click).
+
+.verify-live/e2e-smoke.mjs: deterministic LIVE-deploy negative test (expects
+400 + broker guard, rejects 422/401/5xx), empty-state UI+API cleanup with reload
+persistence + backend count, lazy-route resolution proof, lightweight-charts
+page-error guard, httpErrors summary, candidate-symbol add, flake hardening;
+plus reusable repro/verification scripts.

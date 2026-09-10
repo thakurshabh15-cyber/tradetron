@@ -66,7 +66,15 @@ export default function DeploymentModal({ isOpen, onClose, strategy, onDeployed 
       });
 
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || `Deployment rejected (HTTP ${res.status})`);
+      if (!res.ok) {
+        // FastAPI validation errors return `detail` as an ARRAY of {loc,msg};
+        // HTTPException returns a plain string. Normalize both so the UI shows
+        // a real message instead of "[object Object]".
+        const detail = Array.isArray(data.detail)
+          ? data.detail.map((d) => d.msg || JSON.stringify(d)).join("; ")
+          : data.detail;
+        throw new Error(String(detail) || `Deployment rejected (HTTP ${res.status})`);
+      }
 
       setDeployedSuccess(true);
       toast.success(`"${strategy.name}" is live`, {
@@ -143,7 +151,7 @@ export default function DeploymentModal({ isOpen, onClose, strategy, onDeployed 
                     setExecutionMode("LIVE");
                     const target = resolveDeployTarget("LIVE", connectedAccounts);
                     if (target.unavailable) {
-                      setBrokerName(null);
+                      setBrokerName("Simulated");
                       setBrokerAccountId(null);
                     } else {
                       setBrokerName(target.broker_name);

@@ -1,0 +1,10 @@
+import { chromium } from "playwright";
+const b = await chromium.launch({ channel: "chrome", headless: true });
+const pg = await b.newPage();
+await pg.goto("file:///C:/Users/HP/Desktop/tradetron/.verify-live/rw-repro.html");
+await pg.waitForTimeout(1500);
+const r = await pg.evaluate(() => window.__result);
+console.log("BUGGY  (setCrosshairPosition w/ undefined) :", r.buggyThrew ? "THROWS → " + r.buggyThrewMessage : "no throw");
+console.log("FIXED  (guarded coordinateToTime)          :", r.fixedThrew ? "THROWS → " + r.fixedThrewMessage : "no throw");
+await b.close();
+process.exit(r.buggyThrew && !r.fixedThrew ? 0 : 1);
