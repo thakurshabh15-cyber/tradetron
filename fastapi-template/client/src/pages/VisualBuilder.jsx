@@ -21,7 +21,9 @@ export default function VisualBuilder() {
   const [targetProfit, setTargetProfit] = useState(5000);
   const [maxLoss, setMaxLoss] = useState(2500);
   const [saved, setSaved] = useState([]);
+  const [editingId, setEditingId] = useState(null);
   const [message, setMessage] = useState(null);
+  const [busyId, setBusyId] = useState(null);
 
   const loadSaved = async () => {
     const response = await authFetch("/api/visual-strategies");
@@ -37,24 +39,88 @@ export default function VisualBuilder() {
   const updateLeg = (index, field, value) => setLegs((current) => current.map((leg, i) => i === index ? { ...leg, [field]: field === "lots" ? Number(value) : value } : leg));
   const updateCondition = (index, field, value) => setConditions((current) => current.map((condition, i) => i === index ? { ...condition, [field]: (field === "value" && condition.indicator !== "TIME") || field === "period" ? Number(value) : value } : condition));
 
+  /** Populate the editor from a saved strategy so it can be edited in place. */
+  const loadStrategy = (item) => {
+    setName(item.name || "");
+    setUnderlying(item.underlying || "NIFTY50");
+    setMode(item.mode || "PAPER");
+    setLegs(Array.isArray(item.legs) && item.legs.length ? item.legs : templates["Short Straddle"]);
+    setConditions(Array.isArray(item.entry_conditions) && item.entry_conditions.length ? item.entry_conditions : [blankCondition]);
+    const exit = item.exit_conditions || {};
+    setTargetProfit(Number(exit.target_profit) || 0);
+    setMaxLoss(Number(exit.max_loss) || 0);
+    setEditingId(item.id);
+    setTemplate(item.legs?.[0]?.type ? "Custom" : "Short Straddle");
+    setMessage({ success: `Loaded "${item.name}" — edit and save to update it.` });
+  };
+
   const saveStrategy = async (event) => {
     event.preventDefault();
     setMessage(null);
     try {
-      const response = await authFetch("/api/visual-strategies", {
-        method: "POST",
+      const payload = { name, underlying, entry_conditions: conditions, exit_conditions: { target_profit: targetProfit, max_loss: maxLoss }, legs, is_active: false, mode };
+      const url = editingId ? `/api/visual-strategies/${editingId}` : "/api/visual-strategies";
+      const response = await authFetch(url, {
+        method: editingId ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, underlying, entry_conditions: conditions, exit_conditions: { target_profit: targetProfit, max_loss: maxLoss }, legs, is_active: false, mode }),
+        body: JSON.stringify(payload),
       });
       if (!response.ok) {
         setMessage({ error: "Could not save this visual strategy." });
         return;
       }
-      setMessage({ success: "Visual strategy saved." });
+      setMessage({ success: editingId ? "Visual strategy updated." : "Visual strategy saved." });
+      setEditingId(null);
       loadSaved();
     } catch (err) {
       console.error("[VisualBuilder] Save failed:", err);
       setMessage({ error: "Could not connect to the server. Your strategy was not saved." });
+    }
+  };
+
+  /** Toggle a saved strategy's active (deploy) state via the real backend. */
+  const toggleActive = async (item) => {
+    setBusyId(item.id);
+    setMessage(null);
+    try {
+      const response = await authFetch(`/api/visual-strategies/${item.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_active: !item.is_active }),
+      });
+      if (!response.ok) {
+        setMessage({ error: "Could not toggle this strategy's active state." });
+        return;
+      }
+      setMessage({ success: item.is_active ? `"${item.name}" paused.` : `"${item.name}" armed for paper execution.` });
+      loadSaved();
+    } catch (err) {
+      console.error("[VisualBuilder] Toggle failed:", err);
+      setMessage({ error: "Could not connect to the server. Active state unchanged." });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  /** Permanently delete a saved strategy via the backend. */
+  const handleDelete = async (id) => {
+    if (!window.confirm("Delete this saved visual strategy? This cannot be undone.")) return;
+    setBusyId(id);
+    setMessage(null);
+    try {
+      const response = await authFetch(`/api/visual-strategies/${id}`, { method: "DELETE" });
+      if (!response.ok) {
+        setMessage({ error: "Could not delete this visual strategy." });
+        return;
+      }
+      setMessage({ success: "Visual strategy deleted." });
+      if (editingId === id) setEditingId(null);
+      loadSaved();
+    } catch (err) {
+      console.error("[VisualBuilder] Delete failed:", err);
+      setMessage({ error: "Could not connect to the server. Nothing was deleted." });
+    } finally {
+      setBusyId(null);
     }
   };
 
@@ -70,8 +136,8 @@ export default function VisualBuilder() {
       <section className="space-y-4 border border-slate-800 bg-surface-900/70 p-5"><div className="flex items-center justify-between"><h2 className="text-sm font-bold text-white">Entry conditions</h2><button type="button" onClick={() => setConditions([...conditions, { ...blankCondition }])} className="flex items-center gap-1 text-xs font-bold text-emerald-400"><Plus size={14} /> Add rule</button></div>{conditions.map((condition, index) => <div key={index} className="grid gap-2 md:grid-cols-[1fr_1fr_110px_90px_auto]"><select value={condition.indicator} onChange={(e) => updateCondition(index, "indicator", e.target.value)} className="select-field text-xs"><option value="RSI">RSI</option><option value="VWAP">VWAP</option><option value="PRICE">Price</option><option value="TIME">Time</option></select><select value={condition.operator} onChange={(e) => updateCondition(index, "operator", e.target.value)} className="select-field text-xs"><option value="gt">Greater than</option><option value="lt">Less than</option><option value="cross_above">VWAP crossover above</option><option value="cross_below">VWAP crossover below</option><option value="eq">Equals</option></select><input type={condition.indicator === "TIME" ? "time" : "number"} value={condition.value} onChange={(e) => updateCondition(index, "value", e.target.value)} className="input-field text-xs" /><input type="number" min="1" value={condition.period} onChange={(e) => updateCondition(index, "period", e.target.value)} className="input-field text-xs" /><button type="button" onClick={() => setConditions(conditions.filter((_, i) => i !== index))} className="p-2 text-slate-500 hover:text-rose-400" title="Remove rule"><Trash2 size={15} /></button></div>)}</section>
       <section className="space-y-4 border border-slate-800 bg-surface-900/70 p-5"><div className="flex items-center justify-between"><h2 className="text-sm font-bold text-white">Option legs</h2><button type="button" onClick={() => setLegs([...legs, { type: "CE", strike: "ATM", action: "BUY", lots: 1 }])} className="flex items-center gap-1 text-xs font-bold text-emerald-400"><Plus size={14} /> Add leg</button></div>{legs.map((leg, index) => <div key={index} className="grid gap-2 md:grid-cols-[1fr_1fr_1fr_100px_auto]"><select value={leg.type} onChange={(e) => updateLeg(index, "type", e.target.value)} className="select-field text-xs"><option>CE</option><option>PE</option></select><select value={leg.strike} onChange={(e) => updateLeg(index, "strike", e.target.value)} className="select-field text-xs"><option>ATM</option><option>OTM1</option><option>OTM2</option><option>ITM1</option></select><select value={leg.action} onChange={(e) => updateLeg(index, "action", e.target.value)} className="select-field text-xs"><option>BUY</option><option>SELL</option></select><input type="number" min="1" value={leg.lots} onChange={(e) => updateLeg(index, "lots", e.target.value)} className="input-field text-xs" placeholder="Lots" /><button type="button" onClick={() => setLegs(legs.filter((_, i) => i !== index))} className="p-2 text-slate-500 hover:text-rose-400" title="Remove leg"><Trash2 size={15} /></button></div>)}</section>
       <section className="grid gap-4 border border-slate-800 bg-surface-900/70 p-5 sm:grid-cols-2"><label className="text-xs text-slate-400">Target profit (₹)<input type="number" min="0" value={targetProfit} onChange={(e) => setTargetProfit(Number(e.target.value))} className="input-field mt-1" /></label><label className="text-xs text-slate-400">Maximum loss (₹)<input type="number" min="0" value={maxLoss} onChange={(e) => setMaxLoss(Number(e.target.value))} className="input-field mt-1" /></label></section>
-      <div className="flex justify-end"><button type="submit" className="btn-primary flex items-center gap-2"><Save size={15} /> Save visual strategy</button></div>
-      {saved.length > 0 && <section className="border-t border-white/[0.06] pt-5"><h2 className="mb-3 text-sm font-bold text-white">Saved visual strategies</h2><div className="grid gap-2 sm:grid-cols-2">{saved.map((item) => <div key={item.id} className="flex items-center justify-between border border-slate-800 bg-surface-900/60 px-3 py-3 text-xs"><span className="font-semibold text-slate-200">{item.name}<small className="ml-2 text-slate-500">{item.underlying}</small></span><Play size={14} className={item.is_active ? "text-emerald-400" : "text-slate-600"} /></div>)}</div></section>}
+      <div className="flex justify-end"><button type="submit" className="btn-primary flex items-center gap-2"><Save size={15} /> {editingId ? "Update visual strategy" : "Save visual strategy"}</button></div>
+      {saved.length > 0 && <section className="border-t border-white/[0.06] pt-5"><div className="mb-3 flex items-center justify-between"><h2 className="text-sm font-bold text-white">Saved visual strategies</h2><small className="text-[11px] text-slate-500">{saved.length} total</small></div><div className="grid gap-2 sm:grid-cols-2">{saved.map((item) => <div key={item.id} className={`flex items-center justify-between gap-2 border border-slate-800 bg-surface-900/60 px-3 py-3 text-xs ${editingId === item.id ? "border-emerald-400/50" : ""}`}><div className="min-w-0"><div className="font-semibold text-slate-200">{item.name}{item.is_active && <span className="ml-2 rounded bg-emerald-400/10 px-1.5 py-0.5 text-[10px] font-bold text-emerald-400">ACTIVE</span>}</div><small className="text-slate-500">{item.underlying} · {item.mode}</small></div><div className="flex items-center gap-1.5 shrink-0"><button type="button" onClick={() => loadStrategy(item)} disabled={busyId === item.id} className="p-1.5 text-slate-400 hover:text-cyan-400 disabled:opacity-40" title="Load into editor"><Layers3 size={14} /></button><button type="button" onClick={() => toggleActive(item)} disabled={busyId === item.id} className={`p-1.5 disabled:opacity-40 ${item.is_active ? "text-emerald-400" : "text-slate-500 hover:text-emerald-400"}`} title={item.is_active ? "Pause strategy" : "Deploy / enable strategy"}><Play size={14} /></button><button type="button" onClick={() => handleDelete(item.id)} disabled={busyId === item.id} className="p-1.5 text-slate-500 hover:text-rose-400 disabled:opacity-40" title="Delete strategy"><Trash2 size={14} /></button></div></div>)}</div></section>}
     </form>
   );
 }
