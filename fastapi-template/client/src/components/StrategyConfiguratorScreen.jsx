@@ -1,29 +1,45 @@
 import { useState } from "react";
-import { Sliders, Shield, CheckCircle2 } from "lucide-react";
+import { Sliders, Shield, CheckCircle2, AlertCircle, Info } from "lucide-react";
+import { useToast } from "./Toast";
 
 export default function StrategyConfiguratorScreen({ strategy, onSave, onCancel }) {
+  const toast = useToast();
   const [multiplier, setMultiplier] = useState(1.0);
   const [maxPositions, setMaxPositions] = useState(5);
   const [stopLossPct, setStopLossPct] = useState(2.0);
   const [takeProfitPct, setTakeProfitPct] = useState(5.0);
   const [trailingStop, setTrailingStop] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
 
-  const handleSave = (e) => {
+  const handleSave = async (e) => {
     e.preventDefault();
+    if (!strategy?.id) {
+      setSaveError("This strategy is not persisted yet — save it via the builder first.");
+      return;
+    }
     setIsSaving(true);
-    setTimeout(() => {
-      if (onSave) {
-        onSave({
-          multiplier,
-          maxPositions,
-          stopLossPct,
-          takeProfitPct,
-          trailingStop,
-        });
-      }
+    setSaveError(null);
+    try {
+      // onSave is an async backend-backed callback: it PATCHes the strategy
+      // record and only resolves after the server confirms the update.
+      await onSave({
+        multiplier: Number(multiplier) || 1,
+        maxPositions: Number(maxPositions) || 5,
+        stopLossPct: Number(stopLossPct) || 2,
+        takeProfitPct: Number(takeProfitPct) || 5,
+        trailingStop: Boolean(trailingStop),
+      });
+      toast.success(`Configuration saved for "${strategy.name}"`, {
+        description: "Risk-gating parameters staged for the deployment engine.",
+      });
+    } catch (err) {
+      const msg = err?.message || "Failed to save configuration";
+      setSaveError(msg);
+      toast.error("Configuration save failed", { description: msg });
+    } finally {
       setIsSaving(false);
-    }, 500);
+    }
   };
 
   return (
@@ -119,6 +135,23 @@ export default function StrategyConfiguratorScreen({ strategy, onSave, onCancel 
           onChange={(e) => setTrailingStop(e.target.checked)}
           className="h-4 w-4 rounded border-slate-700 bg-surface-900 text-accent-500"
         />
+      </div>
+
+      {saveError && (
+        <div className="flex items-start gap-2 p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs">
+          <AlertCircle size={14} className="shrink-0 mt-0.5" />
+          <span>{saveError}</span>
+        </div>
+      )}
+
+      <div className="p-3 rounded-lg bg-surface-800/80 border border-white/[0.04] text-[10px] text-slate-400 leading-relaxed flex items-start gap-2">
+        <Info size={13} className="shrink-0 mt-0.5 text-cyan-400" />
+        <span>
+          The order <strong className="text-slate-200">multiplier</strong> scales this strategy's allocated capital
+          (₹{Number(strategy?.capital_allocated ?? 0).toLocaleString("en-IN")} → updated value) and is persisted to the
+          backend. Stop-loss / take-profit / position-cap rules are staged here and enforced by the deployment engine
+          on the strategy's next execution cycle.
+        </span>
       </div>
 
       <div className="flex items-center justify-end gap-3 pt-3 border-t border-white/[0.06]">

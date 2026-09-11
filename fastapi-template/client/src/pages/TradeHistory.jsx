@@ -130,18 +130,19 @@ export default function TradeHistory() {
                 <th className="pb-3 font-medium">Side</th>
                 <th className="pb-3 font-medium">Quantity</th>
                 <th className="pb-3 font-medium text-right">Execution Price</th>
+                <th className="pb-3 font-medium text-right">P&L</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/[0.02]">
               {loading ? (
                 <tr>
-                  <td colSpan="6" className="py-8 text-center text-slate-500">
+                  <td colSpan="7" className="py-8 text-center text-slate-500">
                     Loading trade records...
                   </td>
                 </tr>
               ) : trades?.length === 0 ? (
                 <tr>
-                  <td colSpan="6" className="py-8 text-center text-slate-500">
+                  <td colSpan="7" className="py-8 text-center text-slate-500">
                     No trades found matching criteria.
                   </td>
                 </tr>
@@ -159,6 +160,15 @@ export default function TradeHistory() {
                     <td className="py-3 font-mono text-slate-200">{t.quantity}</td>
                     <td className="py-3 text-right font-mono font-medium text-white">
                       ₹{Number(t.price).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                    </td>
+                    <td className="py-3 text-right font-mono font-semibold">
+                      {t.pnl != null ? (
+                        <span className={Number(t.pnl) >= 0 ? "text-profit-400" : "text-loss-400"}>
+                          {Number(t.pnl) >= 0 ? "+" : ""}₹{Number(t.pnl).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                        </span>
+                      ) : (
+                        <span className="text-slate-600">—</span>
+                      )}
                     </td>
                   </tr>
                 ))

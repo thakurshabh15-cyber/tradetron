@@ -74,9 +74,15 @@ export const useTradeStore = create((set, get) => ({
         throw new Error(data.detail || data.error || "Order execution failed");
       }
 
-      // Refresh positions & trades
+      // Sync paper balance from backend response (authoritative source)
+      if (data.paper_balance !== undefined) {
+        useAuthStore.getState().setPaperBalance(data.paper_balance);
+      }
+
+      // Refresh positions, trades & trade stats
       get().fetchPositions();
       get().fetchTrades();
+      get().fetchTradeStats();
       set({ isPlacingOrder: false });
 
       return data;

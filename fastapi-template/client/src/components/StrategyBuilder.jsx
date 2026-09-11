@@ -350,17 +350,22 @@ function StrategyBuilderComponent({ onSubmit, isSubmitting }) {
         }`}
       >
         {isSubmitting ? (
-          "Deploying Strategy..."
+          "Saving Strategy..."
         ) : executionMode === "LIVE" ? (
           <>
-            <Zap size={14} /> Deploy to LIVE Broker Account
+            <Zap size={14} /> Save & Arm for LIVE Execution
           </>
         ) : (
           <>
-            <ShieldCheck size={14} /> Deploy to Paper Trading Engine
+            <ShieldCheck size={14} /> Save & Enable Paper Strategy
           </>
         )}
       </button>
+      <p className="text-center text-[10px] text-slate-500 mt-1">
+        {executionMode === "LIVE"
+          ? "Strategy will be saved and ready for live broker deployment."
+          : "Strategy saved and enabled — deploy from the Strategy Portfolio below to activate paper execution."}
+      </p>
     </form>
   );
 }
