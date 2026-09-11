@@ -1,6 +1,13 @@
 import React from "react";
-import { Award, TrendingUp } from "lucide-react";
+import { Award, TrendingUp, TrendingDown } from "lucide-react";
 import { ErrorState } from "./SkeletonLoaders";
+
+/** Pick the correct currency symbol based on the strategy's traded instruments. */
+function strategyCurrency(strat) {
+  const syms = (strat?.symbols || []).map((s) => String(s).toUpperCase());
+  const isINR = syms.some((s) => /NIFTY|BANKNIFTY|FINNIFTY|SENSEX|RELIANCE|TCS|GOLD|CRUDE|INR|INFY|HDFCBANK/.test(s));
+  return isINR ? "₹" : "$";
+}
 
 function TopStrategiesCardComponent({ strategies = [], loading = false, error = null, onRetry = null }) {
   if (error) {
@@ -86,12 +93,17 @@ function TopStrategiesCardComponent({ strategies = [], loading = false, error = 
             </div>
 
             <div className="text-right">
-              <div className="flex items-center justify-end gap-1 text-xs font-bold text-emerald-400 font-mono">
-                <TrendingUp size={12} />
-                +${strat.pnl ? strat.pnl.toLocaleString() : "0.00"}
+              <div
+                className={`flex items-center justify-end gap-1 text-xs font-bold font-mono ${
+                  (strat.pnl || 0) >= 0 ? "text-emerald-400" : "text-rose-400"
+                }`}
+              >
+                {(strat.pnl || 0) >= 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+                {(strat.pnl || 0) >= 0 ? "+" : "-"}
+                {strategyCurrency(strat)}${Math.abs(strat.pnl || 0).toLocaleString()}
               </div>
               <span className="text-[10px] text-slate-500 font-mono">
-                Net Alpha
+                Net P&L
               </span>
             </div>
           </div>
