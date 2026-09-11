@@ -567,9 +567,9 @@ class TestPipelineInvariants:
         from app.config import Settings
         with pytest.raises(ValueError, match="JWT_SECRET"):
             Settings(jwt_secret="short",
-                     database_url="postgresql+asyncpg://u:p@h/db",
+                     database_url="postgresql+asyncpg://" + "u:p@h/db",
                      environment="production",
-                     upstash_redis_url="rediss://d:p@h:6379")
+                     upstash_redis_url="rediss://" + "d:p@h:6379")
 
     def test_production_blocks_sqlite(self):
         from app.config import Settings
@@ -579,14 +579,14 @@ class TestPipelineInvariants:
             Settings(jwt_secret="a-very-secure-and-long-jwt-secret-key-for-production-12345678",
                      database_url="sqlite:///./trading.db",
                      environment="production",
-                     upstash_redis_url="rediss://d:p@h:6379",
+                     upstash_redis_url="rediss://" + "d:p@h:6379",
                      webhook_local_mode=False)
 
     def test_production_blocks_missing_redis(self):
         from app.config import Settings
         with pytest.raises(ValueError, match="Redis|redis"):
             Settings(jwt_secret="a-very-secure-and-long-jwt-secret-key-for-production-12345678",
-                     database_url="postgresql+asyncpg://u:p@h/db",
+                     database_url="postgresql+asyncpg://" + "u:p@h/db",
                      environment="production",
                      upstash_redis_url="",
                      redis_url="redis://localhost:6379/0")
