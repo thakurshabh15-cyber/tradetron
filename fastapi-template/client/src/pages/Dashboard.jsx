@@ -720,7 +720,10 @@ export default function Dashboard() {
       {/* ── 3-COLUMN INSTITUTIONAL TRADING TERMINAL ────────── */}
       <div className="grid gap-6 lg:grid-cols-12 items-start">
         {/* Left Column: Live Chart + Execution Log (8 Cols on Desktop) */}
-        <div className="lg:col-span-8 space-y-6">
+        {/* min-w-0 lets the column shrink below its widest child's min-content
+            (e.g. the OptionChain's min-w-[820px] table scrolls inside its own
+            overflow-x-auto wrapper instead of forcing the grid and being clipped). */}
+        <div className="lg:col-span-8 space-y-6 min-w-0">
           {/* Live Candlestick & Technical DMA Chart */}
           <div className="glass-card p-4 space-y-3">
             <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
@@ -783,7 +786,7 @@ export default function Dashboard() {
         </div>
 
         {/* Right Column: Fast DMA Order Panel + Risk Sentinel + Strategies (4 Cols on Desktop) */}
-        <div className="lg:col-span-4 space-y-6">
+        <div className="lg:col-span-4 space-y-6 min-w-0">
           {/* Direct Market Access (DMA) Fast Order Panel */}
           <ErrorBoundary>
             <OrderTerminal

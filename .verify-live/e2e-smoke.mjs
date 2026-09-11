@@ -329,6 +329,53 @@ function step(name, ok, detail = "") {
     await page.screenshot({ path: `${SHOT_DIR}08-broker-sessions.png`, fullPage: true });
 
     // 10. PAPER ORDER + POSITION CLOSE
+// Deterministic leftover-state cleanup for the shared OTP-legacy account:
+    // registration cannot complete in prod, so EVERY run signs in as
+    // e2esmoke1789018271@tt-e2e.in — an OPEN position abandoned by an
+    // interrupted previous run would otherwise keep the panel non-empty even
+    // after THIS run's own position closes, making the empty-state assertion
+    // inherit a different run's book. Close every OPEN position via the API
+    // now (same pattern as the watchlist cleanup below), then wait until the
+    // backend reports zero OPEN positions. The dashboard is mounted AFTER
+    // this, so the panel starts from a deterministic zero-position book.
+    const posCleanup = await page.evaluate(async (api) => {
+      const token = localStorage.getItem("tradetron_access_token") || "";
+      const headers = { Authorization: `Bearer ${token}` };
+      const listRes = await fetch(`${api}/api/trades/positions`, { headers });
+      if (!listRes.ok) return { error: `list ${listRes.status}` };
+      const positions = await listRes.json();
+      if (!Array.isArray(positions)) return { error: "non-array-list", raw: positions };
+      const closed = [];
+      for (const p of positions) {
+        const r = await fetch(`${api}/api/trades/positions/${encodeURIComponent(p.id)}/close`, {
+          method: "POST",
+          headers,
+        });
+        closed.push(`${p.symbol}:${p.id.slice(0, 8)}:${p.status}:${r.status}`);
+      }
+      return { before: positions.length, results: closed };
+    }, API);
+    const zeroOpenBefore = await page
+      .waitForFunction(
+        async (api) => {
+          const token = localStorage.getItem("tradetron_access_token") || "";
+          const res = await fetch(`${api}/api/trades/positions`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (!res.ok) return false;
+          const data = await res.json();
+          return Array.isArray(data) && data.length === 0;
+        },
+        API,
+        { timeout: 30000, polling: 750 }
+      )
+      .then(() => true)
+      .catch(() => false);
+    step(
+      "Positions: deterministic setup — zero OPEN positions before journey",
+      zeroOpenBefore,
+      JSON.stringify(posCleanup)
+    );
     await page.goto(`${BASE}/dashboard`, { waitUntil: "domcontentloaded", timeout: 60000 });
     await page.waitForSelector("text=Institutional DMA Terminal", { timeout: 25000 });
     await page.waitForTimeout(1500);
@@ -356,12 +403,46 @@ function step(name, ok, detail = "") {
         .catch(() => false);
       step("Positions: Close action available", closeVisible, closeVisible ? "Close button visible in panel" : "Close button not found in panel");
       if (closeVisible) {
+        // Deterministic wait sequence (no arbitrary sleep):
+        //   1) the close API responds 2xx, 2) the positions API reports zero
+        // OPEN positions, 3) THEN the empty-state UI must render.
+        // Waiting on the UI text alone proves neither close HTTP success nor
+        // backend convergence; each transition is awaited in order so a stale
+        // panel, a failed close, or a refetch race is reported precisely.
+        const closeResp = page
+          .waitForResponse(
+            (r) => r.request().method() === "POST" && /\/api\/trades\/positions\/[^/]+\/close$/.test(r.url()),
+            { timeout: 30000 }
+          )
+          .catch(() => null);
         await closeBtn.click();
-        const closed = await page
-          .waitForSelector("text=No Open Positions", { state: "visible", timeout: 30000 })
+        const closeRes = await closeResp;
+        const zeroOpen = await page
+          .waitForFunction(
+            async (api) => {
+              const token = localStorage.getItem("tradetron_access_token") || "";
+              const res = await fetch(`${api}/api/trades/positions`, {
+                headers: { Authorization: `Bearer ${token}` },
+              });
+              if (!res.ok) return false;
+              const data = await res.json();
+              return Array.isArray(data) && data.length === 0;
+            },
+            API,
+            { timeout: 30000, polling: 750 }
+          )
           .then(() => true)
           .catch(() => false);
-        step("Positions: position closed and panel shows empty state", closed);
+        const emptyUi = await page
+          .waitForSelector("text=No Open Positions", { state: "visible", timeout: 15000 })
+          .then(() => true)
+          .catch(() => false);
+        const closed = !!closeRes && closeRes.status() === 200 && zeroOpen && emptyUi;
+        step(
+          "Positions: position closed and panel shows empty state",
+          closed,
+          `closeHttp=${closeRes ? closeRes.status() : "none"} zeroOpen=${zeroOpen} emptyUi=${emptyUi}`
+        );
       }
     }
     await page.screenshot({ path: `${SHOT_DIR}09-paper-order.png`, fullPage: true });
