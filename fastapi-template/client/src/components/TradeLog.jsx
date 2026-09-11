@@ -16,14 +16,16 @@ const TradeItem = React.memo(function TradeItem({ trade }) {
             {trade.symbol}
           </div>
           <div className="text-[11px] text-slate-400">
-            {trade.strategy_name || "SMA Strategy"}
+            {trade.strategy_name || "—"}
           </div>
         </div>
       </div>
 
       <div className="text-right">
         <div className="font-mono font-medium text-white">
-          {trade.quantity} @ ₹{Number(trade.price || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+          {trade.quantity} @ {Number(trade.price) > 0
+            ? `₹${Number(trade.price).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`
+            : "awaiting fill price"}
         </div>
         <div className="text-[10px] text-slate-500">
           {trade.executed_at
