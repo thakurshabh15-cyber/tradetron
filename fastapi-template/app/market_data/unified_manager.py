@@ -9,7 +9,7 @@ from typing import Any, Optional
 from app.core.logging import get_logger
 from app.market_data.base import AssetClass, BaseMarketDataProvider, DataFeedMode, NormalizedTick
 from app.market_data.manager import ws_manager
-from app.market_data.providers.crypto import CryptoMarketDataProvider
+from app.market_data.providers.crypto_stream import CryptoStreamMarketDataProvider
 from app.market_data.providers.forex import ForexMarketDataProvider
 from app.market_data.providers.indian_equity import IndianEquityMarketDataProvider
 
@@ -39,7 +39,14 @@ class UnifiedMarketDataManager:
             client_code=settings.angel_client_code if equity_live else None,
             use_live_feed=equity_live,
         )
-        crypto_provider = CryptoMarketDataProvider(use_live_feed=crypto_live)
+        # Phase 15A: use genuine Binance WebSocket streaming when crypto live,
+        # fall back to CoinGecko REST polling when demo.
+        if crypto_live:
+            crypto_provider: BaseMarketDataProvider = CryptoStreamMarketDataProvider(
+                use_live_feed=True,
+            )
+        else:
+            crypto_provider = CryptoStreamMarketDataProvider(use_live_feed=False)
         forex_provider = ForexMarketDataProvider(use_live_feed=forex_live)
 
         self._providers: dict[AssetClass, BaseMarketDataProvider] = {
@@ -60,7 +67,7 @@ class UnifiedMarketDataManager:
         logger.info(
             "Market Data Hub configured — Equity: %s, Crypto: %s, Forex: %s",
             "LIVE" if equity_live else "DEMO",
-            "LIVE (CoinGecko)" if crypto_live else "DEMO",
+            "LIVE (Binance WS)" if crypto_live else "DEMO (Binance WS)",
             "DEMO (always)",
         )
 
@@ -273,10 +280,22 @@ class UnifiedMarketDataManager:
                 status = "DEGRADED"
             else:
                 status = "HEALTHY"
+            # Honest six-state feed classification (Phase 15A): providers that
+            # expose classify_feed_state() report LIVE/DELAYED/STALE/DEMO/MOCK/
+            # UNAVAILABLE instead of an opaque banner.
+            feed_state = None
+            classifier = getattr(provider, "classify_feed_state", None)
+            if callable(classifier):
+                try:
+                    candidate = classifier()
+                    feed_state = candidate.value if hasattr(candidate, "value") else str(candidate)
+                except Exception:  # noqa: BLE001 - classifier never breaks status
+                    feed_state = None
             result.append({
                 "provider_name": provider.name,
                 "asset_class": provider.asset_class.value,
                 "feed_mode": provider.feed_mode.value,
+                "feed_state": feed_state,
                 "data_source": getattr(provider, "data_source", "Standard Feed"),
                 "is_active": is_active,
                 "subscribed_symbols_count": len(provider._subscribers),

@@ -519,6 +519,28 @@ class TradingEngine:
         # ── 2. Live Multi-Broker Client & Margin Gating ──────────────
         target_broker = self._broker
         if mode == "LIVE":
+            # ── 2a. REALTIME FEED GATE (Phase 15A) ────────────────────
+            # LIVE money must never be dispatched against a feed that is
+            # demo/simulated, delayed, stale, or missing entirely.  Fail-closed:
+            # if the quote cannot be PROVEN to be a fresh genuine exchange feed,
+            # the order is rejected, never blind-dispatched.
+            gate_reason = self._feed_gate_for_live(symbol)
+            if gate_reason:
+                logger.error("[LIVE] Order blocked by feed gate: %s", gate_reason)
+                await self._persist_rejected_order(
+                    strategy.get("id"), user_id, broker_account_id,
+                    symbol, side_str, quantity, price, mode, gate_reason,
+                )
+                await ws_manager.broadcast_user("trades", user_id, {
+                    "event": "order_rejected",
+                    "strategy_id": strategy.get("id"),
+                    "symbol": symbol,
+                    "reason": gate_reason,
+                    "mode": mode,
+                    "user_id": user_id,
+                })
+                return
+
             from app.models.broker_account import BrokerAccountRecord
             from app.brokers.zerodha import ZerodhaKiteBroker
             from app.brokers.upstox import UpstoxBroker
@@ -598,7 +620,7 @@ class TradingEngine:
                 logger.error("[LIVE] %s", err_msg)
                 await self._persist_rejected_order(strategy.get("id"), user_id, broker_account_id, symbol, side_str, quantity, price, mode, err_msg)
                 return
-            # ── 2a. Durable PENDING claim BEFORE broker dispatch ──────────
+            # ── 2b. Durable PENDING claim BEFORE broker dispatch ──────────
             # Mirror the hardened manual/DMA entry: commit a keyed PENDING
             # OrderRecord so a crash after broker acceptance is always
             # recoverable by reconciliation.  The key is derived from the
@@ -715,6 +737,52 @@ class TradingEngine:
         )
 
     # ── LIVE durable-claim helpers ────────────────────────────────────────────
+
+    def _feed_gate_for_live(self, symbol: str) -> Optional[str]:
+        """Fail-closed feed gate for LIVE execution.
+
+        Returns ``None`` (allow) only when the current quote for ``symbol`` is a
+        fresh, genuine exchange feed (``data_status == LIVE``).  Returns a
+        human-readable rejection reason for demo/delayed/stale/mock/missing feeds
+        so real money is never dispatched on speculative data.
+        """
+        try:
+            from app.market_data.unified_manager import unified_market_manager
+
+            quote = unified_market_manager.get_quote(symbol)
+        except Exception as exc:  # noqa: BLE001 - gate must never raise
+            logger.error("[LIVE] Feed gate lookup failed for %s: %s", symbol, exc)
+            return f"Feed gate unavailable — order rejected for safety: {exc}"
+
+        if quote is None:
+            return (
+                f"No market data for {symbol} — LIVE execution requires a "
+                "genuine real-time feed"
+            )
+
+        feed_mode = quote.get("feed_mode", "")
+        data_status = quote.get("data_status", "UNKNOWN")
+
+        if feed_mode == "DEMO_SIMULATED":
+            return (
+                f"Feed for {symbol} is DEMO/SIMULATED — LIVE execution is blocked "
+                "on simulated data"
+            )
+
+        if feed_mode == "MOCK_SIMULATED":
+            return (
+                f"Feed for {symbol} is MOCK/SIMULATED — LIVE execution is blocked "
+                "on mock data"
+            )
+
+        if data_status != "LIVE":
+            return (
+                f"Feed for {symbol} is {data_status} (not LIVE/fresh) — LIVE "
+                "execution is blocked until a genuine real-time feed is restored"
+            )
+
+        return None
+
     async def _claim_strategy_order(
         self,
         *,

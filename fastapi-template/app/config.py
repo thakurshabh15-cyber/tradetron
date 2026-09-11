@@ -284,6 +284,26 @@ class Settings(BaseSettings):
     data_freshness_commodity: float = 60.0
     data_freshness_default: float = 30.0
 
+    # ── Phase 15A: Genuine real-time streaming feeds ───────────────────
+    # Binance Market Streams WebSocket (public market data, no credentials).
+    # Active when feed_mode_crypto=live.  The previous 60-second CoinGecko
+    # REST poll is NOT used as a live substitute; it remains available only
+    # for historical candles and an explicitly labelled DELAYED fallback.
+    crypto_ws_base_url: str = ""  # override, e.g. "wss://stream.binance.com:9443/ws"
+    crypto_ws_stale_after: float = 15.0  # seconds without a tick before STALE
+    crypto_ws_heartbeat_interval: float = 20.0
+    crypto_ws_heartbeat_deadline: float = 60.0
+    # When True and the Binance stream cannot be reached, the provider serves
+    # CoinGecko polls labelled feed_state=DELAYED — never LIVE.  Default False:
+    # an unreachable stream reports UNAVAILABLE instead.
+    crypto_ws_fallback_coingecko_delayed: bool = False
+
+    # Angel One SmartStream — broker-provided Indian equity stream.
+    angel_smartstream_ws_url: str = ""  # override default wss://smartapisocket.angelone.in/smart-stream
+    # Live SmartStream session JWT (obtained from a real Angel One login).
+    # Operational blocker B-5: absent until sandbox credentials are provided.
+    angel_jwt_token: str = ""
+
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",
         env_file_encoding="utf-8",

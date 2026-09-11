@@ -24,6 +24,8 @@ from app.models.broker_account import BrokerAccountRecord
 from app.models.trading import OrderRecord, PositionRecord, TradeRecord
 from app.models.user import UserRecord
 
+from tests._feed_helpers import seed_live_quote
+
 
 @pytest.fixture(autouse=True)
 async def _reset_db_and_restore_mode():
@@ -143,6 +145,9 @@ async def test_live_entry_crash_recovered_by_window_c(monkeypatch):
         "execution_mode": "LIVE", "symbols": ["RELIANCE"], "enabled": True,
         "user_id": uid, "broker_account_id": broker_id,
     }
+
+    # Phase 15A realtime feed gate: the LIVE path needs a fresh live quote.
+    seed_live_quote("RELIANCE", 2500.0)
 
     with pytest.raises(SystemExit):
         await engine._execute_signal(strategy, "RELIANCE", 2500.0)
@@ -273,6 +278,9 @@ async def test_duplicate_signal_no_double_dispatch(monkeypatch):
         "execution_mode": "LIVE", "symbols": ["RELIANCE"], "enabled": True,
         "user_id": uid, "broker_account_id": broker_id,
     }
+
+    # Phase 15A realtime feed gate: the LIVE path needs a fresh live quote.
+    seed_live_quote("RELIANCE", 2500.0)
 
     await engine._execute_signal(strategy, "RELIANCE", 2500.0)
     assert len(dispatched) == 1, "first call dispatches once"

@@ -86,13 +86,20 @@ async def get_historical_candles(
 async def get_providers_status():
     """Retrieve operational status, data source vendor, and live vs demo modes for all providers."""
     providers = unified_market_manager.get_providers_status()
+    # Overall health is derived from the honest per-provider feed_state
+    # (LIVE/DELAYED/STALE/DEMO/MOCK/UNAVAILABLE) plus classic connectivity
+    # fields.  Fail-closed: any UNAVAILABLE/STALE real feed degrades the hub.
     overall = "HEALTHY"
+    feed_states = {p.get("feed_state") for p in providers if p.get("feed_state")}
     if any(p.get("status") == "STOPPED" for p in providers):
+        overall = "DEGRADED"
+    elif "UNAVAILABLE" in feed_states or "STALE" in feed_states or "DELAYED" in feed_states:
         overall = "DEGRADED"
     elif any(p.get("status") == "DEGRADED" for p in providers):
         overall = "DEGRADED"
     return {
         "status": overall,
+        "feed_states": sorted(s for s in feed_states if s),
         "providers": providers,
         "disclaimer": (
             "Demo/simulated feeds are active for non-credentialed providers. "

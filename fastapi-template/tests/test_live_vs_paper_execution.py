@@ -13,6 +13,8 @@ from app.models.broker_account import BrokerAccountRecord
 from app.db.session import init_db, SessionLocal
 from sqlalchemy import desc, select
 
+from tests._feed_helpers import seed_live_quote
+
 
 @pytest.mark.asyncio
 async def test_live_vs_paper_mode_strategy_lifecycle():
@@ -129,6 +131,11 @@ async def test_live_order_execution_and_margin_rejection():
     # every other test.
     from app.config import settings as _settings
     _settings.broker_mode = "live"
+
+    # Phase 15A realtime feed gate: LIVE execution also requires a fresh,
+    # genuinely-live quote for the symbol (this test exercises the margin gate,
+    # which sits AFTER the feed gate).
+    seed_live_quote("RELIANCE", 2500.0)
 
     # 1. Connect a live Zerodha broker in DB
     async with SessionLocal() as session:

@@ -146,10 +146,14 @@ def test_provider_status_endpoint_has_crypto():
             data = res.json()
             providers = data["providers"]
             crypto = next(
-                (p for p in providers if p["provider_name"] == "CryptoMarketProvider"),
+                (p for p in providers if p["provider_name"] in (
+                    "CryptoStreamMarketProvider", "CryptoMarketProvider",
+                )),
                 None,
             )
-            assert crypto is not None, "CryptoMarketProvider must appear in providers/status"
+            assert crypto is not None, (
+                "CryptoStreamMarketProvider must appear in providers/status"
+            )
             assert crypto["feed_mode"] in {"PUBLIC_EXCHANGE_STREAM", "DEMO_SIMULATED"}
             assert "data_source" in crypto
             return crypto
