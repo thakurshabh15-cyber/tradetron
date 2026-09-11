@@ -120,6 +120,12 @@ export default function BacktestLab() {
       {/* ── Results ── */}
       {report && !report.error && m.total_trades !== undefined && (
         <>
+          {report.demo && (
+            <div className="flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-300">
+              <span className="font-bold uppercase tracking-wider shrink-0">⚠ Offline Demo</span>
+              <span>{report.demo_reason || "Backend unreachable — deterministic, non-binding offline simulation."}</span>
+            </div>
+          )}
           <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
             <Metric label="Net P&L" value={`₹${Number(m.net_pnl).toLocaleString("en-IN")}`} tone={m.net_pnl >= 0 ? "good" : "bad"} />
             <Metric label="Win Rate" value={`${m.win_rate_pct}%`} sub={`${m.wins}W / ${m.losses}L`} />

@@ -91,6 +91,8 @@ export function simulateBacktest(form = {}) {
 
   return {
     error: null,
+    demo: true,
+    demo_reason: "Backend unreachable — deterministic, non-binding offline simulation.",
     symbol,
     timeframe,
     bars,
