@@ -30,6 +30,7 @@ import {
   Plus,
   Sparkles,
   X,
+  Minus,
 } from "lucide-react";
 
 const ASSET_CLASSES = [
@@ -246,58 +247,51 @@ export default function Dashboard() {
     }
   };
 
-  // Dynamic Real-time Calculations from Live Market Pipeline with bulletproof fallbacks
+  // Dynamic Real-time Calculations from Live Market Pipeline.
+  // STRICT REAL-DATA-ONLY: when the feed has no quotes the result is `null`
+  // (UI renders an honest "awaiting feed" state). No fabricated average,
+  // gainers/losers, or volume is ever invented.
   const liveMarketStats = useMemo(() => {
     const quotes = Object.values(liveMarketMap || {}).filter(Boolean);
-    if (!quotes || quotes.length === 0) {
-      return {
-        avgChangePct: 0.85,
-        topGainer: { symbol: "NIFTY50", change_pct: 1.25 },
-        topLoser: { symbol: "USDINR", change_pct: -0.15 },
-        totalVolume: 12500000,
-      };
-    }
+    if (!quotes || quotes.length === 0) return null;
 
     let sumChange = 0;
-    let maxGainer = quotes[0] || { symbol: "NIFTY50", change_pct: 1.25 };
-    let maxLoser = quotes[0] || { symbol: "USDINR", change_pct: -0.15 };
+    let maxGainer = quotes[0];
+    let maxLoser = quotes[0];
     let totalVol = 0;
 
     for (const q of quotes) {
       if (!q) continue;
       const chg = Number(q.change_pct || 0);
       sumChange += isNaN(chg) ? 0 : chg;
-      totalVol += Number(q.volume || 1000);
+      totalVol += Number(q.volume || 0);
       if (chg > Number(maxGainer.change_pct || 0)) maxGainer = q;
       if (chg < Number(maxLoser.change_pct || 0)) maxLoser = q;
     }
 
-    const avg = quotes.length > 0 ? sumChange / quotes.length : 0.85;
     return {
-      avgChangePct: Number(avg.toFixed(2)),
+      avgChangePct: Number((sumChange / quotes.length).toFixed(2)),
       topGainer: maxGainer,
       topLoser: maxLoser,
       totalVolume: totalVol,
     };
   }, [liveMarketMap]);
 
-  // Live dynamic unrealized return moving with ticks
+  // Portfolio P&L — strictly backend-sourced: realized P&L from the dashboard
+  // summary plus unrealized P&L from the open-positions endpoint. `null` when
+  // neither source is available so the UI shows an honest "—" instead of a
+  // made-up number.
   const liveUnrealizedPnl = useMemo(() => {
-    const basePnl = summaryData?.totalPnl !== undefined && !isNaN(Number(summaryData.totalPnl))
-      ? Number(summaryData.totalPnl)
-      : 14250.0;
-    const avgPct = liveMarketStats?.avgChangePct ?? 0.85;
-    const delta = (avgPct / 100) * 8500.0;
-    return Number((basePnl + delta).toFixed(2));
-  }, [summaryData, liveMarketStats]);
+    if (!summaryData && (!positionsData || positionsData.length === 0)) return null;
+    const realized = Number(summaryData?.totalRealizedPnl) || 0;
+    const unrealized = (positionsData || []).reduce((a, p) => a + (Number(p.unrealized_pnl) || 0), 0);
+    return Number((realized + unrealized).toFixed(2));
+  }, [summaryData, positionsData]);
 
   const weekReturn = useMemo(() => {
-    if (summaryData?.weekReturn !== undefined && !isNaN(Number(summaryData.weekReturn))) {
-      return Number(summaryData.weekReturn);
-    }
-    const avgPct = liveMarketStats?.avgChangePct ?? 0.85;
-    return Number((3.42 + (avgPct * 0.2)).toFixed(2));
-  }, [summaryData, liveMarketStats]);
+    const v = Number(summaryData?.weekReturn);
+    return Number.isFinite(v) ? v : null;
+  }, [summaryData]);
 
   return (
     <div className="space-y-6">
@@ -359,36 +353,51 @@ export default function Dashboard() {
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {/* Live Unrealized Portfolio P&L */}
+          {/* Portfolio P&L — realized + open, strictly backend-sourced */}
           <div className="glass-card-hover p-4 relative overflow-hidden group">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-slate-400">Live Portfolio Alpha</span>
+              <span className="text-xs font-semibold text-slate-400">Portfolio P&L</span>
               <div
                 className={`p-1.5 rounded-lg border ${
-                  liveUnrealizedPnl >= 0
+                  liveUnrealizedPnl != null && liveUnrealizedPnl >= 0
                     ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
-                    : "bg-rose-500/10 text-rose-400 border-rose-500/20"
+                    : liveUnrealizedPnl != null
+                    ? "bg-rose-500/10 text-rose-400 border-rose-500/20"
+                    : "bg-slate-800 text-slate-500 border-slate-700"
                 }`}
               >
-                {liveUnrealizedPnl >= 0 ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
+                {liveUnrealizedPnl == null ? (
+                  <Minus size={14} />
+                ) : liveUnrealizedPnl >= 0 ? (
+                  <TrendingUp size={14} />
+                ) : (
+                  <TrendingDown size={14} />
+                )}
               </div>
             </div>
             <div className="mt-2 flex items-baseline gap-2">
-              <span
-                className={`text-xl font-bold font-mono tabular-nums transition-colors duration-300 ${
-                  liveUnrealizedPnl >= 0 ? "text-emerald-400" : "text-rose-400"
-                }`}
-              >
-                {liveUnrealizedPnl >= 0 ? "+" : ""}₹{Math.abs(liveUnrealizedPnl).toLocaleString("en-IN", { minimumFractionDigits: 2 })}
-              </span>
-              <span className="text-[10px] text-slate-500 font-mono">
-                ({liveMarketStats.avgChangePct >= 0 ? "+" : ""}
-                {liveMarketStats.avgChangePct}%)
-              </span>
+              {liveUnrealizedPnl != null ? (
+                <>
+                  <span
+                    className={`text-xl font-bold font-mono tabular-nums transition-colors duration-300 ${
+                      liveUnrealizedPnl >= 0 ? "text-emerald-400" : "text-rose-400"
+                    }`}
+                  >
+                    {liveUnrealizedPnl >= 0 ? "+" : "-"}₹{Math.abs(liveUnrealizedPnl).toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-mono">
+                    {liveMarketStats?.avgChangePct != null
+                      ? `(${liveMarketStats.avgChangePct >= 0 ? "+" : ""}${liveMarketStats.avgChangePct}% feed avg)`
+                      : "awaiting feed"}
+                  </span>
+                </>
+              ) : (
+                <span className="text-sm text-slate-500 font-mono">—</span>
+              )}
             </div>
             <div className="mt-1 flex items-center justify-between text-[10px] text-slate-500">
-              <span>Rolling 24h P&L</span>
-              <span className="text-cyan-400 font-mono">Live Tick Sync</span>
+              <span>Realized + open P&L</span>
+              <span className="text-cyan-400 font-mono">Backend-sourced</span>
             </div>
           </div>
 
@@ -401,18 +410,26 @@ export default function Dashboard() {
               </div>
             </div>
             <div className="mt-2 flex items-baseline gap-2">
-              <span className="text-xl font-bold font-mono tabular-nums text-emerald-400">
-                +{weekReturn}%
-              </span>
+              {weekReturn != null ? (
+                <span
+                  className={`text-xl font-bold font-mono tabular-nums ${
+                    weekReturn >= 0 ? "text-emerald-400" : "text-rose-400"
+                  }`}
+                >
+                  {weekReturn >= 0 ? "+" : ""}{weekReturn}%
+                </span>
+              ) : (
+                <span className="text-sm text-slate-500 font-mono">—</span>
+              )}
               <span className="text-[10px] text-slate-500">7-day rolling</span>
             </div>
             <div className="mt-1 flex items-center justify-between text-[10px] text-slate-500">
-              <span>Benchmark vs Nifty</span>
-              <span className="text-emerald-400 font-mono">+1.85% Alpha</span>
+              <span>From executed trades</span>
+              <span className="text-slate-600 font-mono">—</span>
             </div>
           </div>
 
-          {/* Engine Win Rate & Fills */}
+          {/* Engine Win Rate & Executions */}
           <div className="glass-card-hover p-4">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-slate-400">Engine Win Rate</span>
@@ -422,15 +439,17 @@ export default function Dashboard() {
             </div>
             <div className="mt-2 flex items-baseline gap-2">
               <span className="text-xl font-bold font-mono tabular-nums text-white">
-                {summaryData?.winRate ?? 76.4}%
+                {summaryData?.winRate != null ? `${summaryData.winRate}%` : "—"}
               </span>
               <span className="text-[10px] text-slate-500 font-mono">
-                across {summaryData?.totalTrades ?? 18} executions
+                {summaryData?.totalTrades != null
+                  ? `across ${summaryData.totalTrades} executions`
+                  : "no execution data"}
               </span>
             </div>
             <div className="mt-1 flex items-center justify-between text-[10px] text-slate-500">
               <span>Profit Factor</span>
-              <span className="text-cyan-400 font-mono">2.41x</span>
+              <span className="text-slate-600 font-mono">—</span>
             </div>
           </div>
 
@@ -444,14 +463,23 @@ export default function Dashboard() {
             </div>
             <div className="mt-2 flex items-baseline gap-2">
               <span className="text-xl font-bold font-mono text-emerald-400">
-                {summaryData?.engineStatus ?? "OPERATIONAL"}
+                {summaryData?.engineStatus || "—"}
               </span>
-              <span className="text-[10px] text-slate-500 font-mono">0.4ms tick-to-trade</span>
+              <span className="text-[10px] text-slate-500 font-mono">
+                {liveTicksCount > 0 ? `${liveTicksCount.toLocaleString()} ticks` : "awaiting feed"}
+              </span>
             </div>
             <div className="mt-1 flex items-center justify-between text-[10px] text-slate-500">
               <span>Risk Sentinel</span>
-              <span className="text-emerald-400 font-mono flex items-center gap-1">
-                <ShieldCheck size={11} /> Active
+              <span className="text-slate-400 font-mono flex items-center gap-1">
+                {riskData ? (
+                  <>
+                    <ShieldCheck size={11} className={riskData.circuit_breaker_active ? "text-rose-400" : "text-emerald-400"} />
+                    {riskData.circuit_breaker_active ? "TRIGGERED" : "ARMED"}
+                  </>
+                ) : (
+                  "—"
+                )}
               </span>
             </div>
           </div>
