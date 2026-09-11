@@ -5,6 +5,8 @@
  */
 
 import { authFetch } from "./apiClient";
+import { readJsonResponse } from "./api";
+import { apiErrorMessage } from "../utils/apiErrors";
 
 class AlertService {
   constructor() {
@@ -82,25 +84,25 @@ class AlertService {
   }
 
   async createAlert(symbol, condition, targetPrice) {
-    try {
-      const res = await authFetch("/api/watchlist/alerts", {
-        method: "POST",
-        body: JSON.stringify({
-          symbol: symbol.toUpperCase(),
-          condition: condition.toUpperCase(),
-          target_price: Number(targetPrice),
-        }),
-      });
-      if (res.ok) {
-        const newAlert = await res.json();
-        this.alerts.unshift(newAlert);
-        this.notifyListeners();
-        return newAlert;
-      }
-    } catch (err) {
-      console.error("[AlertService] Failed to create alert:", err);
-      throw err;
+    const res = await authFetch("/api/watchlist/alerts", {
+      method: "POST",
+      body: JSON.stringify({
+        symbol: symbol.toUpperCase(),
+        condition: condition.toUpperCase(),
+        target_price: Number(targetPrice),
+      }),
+    });
+    if (!res.ok) {
+      // Fail truthfully: surface the backend's rejection as a real Error so
+      // the caller's catch block shows the failure toast — never a fabricated
+      // "alert created" success when the backend refused to persist it.
+      const body = await readJsonResponse(res);
+      throw new Error(apiErrorMessage(body, `Could not create alert (HTTP ${res.status})`));
     }
+    const newAlert = await res.json();
+    this.alerts.unshift(newAlert);
+    this.notifyListeners();
+    return newAlert;
   }
 
   async deleteAlert(alertId) {
