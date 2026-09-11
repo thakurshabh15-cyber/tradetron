@@ -31,14 +31,41 @@ function RiskGaugeComponent({ riskData, loading = false, error = null, onRetry =
     );
   }
 
-  const data = riskData || {
-    daily_pnl: 0,
-    max_daily_loss: 10000,
-    open_positions: 0,
-    orders_this_minute: 0,
-    max_orders_per_minute: 30,
-    circuit_breaker_active: false,
-  };
+  // Strictly backend-sourced: never claim a "Risk Safe" state the server has
+  // not confirmed. When no risk data is available show an honest empty state
+  // instead of fabricating zeroed-out usage bars.
+  if (!riskData) {
+    return (
+      <div className="glass-card p-4 sm:p-5 flex flex-col justify-between">
+        <div>
+          <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
+            <div className="flex items-center gap-2">
+              <ShieldAlert size={16} className="text-accent-400" />
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-300">
+                Risk & Exposure
+              </h2>
+            </div>
+            <span className="badge-warning">Awaiting data</span>
+          </div>
+          <div className="py-8 text-center">
+            <p className="text-xs text-slate-500">Risk sentinel has not reported yet.</p>
+            <p className="text-[10px] text-slate-600 mt-1">Values appear once the engine streams risk status.</p>
+            {onRetry && (
+              <button
+                type="button"
+                onClick={onRetry}
+                className="mt-3 btn-ghost text-xs"
+              >
+                Retry
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const data = riskData;
 
   const lossUsage = Math.min(
     100,
