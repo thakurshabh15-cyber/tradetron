@@ -21,6 +21,8 @@ import {
   Eye,
 } from "lucide-react";
 import { API_BASE } from "../config";
+import { readJsonResponse } from "../services/api";
+import { apiErrorMessage } from "../utils/apiErrors";
 
 export default function Admin() {
   const [adminToken, setAdminToken] = useState(localStorage.getItem("tradetron_admin_token") || "");
@@ -198,12 +200,17 @@ export default function Admin() {
         headers: authHeaders,
         body: JSON.stringify({ is_active: !currentActive, reason: "Admin console action" }),
       });
-      if (res.ok) {
-        setActionMsg(`User status updated to ${!currentActive ? "Active" : "Suspended"}`);
-        fetchData();
+      if (!res.ok) {
+        const body = await readJsonResponse(res);
+        throw new Error(apiErrorMessage(body, `Status change rejected (HTTP ${res.status})`));
       }
+      setActionMsg(`User status updated to ${!currentActive ? "Active" : "Suspended"}`);
+      toast.success(`User ${!currentActive ? "activated" : "suspended"}`);
+      fetchData();
     } catch (err) {
       console.error(err);
+      setActionMsg(`Status update failed: ${err.message}`);
+      toast.error("User status update failed", { description: err.message });
     }
   };
 
@@ -238,12 +245,17 @@ export default function Admin() {
         headers: authHeaders,
         body: JSON.stringify({ decision, remarks: `SEBI document audit: ${decision}` }),
       });
-      if (res.ok) {
-        setActionMsg(`KYC application marked as ${decision}`);
-        fetchData();
+      if (!res.ok) {
+        const body = await readJsonResponse(res);
+        throw new Error(apiErrorMessage(body, `KYC review rejected (HTTP ${res.status})`));
       }
+      setActionMsg(`KYC application marked as ${decision}`);
+      toast.success(`KYC marked ${decision}`);
+      fetchData();
     } catch (err) {
       console.error(err);
+      setActionMsg(`KYC review failed: ${err.message}`);
+      toast.error("KYC review failed", { description: err.message });
     }
   };
 
