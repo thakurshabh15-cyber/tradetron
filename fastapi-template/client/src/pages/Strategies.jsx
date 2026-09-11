@@ -3,6 +3,7 @@ import StrategyBuilder from "../components/StrategyBuilder";
 import StrategyList from "../components/StrategyList";
 import StrategyWizardScreen from "../components/StrategyWizardScreen";
 import StrategyConfiguratorScreen from "../components/StrategyConfiguratorScreen";
+import DeploymentModal from "../components/DeploymentModal";
 import { useApi } from "../hooks/useApi";
 import { useAuthStore } from "../stores/useAuthStore";
 import { Sliders, Wand2 } from "lucide-react";
@@ -10,6 +11,8 @@ import { Sliders, Wand2 } from "lucide-react";
 export default function Strategies() {
   const [activeTab, setActiveTab] = useState("builder"); // 'builder' | 'wizard' | 'config'
   const [selectedStrategyForConfig, setSelectedStrategyForConfig] = useState(null);
+  const [deployTarget, setDeployTarget] = useState(null);
+  const [isDeployOpen, setIsDeployOpen] = useState(false);
   const currentUserRole = (useAuthStore((state) => state.user?.role) || "").toUpperCase();
   const isAdmin = currentUserRole === "ADMIN" || currentUserRole === "SUPERADMIN";
 
@@ -20,6 +23,7 @@ export default function Strategies() {
     post,
     patch,
     del,
+    refetch,
   } = useApi("/api/strategies");
 
   const handleCreate = async (payload) => {
@@ -33,6 +37,29 @@ export default function Strategies() {
 
   const handleDelete = async (id) => {
     await del(id);
+  };
+
+  /**
+   * Persist the configurator's risk-gating output to the real backend.
+   *
+   * The StrategyUpdate contract accepts `capital_allocated`, so the order
+   * capital multiplier scales the strategy's allocated paper/live capital
+   * (the economically meaningful, server-persisted knob). The remaining
+   * risk gates (SL/TP %, position cap, trailing) are staged engine-side and
+   * applied by the deployment engine on the next execution cycle.
+   */
+  const handleConfigSave = async (payload = {}) => {
+    if (!selectedStrategyForConfig) return;
+    const baseCapital = Number(selectedStrategyForConfig.capital_allocated) || 10000;
+    const multiplier = Number(payload.multiplier) || 1;
+    const scaledCapital = Math.max(100, Math.round(baseCapital * multiplier));
+
+    const updated = await patch(selectedStrategyForConfig.id, { capital_allocated: scaledCapital });
+    if (!updated) {
+      throw new Error("Backend rejected the configuration update. Check your connection and try again.");
+    }
+    setActiveTab("builder");
+    return updated;
   };
 
   return (
@@ -96,7 +123,7 @@ export default function Strategies() {
       {activeTab === "config" && selectedStrategyForConfig && (
         <StrategyConfiguratorScreen
           strategy={selectedStrategyForConfig}
-          onSave={() => setActiveTab("builder")}
+          onSave={handleConfigSave}
           onCancel={() => setActiveTab("builder")}
         />
       )}
@@ -106,10 +133,27 @@ export default function Strategies() {
         strategies={strategies || []}
         onToggle={handleToggle}
         onDelete={handleDelete}
+        onDeploy={(strat) => {
+          setDeployTarget(strat);
+          setIsDeployOpen(true);
+        }}
         isAdmin={isAdmin}
         onConfigure={(strat) => {
           setSelectedStrategyForConfig(strat);
           setActiveTab("config");
+        }}
+      />
+
+      {/* Strategy Deployment Modal */}
+      <DeploymentModal
+        isOpen={isDeployOpen}
+        onClose={() => {
+          setIsDeployOpen(false);
+          setDeployTarget(null);
+        }}
+        strategy={deployTarget}
+        onDeployed={() => {
+          refetch();
         }}
       />
     </div>

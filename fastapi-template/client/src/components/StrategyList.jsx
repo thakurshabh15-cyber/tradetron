@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Power, Trash2, Cpu, Zap, ShieldCheck, AlertOctagon } from "lucide-react";
+import { Power, Trash2, Cpu, Zap, ShieldCheck, AlertOctagon, Sliders, Rocket } from "lucide-react";
 import { authFetch } from "../services/apiClient";
 import ConfirmDialog from "./ConfirmDialog";
 import { useToast } from "./Toast";
@@ -8,6 +8,8 @@ function StrategyListComponent({
   strategies = [],
   onToggle,
   onDelete,
+  onConfigure,
+  onDeploy,
   isAdmin = false,
 }) {
   const [filterMode, setFilterMode] = useState("ALL"); // 'ALL' | 'LIVE' | 'PAPER'
@@ -211,6 +213,26 @@ function StrategyListComponent({
                 </div>
 
                 <div className="flex items-center gap-2 self-end sm:self-center">
+                  {onConfigure && (
+                    <button
+                      onClick={() => onConfigure(strat)}
+                      title="Configure Parameters"
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 hover:bg-cyan-500/25 transition-all"
+                    >
+                      <Sliders size={13} />
+                      Configure
+                    </button>
+                  )}
+                  {onDeploy && (
+                    <button
+                      onClick={() => onDeploy(strat)}
+                      title="Deploy this strategy to the execution engine"
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25 transition-all"
+                    >
+                      <Rocket size={13} />
+                      Deploy
+                    </button>
+                  )}
                   <button
                     onClick={() => onToggle(strat.id, !strat.enabled)}
                     title={strat.enabled ? "Pause Strategy" : "Activate Strategy"}
