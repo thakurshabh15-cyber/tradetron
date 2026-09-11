@@ -18,6 +18,8 @@ import {
   Loader2,
 } from "lucide-react";
 import { authFetch } from "../services/apiClient";
+import { readJsonResponse } from "../services/api";
+import { apiErrorMessage } from "../utils/apiErrors";
 
 // ─── Status Badge ──────────────────────────────────────────────────────────────
 const StatusBadge = memo(({ status }) => {
@@ -256,9 +258,16 @@ export default function BrokerSessions() {
 
   const handleRenewAll = async () => {
     setRenewingAll(true);
+    setError(null);
     try {
       const res = await authFetch("/api/brokers/renew-all", { method: "POST" });
-      if (res.ok) await loadAll();
+      if (!res.ok) {
+        const body = await readJsonResponse(res);
+        throw new Error(apiErrorMessage(body, `Renewal failed (HTTP ${res.status})`));
+      }
+      await loadAll();
+    } catch (err) {
+      setError(err.message);
     } finally {
       setRenewingAll(false);
     }
@@ -266,9 +275,16 @@ export default function BrokerSessions() {
 
   const handleRenewSingle = async (accountId) => {
     setRenewingId(accountId);
+    setError(null);
     try {
-      await authFetch(`/api/brokers/${accountId}/renew`, { method: "POST" });
+      const res = await authFetch(`/api/brokers/${accountId}/renew`, { method: "POST" });
+      if (!res.ok) {
+        const body = await readJsonResponse(res);
+        throw new Error(apiErrorMessage(body, `Renewal failed (HTTP ${res.status})`));
+      }
       await loadAll();
+    } catch (err) {
+      setError(err.message);
     } finally {
       setRenewingId(null);
     }
