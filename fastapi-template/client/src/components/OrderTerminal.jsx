@@ -60,6 +60,10 @@ function OrderTerminal({ symbol = "NIFTY50", currentPrice = null, onOrderPlaced 
   const [submitting, setSubmitting] = useState(false);
 
   const px = getFeedPrice(liveQuote, currentPrice);
+  // Fail-closed: a MARKET order has no price of its own, so it cannot be
+  // transmitted until the unified feed provides a real price (otherwise the
+  // pre-trade preview would compute margins on an invented/zero price).
+  const noFeedPrice = orderType === "MARKET" && px == null;
   const lotSize = getLotSize(symbol);
   const safeLots = Math.max(1, parseInt(lots, 10) || 1);
   const quantity = safeLots * lotSize;
@@ -195,7 +199,7 @@ function OrderTerminal({ symbol = "NIFTY50", currentPrice = null, onOrderPlaced 
 
       <button
         type="button"
-        disabled={submitting}
+        disabled={submitting || noFeedPrice}
         onClick={transmit}
         className={`w-full py-3 rounded-xl text-white font-bold text-xs shadow-lg transition-all flex items-center justify-center gap-2 active:scale-[0.98] disabled:opacity-50 ${
           side === "BUY"
@@ -204,7 +208,11 @@ function OrderTerminal({ symbol = "NIFTY50", currentPrice = null, onOrderPlaced 
         }`}
       >
         {submitting ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
-        {submitting ? "Routing to broker…" : `TRANSMIT ${side} ${quantity} ${symbol}`}
+        {submitting
+          ? "Routing to broker…"
+          : noFeedPrice
+          ? "Awaiting market feed…"
+          : `TRANSMIT ${side} ${quantity} ${symbol}`}
       </button>
       <p className="flex items-center justify-center gap-1 text-[9px] text-slate-500 font-mono">
         <ShieldCheck size={9} /> AES-256 vault · DMA direct route · statutory-exact

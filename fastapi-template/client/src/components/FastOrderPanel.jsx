@@ -30,7 +30,11 @@ function FastOrderPanelComponent({ symbol = "NIFTY50", currentPrice = null, onOr
     return orderType === "MARKET" ? effectiveLivePrice : Number(debouncedPrice) || effectiveLivePrice;
   }, [orderType, effectiveLivePrice, debouncedPrice]);
 
-  const totalValue = useMemo(() => debouncedQty * price, [debouncedQty, price]);
+  // Fail-closed: MARKET orders cannot be priced without a live feed quote, so
+  // the transmit button is disabled until a real price is available.
+  const noFeedPrice = price == null || !Number.isFinite(price) || price <= 0;
+
+  const totalValue = useMemo(() => debouncedQty * (price || 0), [debouncedQty, price]);
   const marginRequired = useMemo(() => totalValue * 0.2, [totalValue]); // 5x leverage
 
   const sym = symbol || "";
@@ -198,7 +202,7 @@ function FastOrderPanelComponent({ symbol = "NIFTY50", currentPrice = null, onOr
       {/* Submit Action Button */}
       <button
         type="button"
-        disabled={loading}
+        disabled={loading || noFeedPrice}
         onClick={handlePlaceOrder}
         className={`w-full py-3 rounded-xl text-white font-bold text-xs shadow-lg transition-all flex items-center justify-center gap-2 ${
           side === "BUY"
@@ -207,7 +211,11 @@ function FastOrderPanelComponent({ symbol = "NIFTY50", currentPrice = null, onOr
         } disabled:opacity-50`}
       >
         <Zap size={14} />
-        {loading ? "Routing to Broker..." : `TRANSMIT ${side} ${quantity} ${symbol} @ ${orderType}`}
+        {loading
+          ? "Routing to Broker..."
+          : noFeedPrice
+          ? `Awaiting feed for ${symbol}…`
+          : `TRANSMIT ${side} ${quantity} ${symbol} @ ${orderType}`}
       </button>
     </div>
   );
