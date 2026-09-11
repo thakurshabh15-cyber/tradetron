@@ -130,10 +130,18 @@ export default function BrokerConnectModal({ isOpen, onClose, onLinkedSuccess })
   // Step 2: Complete Token Exchange
   const handleCompleteOAuth = async (e) => {
     if (e) e.preventDefault();
+    // Fail-closed: never fabricate a credential. The backend exchanges this token
+    // for a real broker session; an invented token would silently link a fake
+    // "CONNECTED" account. Require the actual auth code from the broker redirect.
+    if (!requestToken.trim()) {
+      setError("Please paste the request token / auth_code from the broker redirect. A blank token cannot be exchanged for a real session.");
+      toast.error("Request token required", { description: "Copy the token from the broker's redirect URL and paste it here." });
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
-      const tok = requestToken.trim() || `mock_token_${Date.now()}`;
+      const tok = requestToken.trim();
       const res = await authFetch(`/api/brokers/oauth/callback`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -345,12 +353,12 @@ export default function BrokerConnectModal({ isOpen, onClose, onLinkedSuccess })
             ) : (
               <form onSubmit={handleCompleteOAuth} className="space-y-3">
                 <div className="p-3 rounded-lg bg-cyan-500/10 border border-cyan-500/20 text-xs text-cyan-300">
-                  <span>Enter the request_token / auth_code from your broker redirect, or click Confirm to complete session sync:</span>
+                  <span>Paste the request_token / auth_code from the broker redirect URL below to complete the session exchange:</span>
                 </div>
 
                 <div>
                   <label className="text-[11px] font-medium text-slate-300">
-                    OAuth Request Token / Auth Code (Optional in dev)
+                    OAuth Request Token / Auth Code
                   </label>
                   <input
                     type="text"
