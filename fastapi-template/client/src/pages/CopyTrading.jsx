@@ -18,6 +18,8 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { authFetch } from "../services/apiClient";
+import { readJsonResponse } from "../services/api";
+import { apiErrorMessage } from "../utils/apiErrors";
 import { useDebounce } from "../hooks/useDebounce";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { useToast } from "../components/Toast";
@@ -204,11 +206,17 @@ export default function CopyTrading() {
         method: "PATCH",
         body: JSON.stringify({ status: newStatus }),
       });
-      if (res.ok) {
-        fetchMyFollowed();
+      if (!res.ok) {
+        const body = await readJsonResponse(res);
+        throw new Error(apiErrorMessage(body, `Status change rejected (HTTP ${res.status})`));
       }
+      fetchMyFollowed();
+      toast.success(newStatus === "PAUSED" ? "Mirror paused" : "Mirror resumed", {
+        description: `Copy subscription ${newStatus.toLowerCase()}.`,
+      });
     } catch (err) {
       console.error("Failed to toggle status:", err);
+      toast.error("Could not change copy status", { description: err.message });
     }
   };
 
