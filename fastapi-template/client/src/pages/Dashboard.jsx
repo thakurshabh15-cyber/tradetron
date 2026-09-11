@@ -14,6 +14,9 @@ import { useDebounce } from "../hooks/useDebounce";
 import { useMarket } from "../context/MarketContext";
 import { API_BASE } from "../config";
 import { authFetch } from "../services/apiClient";
+import { readJsonResponse } from "../services/api";
+import { useToast } from "../components/Toast";
+import { apiErrorMessage } from "../utils/apiErrors";
 import { useAuthStore } from "../stores/useAuthStore";
 import {
   RefreshCw,
@@ -75,6 +78,7 @@ export default function Dashboard() {
   // guests gracefully fall back to the public/demo view.
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const isGuest = !isAuthenticated;
+  const toast = useToast();
 
   // Base API Data Fetchers — market data and risk status are truly public
   // (no per-user scoping), so always use publicFetch.  Trade, position, and
@@ -211,10 +215,17 @@ export default function Dashboard() {
         method: "PATCH",
         body: JSON.stringify({ [field]: newPrice }),
       });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "Update failed");
+      if (!res.ok) {
+        const body = await readJsonResponse(res);
+        throw new Error(apiErrorMessage(body, `Risk target update rejected (HTTP ${res.status})`));
+      }
       refetchPositions();
+      toast.success(`Risk target updated`, {
+        description: `${field.replace(/_/g, " ")} set to ${newPrice} for position ${positionId}.`,
+      });
     } catch (err) {
       console.error("Risk target update failed:", err);
+      toast.error("Could not update risk target", { description: err.message });
     }
   };
 
