@@ -5,7 +5,17 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -72,4 +82,36 @@ class RevokedTokenRecord(Base):
     user_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class UserSetupTaskRecord(Base):
+    """Per-user onboarding checklist state (Marketplace / Broker / Subscription).
+
+    Tenant-scoped replacement for the previous process-global ``_SETUP_STATE``
+    dict: every row carries the owning ``user_id`` so one trader's checklist
+    can never leak into, or be mutated by, another tenant. Status transitions
+    are user-initiated overrides persisted in SQL; effective status is derived
+    by the API from real per-user data (connected broker accounts, deployed
+    strategies, active subscription) and the optional override row.
+    """
+
+    __tablename__ = "user_setup_tasks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    task_id: Mapped[str] = mapped_column(
+        String(40), nullable=False
+    )  # marketplace_setup | broker_setup | subscription_setup
+    status: Mapped[str] = mapped_column(String(10), default="Pending")  # Complete | Pending
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "task_id", name="uq_user_setup_tasks_user_task"),
+    )
 

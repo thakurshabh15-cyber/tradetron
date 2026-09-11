@@ -146,7 +146,11 @@ class Base(DeclarativeBase):
 
 async def init_db() -> None:
     """Create all tables if they don't exist and run non-breaking schema additions."""
-    from app.models.user import UserRecord, RevokedTokenRecord  # noqa: F401
+    from app.models.user import (  # noqa: F401
+        UserRecord,
+        RevokedTokenRecord,
+        UserSetupTaskRecord,
+    )
     from app.models.broker_account import BrokerAccountRecord, BrokerSessionLogRecord  # noqa: F401
     from app.models.trading import (  # noqa: F401
         OrderRecord,

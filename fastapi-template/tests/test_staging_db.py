@@ -45,6 +45,7 @@ class TestAlembicMigration:
             "marketplace_strategies", "strategy_deployments",
             "creator_payout_settings", "notification_preferences",
             "price_alerts", "watchlists", "revoked_tokens",
+            "user_setup_tasks",  # migration 0006_user_setup_tasks
         }
         tables = set(Base.metadata.tables.keys())
         missing = expected - tables

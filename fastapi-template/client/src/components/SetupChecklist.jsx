@@ -10,7 +10,7 @@ import {
   ArrowRight,
 } from "lucide-react";
 import StatusBadge from "./StatusBadge";
-import { API_BASE } from "../config";
+import { authFetch } from "../services/apiClient";
 
 const TASK_ICONS = {
   marketplace_setup: Store,
@@ -26,11 +26,13 @@ export default function SetupChecklist() {
     setUpdatingTaskId(taskId);
     const nextStatus = currentStatus === "Complete" ? "Pending" : "Complete";
     try {
-      await fetch(`${API_BASE}/api/user/setup-status`, {
+      const res = await authFetch("/api/user/setup-status", {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ task_id: taskId, status: nextStatus }),
       });
+      if (!res || !res.ok) {
+        console.error(`Failed to toggle setup status (HTTP ${res?.status ?? "none"})`);
+      }
       await refetch();
     } catch (err) {
       console.error("Failed to toggle status:", err);
