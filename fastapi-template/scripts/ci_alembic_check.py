@@ -34,8 +34,9 @@ ROOT = Path(__file__).resolve().parent.parent
 # Every ORM model module must be imported so Base.metadata is complete —
 # mirror the import list used by alembic/env.py.
 ORM_MODULES = (
-    "audit", "billing", "broker_account", "copy_trading", "marketplace",
-    "notification", "trading", "user", "visual_strategy", "watchlist",
+    "audit", "billing", "broker_account", "broker_state", "copy_trading",
+    "marketplace", "notification", "trading", "user", "visual_strategy",
+    "watchlist",
 )
 
 CREATE_ALL_SNIPPET = (

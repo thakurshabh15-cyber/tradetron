@@ -354,6 +354,12 @@ async def list_broker_accounts(
         is_expired = acc.is_token_expired()
         token_status = "EXPIRED" if is_expired else acc.status
         margins = await _fetch_broker_margins(acc)
+        from app.engine.broker_state_sync import (
+            broker_state_sync_engine,
+            snapshot_to_dict,
+        )
+
+        snap = await broker_state_sync_engine.get_snapshot(acc.id)
 
         output.append({
             "id": acc.id,
@@ -368,6 +374,7 @@ async def list_broker_accounts(
             "linked_at": acc.linked_at.isoformat() if acc.linked_at else None,
             "last_synced_at": acc.last_synced_at.isoformat() if acc.last_synced_at else None,
             "margins": margins,
+            "state": snapshot_to_dict(snap, broker_name=acc.broker_name),
         })
     return output
 
@@ -399,6 +406,66 @@ async def get_account_margins(
 
     margins = await _fetch_broker_margins(acc)
     return margins
+
+
+@router.get("/accounts/{account_id}/state")
+async def get_account_broker_state(
+    account_id: str,
+    user: UserRecord = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the persisted, freshness-labelled broker-truth snapshot.
+
+    Owner-scoped: the account must belong to the authenticated user.  The
+    ``status`` field is DERIVED (LIVE / STALE / UNAVAILABLE / ERROR / PAPER) —
+    a stale snapshot is never reported as LIVE truth.
+    """
+    from app.engine.broker_state_sync import (
+        broker_state_sync_engine,
+        snapshot_to_dict,
+    )
+
+    stmt = select(BrokerAccountRecord).where(
+        BrokerAccountRecord.id == account_id,
+        BrokerAccountRecord.user_id == user.id,
+    )
+    res = await db.execute(stmt)
+    acc = res.scalar_one_or_none()
+    if not acc:
+        raise HTTPException(status_code=404, detail="Broker account not found")
+
+    snap = await broker_state_sync_engine.get_snapshot(account_id)
+    return snapshot_to_dict(snap, broker_name=acc.broker_name)
+
+
+@router.post("/accounts/{account_id}/sync")
+async def sync_account_broker_state(
+    account_id: str,
+    user: UserRecord = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Trigger an on-demand broker-truth synchronization for this account.
+
+    Owner-scoped sync.  The fresh snapshot is persisted (CAS upsert), internal
+    LIVE positions are reconciled idempotently, and the full result (including
+    the reconciliation report) is returned.  Broker failures produce an ERROR
+    snapshot — never fabricated data.
+    """
+    from app.engine.broker_state_sync import broker_state_sync_engine
+
+    stmt = select(BrokerAccountRecord).where(
+        BrokerAccountRecord.id == account_id,
+        BrokerAccountRecord.user_id == user.id,
+    )
+    res = await db.execute(stmt)
+    acc = res.scalar_one_or_none()
+    if not acc:
+        raise HTTPException(status_code=404, detail="Broker account not found")
+
+    result = await broker_state_sync_engine.sync_account(account_id, user_id=user.id)
+    if result.get("status") == "ERROR" and result.get("error"):
+        raise HTTPException(status_code=502, detail=result["error"])
+    return result
 
 
 @router.get("/accounts/{account_id}/holdings")
@@ -697,8 +764,28 @@ async def get_broker_and_paper_balance(
                     live_margin.update(margins)
             except Exception as exc:
                 logger.warning("Error fetching live margin for %s: %s", broker_acc.broker_name, exc)
+                # Phase 15B honesty: NEVER fabricate a zero margin as broker truth.
+                # A connected broker whose fetch failed is reported as
+                # connected-but-unavailable (None fields) so the UI renders an
+                # explicit "Margin unavailable" instead of a fake "₹0.00".
                 live_margin["error"] = str(exc)
-                live_margin["available_cash"] = 0.0
+                live_margin["available_cash"] = None
+                live_margin["utilized_margin"] = None
+                live_margin["total_collateral"] = None
+                live_margin["currency"] = "INR"
+                live_margin["message"] = "Live margin unavailable right now — broker fetch failed."
+
+            # Only a genuinely successful broker fetch gets the "refreshed"
+            # label; otherwise the connected-but-unavailable message above (or
+            # the default "connect to view" message) stays truthful.
+            if (
+                not live_margin.get("error")
+                and live_margin.get("available_cash") is not None
+            ):
+                live_margin["message"] = (
+                    "Live broker margin — refreshed "
+                    f"{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC"
+                )
 
     return {
         "paper_balance": round(paper_balance, 2),

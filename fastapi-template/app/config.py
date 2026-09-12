@@ -304,6 +304,14 @@ class Settings(BaseSettings):
     # Operational blocker B-5: absent until sandbox credentials are provided.
     angel_jwt_token: str = ""
 
+    # ── Phase 15B: broker-truth state sync ─────────────────────────────
+    # Max age (seconds) of a broker-state snapshot before it must no longer
+    # be presented as LIVE account truth (STALE).  A stale snapshot is never
+    # used for LIVE risk gating or displayed as a LIVE number.
+    broker_state_stale_after: float = 120.0
+    # Background scheduler interval for per-account broker-state sync.
+    broker_state_sync_interval: float = 60.0
+
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",
         env_file_encoding="utf-8",

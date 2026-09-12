@@ -13,7 +13,7 @@ from app.models.broker_account import BrokerAccountRecord
 from app.db.session import init_db, SessionLocal
 from sqlalchemy import desc, select
 
-from tests._feed_helpers import seed_live_quote
+from tests._feed_helpers import seed_live_broker_state, seed_live_quote
 
 
 @pytest.mark.asyncio
@@ -136,8 +136,6 @@ async def test_live_order_execution_and_margin_rejection():
     # genuinely-live quote for the symbol (this test exercises the margin gate,
     # which sits AFTER the feed gate).
     seed_live_quote("RELIANCE", 2500.0)
-
-    # 1. Connect a live Zerodha broker in DB
     async with SessionLocal() as session:
         async with session.begin():
             user_rec = UserRecord(
@@ -158,6 +156,16 @@ async def test_live_order_execution_and_margin_rejection():
             session.add(broker_rec)
             await session.flush()
             b_id = broker_rec.id
+
+    # Phase 15B broker-state gate: seed a fresh LIVE broker snapshot.  The
+    # margin gate reads the SNAPSHOT's available_cash (broker truth) — NOT a
+    # live get_margins call — so Part A seeds INSUFFICIENT cash to hit the
+    # margin rejection; Part B reseeds sufficient cash before placement.
+    await seed_live_broker_state(
+        b_id, user_rec.id,
+        available_cash=100.0, utilized_margin=0.0, total_collateral=100.0,
+        total_equity=100.0, currency="INR",
+    )
 
     live_strat = {
         "id": "strat-live-test-01",
@@ -193,6 +201,14 @@ async def test_live_order_execution_and_margin_rejection():
             assert rejected_order is not None
             assert rejected_order.mode == "LIVE"
             assert "Insufficient margin" in rejected_order.error_message
+
+    # B. Reseed SUFFICIENT broker-truth cash BEFORE the successful placement
+    #    so the Phase 15B margin gate passes and dispatch proceeds.
+    await seed_live_broker_state(
+        b_id, user_rec.id,
+        available_cash=500000.0, utilized_margin=0.0, total_collateral=500000.0,
+        total_equity=500000.0, currency="INR",
+    )
 
     # B. Test Successful Live Order Placement (Broker returns ₹500,000 cash)
     with patch.object(ZerodhaKiteBroker, "get_margins", new_callable=AsyncMock) as mock_margins, \

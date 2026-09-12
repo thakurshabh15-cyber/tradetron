@@ -29,6 +29,7 @@ import {
   Radio,
   ShieldCheck,
   TrendingDown,
+  Wallet,
   Search,
   Plus,
   Sparkles,
@@ -51,6 +52,92 @@ const SYMBOL_MAP = {
   CRYPTO: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT"],
   FOREX: ["USDINR", "EURINR", "GBPINR", "EURUSD", "GBPUSD", "USDJPY"],
 };
+
+// ── Phase 15B: broker-truth account state strip ──────────────────────────────
+// Renders the persisted, freshness-labelled broker_state snapshot that the
+// dashboard summary endpoint now exposes (`summary.equity`).  Values come
+// straight from the normalized broker payload — never fabricated, never a
+// paper substitution in LIVE.  Missing broker fields render as "—".
+const EQ_STATUS_TONE = {
+  LIVE: {
+    badge: "bg-emerald-500/15 border-emerald-500/30 text-emerald-300",
+    icon: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
+  },
+  PAPER: {
+    badge: "bg-cyan-500/15 border-cyan-500/30 text-cyan-300",
+    icon: "bg-cyan-500/10 text-cyan-400 border-cyan-500/20",
+  },
+  STALE: {
+    badge: "bg-amber-500/15 border-amber-500/30 text-amber-300",
+    icon: "bg-amber-500/10 text-amber-400 border-amber-500/20",
+  },
+  ERROR: {
+    badge: "bg-rose-500/15 border-rose-500/30 text-rose-300",
+    icon: "bg-rose-500/10 text-rose-400 border-rose-500/20",
+  },
+  UNAVAILABLE: {
+    badge: "bg-slate-700/30 border-slate-700 text-slate-400",
+    icon: "bg-slate-800 text-slate-500 border-slate-700",
+  },
+};
+
+const fmtMoney = (v) =>
+  v == null ? "—" : `₹${Number(v).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+
+function BrokerStateStrip({ equity }) {
+  if (!equity) return null;
+  const status = equity.status || "UNAVAILABLE";
+  const tone = EQ_STATUS_TONE[status] || EQ_STATUS_TONE.UNAVAILABLE;
+  const label =
+    status === "LIVE" && equity.broker_name ? `LIVE · ${equity.broker_name}` : status;
+  const captured = equity.captured_at
+    ? new Date(equity.captured_at).toLocaleTimeString("en-IN")
+    : null;
+  let sub;
+  if (status === "LIVE") {
+    sub = `broker truth as of ${captured || "last sync"}${equity.broker_name ? ` · ${equity.broker_name}` : ""}`;
+  } else if (status === "STALE") {
+    sub = `snapshot captured ${captured || "unknown"} is older than the freshness threshold — sync the broker account`;
+  } else if (status === "PAPER") {
+    sub = equity.message || "Paper account — no live broker connected";
+  } else {
+    sub = equity.message || "No synchronized broker snapshot yet — sync the account first";
+  }
+  return (
+    <div className="glass-card-hover p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <div className="flex items-center gap-3 min-w-0">
+        <div className={`p-2 rounded-xl border shrink-0 ${tone.icon}`}>
+          <Wallet size={18} />
+        </div>
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-semibold text-slate-400">Broker Account State</span>
+            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${tone.badge}`}>
+              {label}
+            </span>
+          </div>
+          <p className="text-[10px] text-slate-500 mt-0.5">{sub}</p>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-4 font-mono tabular-nums">
+        <div>
+          <p className="text-[9px] uppercase tracking-wider text-slate-500">
+            {status === "PAPER" ? "Paper Balance" : "Equity"}
+          </p>
+          <p className="text-base font-bold text-white mt-0.5">{fmtMoney(equity.total_equity)}</p>
+        </div>
+        <div>
+          <p className="text-[9px] uppercase tracking-wider text-slate-500">Available Cash</p>
+          <p className="text-base font-bold text-white mt-0.5">{fmtMoney(equity.available_cash)}</p>
+        </div>
+        <div>
+          <p className="text-[9px] uppercase tracking-wider text-slate-500">Utilized Margin</p>
+          <p className="text-base font-bold text-white mt-0.5">{fmtMoney(equity.utilized_margin)}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function Dashboard() {
   const [activeAssetTab, setActiveAssetTab] = useState("ALL");
@@ -347,6 +434,10 @@ export default function Dashboard() {
           </button>
         </div>
       </div>
+
+      {/* Broker-truth account state (Phase 15B) — authenticated users only;
+          guests have no account identity, so skip the strip entirely */}
+      {!isGuest && summaryData?.equity ? <BrokerStateStrip equity={summaryData.equity} /> : null}
 
       {/* Summary KPI Cards Moving Live with Market Data Pipeline */}
       {summaryError ? (

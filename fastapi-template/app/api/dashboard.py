@@ -240,6 +240,103 @@ async def get_dashboard_summary(
         "pendingTasks": pending_tasks,
         "allTasks": available_tasks,
         "engineStatus": "RUNNING",
+        "equity": await _broker_equity_block(db, user),
+    }
+
+
+async def _broker_equity_block(db: AsyncSession, user: Optional[UserRecord]) -> dict:
+    """Honest broker-truth equity block for the dashboard summary.
+
+    Rules:
+    * Anonymous guest view -> ``UNVAILABLE`` (no account identity).
+    * A user with NO real broker account -> honest ``PAPER`` block using the
+      paper P&L tracker (this is a paper-only tenant).
+    * A user with a real broker account -> broker-truth values from the
+      persisted, freshness-DERIVED snapshot.  STALE / ERROR / UNAVAILABLE
+      never masquerade as LIVE.  Fields the broker does not provide are None
+      (never substituted with the paper balance).
+    * Strictly tenant-scoped: only the authenticated user's own accounts.
+    """
+    from app.engine.broker_state_sync import (
+        broker_state_sync_engine,
+        derive_broker_state_status,
+        is_real_broker_name,
+    )
+    from app.models.broker_account import BrokerAccountRecord
+
+    unauth = {
+        "source": None, "status": "UNAVAILABLE", "broker_account_id": None,
+        "broker_name": None, "total_equity": None, "available_cash": None,
+        "utilized_margin": None, "unrealized_pnl": None, "realized_pnl": None,
+        "currency": None, "captured_at": None, "message": (
+            "Anonymous guest view — no account equity available"
+        ),
+    }
+
+    if user is None:
+        return unauth
+
+    stmt = select(BrokerAccountRecord).where(
+        BrokerAccountRecord.user_id == user.id,
+        BrokerAccountRecord.is_active.is_(True),
+    )
+    res = await db.execute(stmt)
+    accounts = res.scalars().all()
+    real_accounts = [a for a in accounts if is_real_broker_name(a.broker_name)]
+
+    if not real_accounts:
+        # Pure paper tenant — honest PAPER block from the paper ledger.
+        return {
+            "source": "PAPER", "status": "PAPER", "broker_account_id": None,
+            "broker_name": None,
+            "total_equity": user.paper_balance,
+            "available_cash": None,
+            "utilized_margin": None, "unrealized_pnl": None,
+            "realized_pnl": None, "currency": "INR",
+            "captured_at": None, "message": "Paper account — no live broker connected",
+        }
+
+    # Prefer the freshest LIVE snapshot across the user's real broker accounts;
+    # never a STALE/ERROR one as LIVE.
+    best: Optional[dict] = None
+    best_status = "UNAVAILABLE"
+    for acc in real_accounts:
+        snap = await broker_state_sync_engine.get_snapshot(acc.id)
+        if snap is None:
+            continue
+        status = derive_broker_state_status(snap)
+        block = {
+            "source": snap.source,
+            "status": status,
+            "broker_account_id": acc.id,
+            "broker_name": acc.broker_name,
+            "total_equity": snap.total_equity,
+            "available_cash": snap.available_cash,
+            "utilized_margin": snap.utilized_margin,
+            "unrealized_pnl": snap.unrealized_pnl,
+            "realized_pnl": snap.realized_pnl,
+            "currency": snap.currency,
+            "captured_at": snap.captured_at.isoformat() if snap.captured_at else None,
+            "message": snap.sync_message,
+        }
+        if status == "LIVE":
+            return block
+        # STALE / ERROR are better than nothing, tracked as-is.
+        order = {"STALE": 3, "ERROR": 2, "UNAVAILABLE": 1}
+        if order.get(status, 0) > order.get(best_status, 0):
+            best, best_status = block, status
+
+    if best is not None:
+        return best
+    return {
+        "source": "BROKER", "status": "UNAVAILABLE",
+        "broker_account_id": None, "broker_name": None,
+        "total_equity": None, "available_cash": None,
+        "utilized_margin": None, "unrealized_pnl": None,
+        "realized_pnl": None, "currency": None,
+        "captured_at": None, "message": (
+            "No synchronized broker-truth snapshot yet — sync the account first"
+        ),
     }
 
 

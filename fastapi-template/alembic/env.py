@@ -30,6 +30,7 @@ from app.models import (  # noqa: F401  (side-effect: populates Base.metadata)
     audit,
     billing,
     broker_account,
+    broker_state,
     copy_trading,
     marketplace,
     notification,

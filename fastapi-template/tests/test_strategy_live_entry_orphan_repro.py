@@ -24,7 +24,7 @@ from app.models.broker_account import BrokerAccountRecord
 from app.models.trading import OrderRecord, PositionRecord, TradeRecord
 from app.models.user import UserRecord
 
-from tests._feed_helpers import seed_live_quote
+from tests._feed_helpers import seed_live_broker_state, seed_live_quote
 
 
 @pytest.fixture(autouse=True)
@@ -148,6 +148,14 @@ async def test_live_entry_crash_recovered_by_window_c(monkeypatch):
 
     # Phase 15A realtime feed gate: the LIVE path needs a fresh live quote.
     seed_live_quote("RELIANCE", 2500.0)
+
+    # Phase 15B broker-state gate: the LIVE path ALSO needs a fresh broker
+    # truth snapshot or dispatch is blocked before the durable claim.
+    await seed_live_broker_state(
+        broker_id, user_id=uid,
+        status="LIVE", source="BROKER",
+        available_cash=500000.0,
+    )
 
     with pytest.raises(SystemExit):
         await engine._execute_signal(strategy, "RELIANCE", 2500.0)
@@ -281,6 +289,14 @@ async def test_duplicate_signal_no_double_dispatch(monkeypatch):
 
     # Phase 15A realtime feed gate: the LIVE path needs a fresh live quote.
     seed_live_quote("RELIANCE", 2500.0)
+
+    # Phase 15B broker-state gate: the LIVE path ALSO needs a fresh broker
+    # truth snapshot or dispatch is blocked before the durable claim.
+    await seed_live_broker_state(
+        broker_id, user_id=uid,
+        status="LIVE", source="BROKER",
+        available_cash=500000.0,
+    )
 
     await engine._execute_signal(strategy, "RELIANCE", 2500.0)
     assert len(dispatched) == 1, "first call dispatches once"

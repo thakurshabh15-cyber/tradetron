@@ -8,6 +8,40 @@
 
 ---
 
+---
+## PHASE 15B — HONEST, FAIL-CLOSED BROKER / EQUITY DISPLAY (2026-09-12)
+
+**Status:** ✅ SHIPPED — validated end-to-end (**19/19** local E2E + standalone repro + unit gate).
+
+**What changed**
+- **Broker-truth state engine** — `app/engine/broker_state_sync.py`, `app/models/broker_state.py`,
+  migration `alembic/versions/0007_broker_state.py`.  Per-account persisted snapshot (positions hash,
+  margins, equity/P&L, `captured_at`, `last_good_captured_at`, `sync_message`) with a **derived
+  freshness status**: LIVE only when genuinely broker-sourced AND captured within the
+  `broker_state_stale_after` (120s) threshold; otherwise STALE / ERROR / UNAVAILABLE / PAPER.
+- **Fail-closed adapters** — `app/brokers/upstox.py` (and the shared sync path): margin queries
+  **raise** on non-200 / invalid JSON / network failure instead of returning a fabricated ₹0.00.
+- **Honest dashboard + portfolio** — `app/api/dashboard.py` `_broker_equity_block`,
+  `client/src/pages/Dashboard.jsx`, `client/src/pages/Portfolio.jsx`: broker-truth equity/P&L are
+  never substituted with the paper balance; missing fields render as "—"; STALE (amber) / ERROR (rose)
+  badges surface; `LIVE · ZERODHA` only when the snapshot is fresh.
+- **Hard-block in simulated mode** — `BROKER_MODE != live` ⇒ Zerodha adapter `connect()` raises ⇒
+  `POST /sync` returns **502** `LIVE broker connection blocked: BROKER_MODE is not 'live'` ⇒ an
+  ERROR snapshot is persisted (fail-closed, never fabricated numbers; last-good values preserved).
+- **Scheduler** — `app/main.py` lifespan: per-account broker-state sync at
+  `broker_state_sync_interval` (60s), sandboxed to BROKER_MODE.
+
+**Validation evidence**
+| Check | Result |
+|---|---|
+| `pytest tests/test_broker_state_sync.py` (derive/gate/margins-normalize suite) | PASS |
+| Standalone repro: LIVE → STALE → sync 502 (BROKER_MODE) → ERROR snapshot | PASS |
+| `_p15b_local_e2e.mjs` (PAPER unchanged; LIVE/STALE/ERROR truthful; mobile; 0 page/console errors) | **19/19 PASS** |
+
+**Deliberately unchanged:** PAPER tenant accounting/rendering — all PAPER assertions still pass as-is.
+
+---
+
 ## 1. COMPLETE PIPELINE MAP
 
 ```
@@ -179,7 +213,7 @@ MARKET DATA → NORMALIZATION → STRATEGY ENGINE → SIGNAL → RISK ENGINE
 
 | Dimension | Detail |
 |---|---|
-| **Classification** | **PARTIAL** — Paper equity works; Live equity NOT from broker truth |
+| **Classification** | **REAL (Phase 15B)** — broker-truth equity snapshot now wired to dashboard/portfolio via `_broker_equity_block` (freshness-derived, fail-closed, paper never substituted)
 ---
 
 ### 2.14 UI
@@ -365,7 +399,7 @@ Phase 15E  →  Equity & P&L Hardening (P1 — reporting accuracy)
 - ❌ **Exchange-level protection:** No SL/TP orders on the exchange. Engine crash = orphan positions.
 - ✅ **Safety:** 3-layer BROKER_MODE guard, encrypted credentials, tenant isolation, fail-closed design.
 
-**The system is ready for BROKER SANDBOX testing (Binance testnet, broker paper-trading modes). It is NOT ready for real-money production without completing Phases 15A–15C.**
+**The system is ready for BROKER SANDBOX testing (Binance testnet, broker paper-trading modes). Phase 15B (honest, fail-closed broker/equity display) is complete and validated; it is NOT yet ready for real-money production — 15C follow-ups remain (periodic live position sync from broker, real-time WebSocket market data, exchange-level SL/TP).**
 
 ---
 

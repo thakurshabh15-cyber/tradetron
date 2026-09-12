@@ -213,15 +213,32 @@ function AppShell() {
 
                 <div className="text-[11px] text-slate-400">
                   {isLiveActive ? (
-                    balances.live_balance?.connected && balances.live_balance?.available_cash !== null ? (
-                      <span className="flex items-center gap-1 font-mono">
-                        <span className="text-rose-400 font-bold">
-                          Margin: ₹
-                          {Number(balances.live_balance.available_cash || 0).toLocaleString("en-IN", {
-                            minimumFractionDigits: 2,
-                          })}
+                    // LIVE: show real broker-derived margin only. A connected
+                    // broker whose margin is unavailable is reported as
+                    // "unavailable" — never fabricated as ₹0.00.
+                    balances.live_balance?.connected ? (
+                      balances.live_balance.available_cash != null &&
+                      Number.isFinite(Number(balances.live_balance.available_cash)) ? (
+                        <span className="flex items-center gap-1 font-mono">
+                          <span className="text-rose-400 font-bold">
+                            Margin: ₹
+                            {Number(balances.live_balance.available_cash).toLocaleString("en-IN", {
+                              minimumFractionDigits: 2,
+                            })}
+                          </span>
                         </span>
-                      </span>
+                      ) : (
+                        <span
+                          className="text-amber-400 font-medium flex items-center gap-1"
+                          title={
+                            balances.live_balance.error ||
+                            balances.live_balance.message ||
+                            "Broker margin fetch failed"
+                          }
+                        >
+                          <span>Margin unavailable</span>
+                        </span>
+                      )
                     ) : (
                       <span className="text-amber-400 font-medium flex items-center gap-1">
                         <span>No broker</span>

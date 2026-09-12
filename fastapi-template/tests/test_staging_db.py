@@ -46,6 +46,7 @@ class TestAlembicMigration:
             "creator_payout_settings", "notification_preferences",
             "price_alerts", "watchlists", "revoked_tokens",
             "user_setup_tasks",  # migration 0006_user_setup_tasks
+            "broker_state",      # migration 0007_broker_state (Phase 15B)
         }
         tables = set(Base.metadata.tables.keys())
         missing = expected - tables

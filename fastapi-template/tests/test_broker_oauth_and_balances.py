@@ -2,6 +2,7 @@
 
 import time
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, patch
 from httpx import ASGITransport, AsyncClient
 from app.main import app
 from app.db.session import init_db, SessionLocal
@@ -153,3 +154,25 @@ async def test_broker_oauth_and_live_balances_suite():
         assert bal_data["live_balance"]["connected"] is True
         assert bal_data["live_balance"]["broker_name"] in ("ZERODHA", "UPSTOX")
         assert "available_cash" in bal_data["live_balance"]
+
+        # 12b. Phase 15B balance honesty — a failing live margin fetch must
+        # NEVER be fabricated as ₹0.00. The endpoint reports the broker as
+        # connected-but-unavailable (None fields + explicit error) so the UI
+        # renders "Margin unavailable" instead of a fake zero.
+        with patch(
+            "app.api.brokers.ZerodhaKiteBroker.get_margins",
+            new=AsyncMock(side_effect=RuntimeError("Broker outage")),
+        ), patch(
+            "app.api.brokers.UpstoxBroker.get_margins",
+            new=AsyncMock(side_effect=RuntimeError("Broker outage")),
+        ):
+            no_margin_res = await client.get("/api/brokers/balance", headers=headers)
+        assert no_margin_res.status_code == 200
+        no_margin = no_margin_res.json()["live_balance"]
+        assert no_margin["connected"] is True
+        assert no_margin["available_cash"] is None          # NOT fabricated 0.0
+        assert no_margin["utilized_margin"] is None
+        assert no_margin["total_collateral"] is None
+        assert no_margin["error"] == "Broker outage"        # surfaced, not hidden
+        assert no_margin["available_cash"] != 0.0           # honest fail-closed
+        assert "unavailable" in no_margin["message"].lower()

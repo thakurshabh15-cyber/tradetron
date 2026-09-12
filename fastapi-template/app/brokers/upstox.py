@@ -223,26 +223,46 @@ class UpstoxBroker(BrokerClient):
         return []
 
     async def get_margins(self) -> dict[str, Any]:
-        """Fetch live funds & margin balance from Upstox."""
+        """Fetch live funds & margin balance from Upstox.
+
+        Fail-closed (Phase 15B honesty): a non-200 response, invalid payload,
+        or network error RAISES instead of fabricating an all-zero margin.  The
+        caller reports connected-but-unavailable and the UI shows "unavailable"
+        — never a fake "₹0.00".
+        """
         await self.connect()
         url = f"{self.BASE_URL}/user/get-funds-and-margin"
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(url, headers=self._get_headers())
-                if resp.status_code == 200:
-                    equity_data = resp.json().get("data", {}).get("equity", {})
-                    return {
-                        "available_cash": float(equity_data.get("available_margin", 0.0)),
-                        "utilized_margin": float(equity_data.get("used_margin", 0.0)),
-                        "total_collateral": float(equity_data.get("payin_amount", 0.0)),
-                        "currency": "INR",
-                        "broker": "UPSTOX",
-                    }
         except Exception as exc:
             logger.error("Upstox margins query failed: %s", exc)
-            raise RuntimeError(f"Upstox margins query failed: {exc}")
+            raise RuntimeError(f"Upstox margins query failed: {exc}") from exc
 
-        return {"available_cash": 0.0, "utilized_margin": 0.0, "total_collateral": 0.0, "currency": "INR", "broker": "UPSTOX"}
+        if resp.status_code != 200:
+            detail = (resp.text or "")[:200]
+            logger.error(
+                "Upstox margins query HTTP %s: %s",
+                resp.status_code,
+                detail or "empty response",
+            )
+            raise RuntimeError(
+                f"Upstox margins HTTP {resp.status_code}: {detail or 'empty response'}"
+            )
+
+        try:
+            equity_data = resp.json().get("data", {}).get("equity", {})
+        except Exception as exc:
+            logger.error("Upstox margins query invalid JSON: %s", exc)
+            raise RuntimeError(f"Upstox margins query failed: invalid JSON: {exc}") from exc
+
+        return {
+            "available_cash": float(equity_data.get("available_margin", 0.0)),
+            "utilized_margin": float(equity_data.get("used_margin", 0.0)),
+            "total_collateral": float(equity_data.get("payin_amount", 0.0)),
+            "currency": "INR",
+            "broker": "UPSTOX",
+        }
 
     async def get_holdings(self) -> list[dict[str, Any]]:
         """Fetch live portfolio holdings from Upstox."""

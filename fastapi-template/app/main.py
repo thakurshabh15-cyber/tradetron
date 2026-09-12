@@ -124,6 +124,14 @@ async def lifespan(application: FastAPI):  # noqa: ARG001
 
     broker_order_reconciliation_scheduler.start()
 
+    # 8. Start the broker-truth state sync scheduler (Phase 15B): keeps the
+    #    normalized, freshness-tracked BrokerStateRecord snapshot fresh so
+    #    LIVE risk gating and equity/P&L surfaces always read broker truth
+    #    (survives restarts — persisted in the DB).
+    from app.engine.broker_state_sync import broker_state_sync_scheduler
+
+    broker_state_sync_scheduler.start()
+
     logger.info(
         "%s ready — broker=%s, symbols=%s",
         settings.app_name,
@@ -137,6 +145,7 @@ async def lifespan(application: FastAPI):  # noqa: ARG001
     logger.info("Shutting down %s…", settings.app_name)
     broker_scheduler.stop()
     broker_order_reconciliation_scheduler.stop()
+    broker_state_sync_scheduler.stop()
     if _engine:
         await _engine.stop()
     if _simulator:

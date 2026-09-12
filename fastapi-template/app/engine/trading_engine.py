@@ -585,6 +585,30 @@ class TradingEngine:
                 await self._persist_rejected_order(strategy.get("id"), user_id, broker_account_id, symbol, side_str, quantity, price, mode, err_msg)
                 return
 
+            # ── 2c. BROKER-STATE GATE (Phase 15B) ──────────────────────
+            # LIVE orders now require BOTH a fresh genuine market-data feed
+            # (Phase 15A above) AND a fresh, proven broker-truth snapshot.
+            # Fail-closed: simulated, missing, stale, unavailable or erroring
+            # broker state blocks dispatch — never a blind order.
+            snapshot, bs_reason = await self._broker_state_gate_for_live(
+                broker_rec.id, user_id
+            )
+            if bs_reason:
+                logger.error("[LIVE] Order blocked by broker-state gate: %s", bs_reason)
+                await self._persist_rejected_order(
+                    strategy.get("id"), user_id, broker_account_id,
+                    symbol, side_str, quantity, price, mode, bs_reason,
+                )
+                await ws_manager.broadcast_user("trades", user_id, {
+                    "event": "order_rejected",
+                    "strategy_id": strategy.get("id"),
+                    "symbol": symbol,
+                    "reason": bs_reason,
+                    "mode": mode,
+                    "user_id": user_id,
+                })
+                return
+
             # Instantiate broker client with decrypted credentials
             target_broker = get_broker_adapter(broker_rec)
 
@@ -602,23 +626,29 @@ class TradingEngine:
                 )
                 return
 
-            # Pre-trade live broker margin check.
-            # FAIL-SAFETY: if margin verification cannot be completed (broker
-            # API failure, timeout, malformed response) the order is REJECTED
+            # Pre-trade broker-truth margin check (Phase 15B).
+            # The broker-state gate above guaranteed the snapshot is FRESH and
+            # genuine, so the margin gate uses that authoritative available
+            # cash — never a fabricated number.  FAIL-SAFETY: if the broker
+            # does not provide available cash (None), the order is REJECTED
             # rather than dispatched blind against live funds.
-            try:
-                margins = await target_broker.get_margins()
-                avail_cash = float(margins.get("available_cash") or 0.0)
-                req_cash = price * quantity
-                ok, margin_reason = self._risk.check_margin(avail_cash, req_cash)
-                if not ok:
-                    logger.warning("[LIVE] MARGIN REJECTION: %s %s %d @ %.2f — %s", side_str, symbol, quantity, price, margin_reason)
-                    await self._persist_rejected_order(strategy.get("id"), user_id, broker_account_id, symbol, side_str, quantity, price, mode, margin_reason)
-                    return
-            except Exception as m_exc:
-                err_msg = f"Live margin verification failed — order rejected for safety: {m_exc}"
+            avail_cash = snapshot.available_cash if snapshot is not None else None
+            if avail_cash is None:
+                err_msg = (
+                    "Broker truth does not provide available cash — margin cannot "
+                    "be verified; order rejected for safety"
+                )
                 logger.error("[LIVE] %s", err_msg)
-                await self._persist_rejected_order(strategy.get("id"), user_id, broker_account_id, symbol, side_str, quantity, price, mode, err_msg)
+                await self._persist_rejected_order(
+                    strategy.get("id"), user_id, broker_account_id,
+                    symbol, side_str, quantity, price, mode, err_msg,
+                )
+                return
+            req_cash = price * quantity
+            ok, margin_reason = self._risk.check_margin(float(avail_cash), req_cash)
+            if not ok:
+                logger.warning("[LIVE] MARGIN REJECTION: %s %s %d @ %.2f — %s", side_str, symbol, quantity, price, margin_reason)
+                await self._persist_rejected_order(strategy.get("id"), user_id, broker_account_id, symbol, side_str, quantity, price, mode, margin_reason)
                 return
             # ── 2b. Durable PENDING claim BEFORE broker dispatch ──────────
             # Mirror the hardened manual/DMA entry: commit a keyed PENDING
@@ -782,6 +812,68 @@ class TradingEngine:
             )
 
         return None
+
+    # ── LIVE broker-state gate (Phase 15B) ──────────────────────────────────
+
+    async def _broker_state_gate_for_live(
+        self,
+        broker_account_id: str | None,
+        user_id: str | None,
+    ) -> tuple:
+        """Fail-closed broker-truth gate for LIVE execution.
+
+        Returns ``(snapshot, None)`` (allow) only when a fresh, genuine broker
+        snapshot exists for the specified account AND the broker is not
+        SIMULATED.  Returns ``(None, reason)`` for stale / unavailable /
+        simulated / missing state so real money is never dispatched against
+        fabricated or stale account truth.
+        """
+        try:
+            from app.engine.broker_state_sync import (
+                broker_state_sync_engine,
+                derive_broker_state_status,
+            )
+            from app.models.broker_account import BrokerAccountRecord as _BAR
+
+            if not broker_account_id or not user_id:
+                return None, (
+                    "Broker state gate unavailable — account identity missing "
+                    "(no broker_account_id or user_id)"
+                )
+
+            async with SessionLocal() as db:
+                acc = await db.get(_BAR, broker_account_id)
+                if acc is None or acc.user_id != user_id:
+                    return None, (
+                        "Broker account not found or not owned by authenticated user"
+                    )
+                if (acc.broker_name or "").upper() == "SIMULATED":
+                    return None, (
+                        "Broker account is SIMULATED — real broker truth cannot be "
+                        "established for LIVE execution; order rejected for safety"
+                    )
+
+            snapshot = await broker_state_sync_engine.get_snapshot(broker_account_id)
+            if snapshot is None:
+                return None, (
+                    f"No synchronized broker-state snapshot for account "
+                    f"{broker_account_id} — LIVE execution requires a proven "
+                    "fresh broker-truth snapshot"
+                )
+
+            status = derive_broker_state_status(snapshot)
+            if status != "LIVE":
+                return snapshot, (
+                    f"Broker account state is {status} (not fresh LIVE) — LIVE "
+                    "execution blocked until a fresh broker-truth snapshot is synchronized"
+                )
+
+            return snapshot, None
+        except Exception as exc:  # noqa: BLE001 - gate must never raise
+            logger.error("[LIVE] Broker-state gate failed for %s: %s", broker_account_id, exc)
+            return None, (
+                f"Broker state gate unavailable — order rejected for safety: {exc}"
+            )
 
     async def _claim_strategy_order(
         self,

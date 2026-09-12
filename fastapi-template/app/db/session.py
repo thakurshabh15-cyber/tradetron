@@ -152,6 +152,7 @@ async def init_db() -> None:
         UserSetupTaskRecord,
     )
     from app.models.broker_account import BrokerAccountRecord, BrokerSessionLogRecord  # noqa: F401
+    from app.models.broker_state import BrokerStateRecord  # noqa: F401
     from app.models.trading import (  # noqa: F401
         OrderRecord,
         PositionRecord,
