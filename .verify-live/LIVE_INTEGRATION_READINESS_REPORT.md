@@ -46,10 +46,16 @@
 
 ## PHASE 15C — EXCHANGE-LEVEL PROTECTIVE ORDERS (2026-09-12)
 
-**Status:** ✅ BACKEND SHIPPED — exchange-level protective-order engine, durable per-leg
-ledger and fail-closed LIVE entry verified (**23/23** unit + **5/5** E2E + **786** full-suite
-regression).  **Client/ frontend rendering of protection truth is still pending** (backend
-truth exists and is exposed via the API).
+**Status:** ✅ BACKEND SHIPPED + FRONTEND E2E AUDITED (2026-09-12) — exchange-level
+protective-order engine, durable per-leg ledger and fail-closed LIVE entry verified
+(**23/23** unit + **5/5** E2E + **786** full-suite regression).  **Live frontend audit
+`_p15c_frontend_audit.mjs` = 60/61** against the running app: real UI password login
+(no seeded tokens), PAPER DMA + SL/TP through the real OrderTerminal TRANSMIT button,
+chart-drag SL/TP replace, fail-closed invalid-SL rejection (422), real Close-button
+cleanup, honest `PAPER SIMULATION` mode pill, and zero page/console errors at 3 mobile
+viewports with no horizontal overflow.  **One intentional FAIL documents the confirmed
+gap:** `protection_state` / SL / TP are API truth but are NOT rendered in the positions
+table (Client/ follow-up).
 
 **What changed**
 - **Durable protective-order ledger** — `app/models/protective_order.py` + migration
@@ -84,12 +90,22 @@ truth exists and is exposed via the API).
 | Related trading/broker/reconciliation suites (11 files) | **77 passed** |
 | Full backend regression `pytest tests/ -q` | **786 passed, 0 failed, 3 benign warnings** |
 | Migrations — single head `0008_protective_orders`, no dev-DB drift | **PASS** |
+| Frontend E2E `_p15c_frontend_audit.mjs` — auth, protected pages, real UI login, PAPER DMA+SL/TP, replace, close, mobile (360/390/412) | **60/61** |
+| Real UI password login session (login=200, positions=200, zero 401/403; seed-free context) | **PASS** |
+| PAPER DMA via real OrderTerminal TRANSMIT button + SL/TP persisted (e.g. sl=25314.05 tp=25695.67) | **PASS** |
+| Chart-drag replace `PATCH /api/v1/orders/positions/{id}/risk-targets` = 200, reflected in backend | **PASS** |
+| Invalid replace (LONG SL above entry) rejected fail-closed | **422 PASS** |
+| Close via real OpenPositionsPanel button → backend + UI terminal cleanup | **2/2 PASS** |
+| Mode pill honest `PAPER SIMULATION` with no broker; no fabricated PROTECTED claim on dashboard | **PASS** |
+| UI protection-field column present in OpenPositionsPanel | **CONFIRMED GAP (intentional FAIL)** — `protection_state`/SL/TP are API truth but not rendered; no false claim asserted |
 
 **Remaining before real-money production** (in addition to §10 list)
 - Independent broker-sandbox verification of real SL/TP place / cancel / fill semantics
   per adapter (Zerodha / Upstox / Angel One) with live credentials.
 - **Client/ dashboard rendering of the new protection fields** (badges, actions, error
-  lanes) — the backend truth exists; frontend rendering is a 15C follow-up.
+  lanes) — the backend truth exists; frontend rendering is a 15C follow-up. The live
+  frontend audit (`60/61`) explicitly asserts the honest absence of protection columns so
+  the gap stays visible instead of being silently claimed as rendered.
 - Real-time WebSocket market data + periodic live position sync (15C follow-up track).
 ## 1. COMPLETE PIPELINE MAP
 
@@ -243,7 +259,7 @@ MARKET DATA → NORMALIZATION → STRATEGY ENGINE → SIGNAL → RISK ENGINE
 | Dimension | Detail |
 |---|---|
 | **Files** | `app/engine/protective_orders.py`, `app/models/protective_order.py`, migration `0008`, `app/api/trades.py`, `app/brokers/upstox.py` |
-| **Classification** | **REAL — backend shipped**; Client/ U.I. rendering pending |
+| **Classification** | **REAL — backend shipped; frontend audited live (60/61)**; Client/ rendering of protection columns pending (confirmed gap) |
 | **Ledger** | One DB row per protection leg; unique `(position_id, leg)` index; status lifecycle PLACED → COMPLETE / CANCELLED / FAILED / RESOLVED |
 | **Lifecycle** | UNPROTECTED → PAPER → PROTECTION_PENDING → PROTECTED → PROTECTION_FAILED / STOP_TRIGGERED / TARGET_TRIGGERED |
 | **Arming** | After FILLED confirmation; failure tears down the position (CLOSED + PROTECTION_FAILED + 503) — fail-closed, never a silent unprotected LIVE position |
@@ -381,7 +397,7 @@ MARKET DATA → NORMALIZATION → STRATEGY ENGINE → SIGNAL → RISK ENGINE
 | 2 | ~~Protective SL-M + target limit placed in same transaction as fill~~ — **DONE (15C)** | `app/models/protective_order.py`, `app/engine/protective_orders.py`, migration `0008` | P0 |
 | 3 | ~~Modify/cancel protective orders on position close~~ — **DONE (15C)** | `cancel_position_protection` in `app/engine/protective_orders.py` | P0 |
 | 4 | Independent broker-sandbox verification of real SL/TP semantics (Zerodha/Upstox/Angel One) | Broker adapters + sandbox credentials | P0 |
-| 5 | Client/ rendering of protection truth (badges, actions, error lanes) | `client/src/pages/` (Positions/Dashboard) | P1 |
+| 5 | Client/ rendering of protection truth (badges, actions, error lanes) — gap confirmed by live audit `_p15c_frontend_audit.mjs` (protection columns absent from positions table; API truth verified separately) | `client/src/pages/` (Positions/Dashboard) | P1 |
 
 ### Phase 15D: Broker Health & Market Calendar (IMPORTANT)
 
