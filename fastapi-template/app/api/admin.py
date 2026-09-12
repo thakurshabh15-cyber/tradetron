@@ -829,26 +829,23 @@ async def get_system_health(
         cpu_pct = None
 
     # Real provider status from unified manager
-    from app.market_data.unified_manager import UnifiedMarketDataManager
     providers_status = {}
     try:
-        from app.market_data.base import AssetClass
-        mgr = UnifiedMarketDataManager.__new__(UnifiedMarketDataManager)
-        # Check config-based status
-        providers_status = {
-            "indian_equity": {
-                "mode": settings.feed_mode_equity.upper(),
-                "status": "LIVE" if settings.feed_mode_equity == "live" else "DEMO_SIMULATED",
-            },
-            "crypto": {
-                "mode": settings.feed_mode_crypto.upper(),
-                "status": "LIVE (CoinGecko)" if settings.feed_mode_crypto == "live" else "DEMO_SIMULATED",
-            },
-            "forex": {
-                "mode": "DEMO",
-                "status": "DEMO_SIMULATED (no free real-time forex API)",
-            },
-        }
+        from app.market_data.unified_manager import unified_market_manager
+
+        provider_infos = unified_market_manager.get_providers_status()
+        for info in provider_infos:
+            name = info.get("provider_name") or info.get("asset_class") or "provider"
+            providers_status[name] = {
+                "asset_class": info.get("asset_class"),
+                "mode": info.get("feed_mode"),
+                "feed_state": info.get("feed_state"),
+                "status": info.get("status"),
+                "subscribed_symbols_count": info.get("subscribed_symbols_count"),
+                "last_sync_error": info.get("last_sync_error"),
+            }
+        if not providers_status:
+            providers_status = {"error": "No market-data providers reported (manager not started)"}
     except Exception:
         providers_status = {"error": "Could not query provider status"}
 

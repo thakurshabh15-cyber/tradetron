@@ -8,6 +8,9 @@ const MarketContext = createContext({
   isConnected: false,
   tickCount: 0,
   lastUpdated: null,
+  snapshotLoading: false,
+  snapshotError: null,
+  fetchInitialSnapshot: () => Promise.resolve(),
 });
 
 export function MarketProvider({ children }) {
@@ -15,11 +18,15 @@ export function MarketProvider({ children }) {
   const isConnected = useMarketStore((state) => state.isConnected);
   const tickCount = useMarketStore((state) => state.tickCount);
   const lastUpdated = useMarketStore((state) => state.lastUpdated);
+  const snapshotLoading = useMarketStore((state) => state.snapshotLoading);
+  const snapshotError = useMarketStore((state) => state.snapshotError);
   const getQuote = useMarketStore((state) => state.getQuote);
   const fetchInitialSnapshot = useMarketStore((state) => state.fetchInitialSnapshot);
   const connectWebSocket = useMarketStore((state) => state.connectWebSocket);
   const disconnectWebSocket = useMarketStore((state) => state.disconnectWebSocket);
 
+  // Single REST snapshot per app session (deduped + in-flight guarded in the
+  // store). WebSocket ticks then keep the shared quote map live for every page.
   useEffect(() => {
     fetchInitialSnapshot();
     connectWebSocket();
@@ -38,8 +45,11 @@ export function MarketProvider({ children }) {
       isConnected,
       tickCount,
       lastUpdated,
+      snapshotLoading,
+      snapshotError,
+      fetchInitialSnapshot,
     }),
-    [quotes, getQuote, isConnected, tickCount, lastUpdated]
+    [quotes, getQuote, isConnected, tickCount, lastUpdated, snapshotLoading, snapshotError, fetchInitialSnapshot]
   );
 
   return <MarketContext.Provider value={value}>{children}</MarketContext.Provider>;

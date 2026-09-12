@@ -1,0 +1,28 @@
+﻿........................................................................ [  9%]
+........................................................................ [ 18%]
+........................................................................ [ 27%]
+........................................................................ [ 36%]
+........................................................................ [ 45%]
+........................................................................ [ 54%]
+........................................................................ [ 64%]
+........................................................................ [ 73%]
+........................................................................ [ 82%]
+........................................................................ [ 91%]
+..................................................................       [100%]
+============================== warnings summary ===============================
+.venv\Lib\site-packages\fastapi\testclient.py:1
+  C:\Users\HP\Desktop\tradetron\fastapi-template\.venv\Lib\site-packages\fastapi\testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+.venv\Lib\site-packages\pythonjsonlogger\jsonlogger.py:11
+  C:\Users\HP\Desktop\tradetron\fastapi-template\.venv\Lib\site-packages\pythonjsonlogger\jsonlogger.py:11: DeprecationWarning: pythonjsonlogger.jsonlogger has been moved to pythonjsonlogger.json
+    warnings.warn(
+
+tests/test_webhooks_integration.py::TestPELRecovery::test_pel_recovery_shutdown_cancels_loop_cleanly
+  C:\Users\HP\Desktop\tradetron\fastapi-template\app\webhooks\queue\redis_streams.py:183: RuntimeWarning: coroutine 'AsyncMockMixin._execute_mock_call' was never awaited
+    pending = int(summary.get("pending", 0) or 0) if summary else 0
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+786 passed, 3 warnings in 574.84s (0:09:34)

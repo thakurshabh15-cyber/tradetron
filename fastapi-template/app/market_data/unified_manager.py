@@ -24,9 +24,15 @@ class UnifiedMarketDataManager:
 
         self._tick_queue = tick_queue or asyncio.Queue()
 
-        # Determine live vs demo per asset class from config
+        # Determine live vs demo per asset class from config.  Phase 1
+        # hardening: Indian-equity live means a genuine broker-vendor stream
+        # that MUST be connected before any tick is served.  Without one the
+        # provider fails closed (UNAVAILABLE) and emits nothing — synthetic
+        # prices are never labelled LIVE.  "delayed" serves genuinely-sourced
+        # DELAYED market data, and "demo" serves the honest DEMO paper feed.
+        equity_mode = (settings.feed_mode_equity or "demo").strip().lower()
         equity_live = (
-            settings.feed_mode_equity == "live"
+            equity_mode == "live"
             and bool(settings.angel_api_key)
             and bool(settings.angel_client_code)
         )
@@ -34,11 +40,17 @@ class UnifiedMarketDataManager:
         # Forex is always demo — no free real-time forex API available
         forex_live = False
 
-        equity_provider = IndianEquityMarketDataProvider(
-            api_key=settings.angel_api_key if equity_live else None,
-            client_code=settings.angel_client_code if equity_live else None,
-            use_live_feed=equity_live,
-        )
+        if equity_mode == "delayed":
+            equity_provider = IndianEquityMarketDataProvider(feed_mode="delayed")
+        elif equity_live:
+            equity_provider = IndianEquityMarketDataProvider(
+                api_key=settings.angel_api_key,
+                client_code=settings.angel_client_code,
+                use_live_feed=True,
+            )
+        else:
+            equity_provider = IndianEquityMarketDataProvider()
+
         # Phase 15A: use genuine Binance WebSocket streaming when crypto live,
         # fall back to CoinGecko REST polling when demo.
         if crypto_live:
@@ -167,6 +179,8 @@ class UnifiedMarketDataManager:
             return settings.data_freshness_commodity
         return settings.data_freshness_default
 
+    _DELAYED_FRESH_WINDOW_SECONDS = 5 * 60.0
+
     @classmethod
     def _with_freshness(cls, q: dict[str, Any]) -> dict[str, Any]:
         """Attach honest freshness metadata (data_status / is_stale / age_seconds)."""
@@ -174,7 +188,36 @@ class UnifiedMarketDataManager:
 
         feed_mode = q.get("feed_mode")
         ts = q.get("timestamp")
+        feed_state = q.get("feed_state")
         is_demo = feed_mode == "DEMO_SIMULATED"
+
+        if feed_state == "DELAYED":
+            # Genuinely-sourced DELAYED data: report DELAYED while the vendor
+            # data is reasonably fresh, STALE (fail closed) once it ages beyond
+            # the delayed horizon.  Never LIVE.
+            try:
+                tick_ts = datetime.fromisoformat(ts) if ts else None
+            except (TypeError, ValueError):
+                tick_ts = None
+            if tick_ts is None:
+                q["data_status"] = "STALE"
+                q["is_stale"] = True
+                q["age_seconds"] = None
+                return q
+            if tick_ts.tzinfo is None:
+                tick_ts = tick_ts.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - tick_ts).total_seconds()
+            q["age_seconds"] = round(age, 1)
+            stale = age > cls._DELAYED_FRESH_WINDOW_SECONDS
+            q["is_stale"] = stale
+            q["data_status"] = "STALE" if stale else "DELAYED"
+            return q
+
+        if feed_state == "UNAVAILABLE":
+            q["data_status"] = "UNAVAILABLE"
+            q["is_stale"] = None
+            q["age_seconds"] = None
+            return q
 
         if not ts:
             q["data_status"] = "DEMO" if is_demo else "UNKNOWN"

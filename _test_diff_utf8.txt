@@ -1,0 +1,288 @@
+﻿diff --git a/fastapi-template/tests/test_protective_orders.py b/fastapi-template/tests/test_protective_orders.py
+index f0a2fb73..cc276e46 100644
+--- a/fastapi-template/tests/test_protective_orders.py
++++ b/fastapi-template/tests/test_protective_orders.py
+@@ -526,4 +526,280 @@ async def test_orphan_protective_row_resolved_locally_never_broker(monkeypatch):
+     rows = await _protective_rows(pos_id)
+     assert rows[0].status == "RESOLVED"
+     assert report["orphans_resolved"] >= 1
+-    assert broker.cancelled == []  # orphan resolved locally ONLY
+\ No newline at end of file
++    assert broker.cancelled == []  # orphan resolved locally ONLY
++# ÔöÇÔöÇ Phase 15C release-hardening: replace/cancel honesty + crash recovery ÔöÇÔöÇÔöÇÔöÇ
++
++
++class _CancelFailingBroker(_FakeProtectiveBroker):
++    """Deterministic fake whose broker cancellation always fails."""
++
++    async def cancel_order(self, broker_order_id):
++        raise RuntimeError("broker cancel rejected")
++
++
++class _SymbolCancelBroker(_FakeProtectiveBroker):
++    """Deterministic fake that ONLY supports symbol-context cancellation."""
++
++    def __init__(self) -> None:
++        super().__init__()
++        self.symbol_cancelled: list[tuple[str, str]] = []
++
++    async def cancel_order_with_symbol(self, symbol, broker_order_id):
++        self.symbol_cancelled.append((symbol, broker_order_id))
++        self.status_map[broker_order_id] = "CANCELLED"
++        return {"status": "CANCELLED", "broker_order_id": broker_order_id}
++
++    async def cancel_order(self, broker_order_id):
++        raise AssertionError("generic cancel_order must not be used")
++
++
++class _RejectingBroker(_FakeProtectiveBroker):
++    """Deterministic fake whose protective placements are rejected."""
++
++    async def place_order(self, order):
++        raise RuntimeError("broker rejected protective order: insufficient margin")
++
++
++class _NoReferenceBroker(_FakeProtectiveBroker):
++    """Deterministic fake that accepts an order but returns NO broker reference."""
++
++    async def place_order(self, order):
++        return {"status": "OPEN"}
++
++
++@pytest.mark.asyncio
++async def test_replace_blocked_when_broker_cancel_fails_no_duplicate(monkeypatch):
++    broker = _CancelFailingBroker()
++    monkeypatch.setattr("app.brokers.get_broker_adapter", lambda acc: broker)
++    user_id, acc_id = await _seed_user_and_broker()
++    pos_id = await _seed_position(user_id, acc_id, sl=100.0, tp=200.0)
++
++    await _ENGINE.ensure_position_protection(pos_id)
++    assert len(broker.placed) == 2
++
++    outcome = await _ENGINE.replace_position_protection(pos_id, new_sl=90.0)
++
++    # Fail CLOSED: no second SL may be placed while the old order is possibly
++    # still live.  The row records the failure with its reference intact.
++    assert outcome.ok is False
++    assert outcome.fail_closed is True
++    assert outcome.state == PROTECTION_STATE_FAILED
++    assert len(broker.placed) == 2  # NOT re-placed ÔåÆ no duplicate protection
++    rows = await _protective_rows(pos_id)
++    sl_row = next(r for r in rows if r.leg == LEG_STOP_LOSS)
++    assert sl_row.status == "FAILED"
++    assert sl_row.broker_protective_order_id  # old reference kept visible
++    assert sl_row.trigger_price == 100.0  # old level preserved
++    assert "duplicate protection" in (sl_row.last_error or "").lower()
++
++
++@pytest.mark.asyncio
++async def test_close_records_failed_cancel_honestly(monkeypatch):
++    broker = _CancelFailingBroker()
++    monkeypatch.setattr("app.brokers.get_broker_adapter", lambda acc: broker)
++    user_id, acc_id = await _seed_user_and_broker()
++    pos_id = await _seed_position(user_id, acc_id)
++
++    await _ENGINE.ensure_position_protection(pos_id)
++    refs = {r.broker_protective_order_id for r in await _protective_rows(pos_id)}
++
++    outcome = await _ENGINE.cancel_position_protection(
++        pos_id, reason="position closed"
++    )
++
++    assert outcome.ok is True
++    rows = await _protective_rows(pos_id)
++    # A failed broker cancel may NOT be hidden as a local CANCELLED header.
++    assert rows and all(r.status == "FAILED" for r in rows)
++    assert all(r.broker_protective_order_id in refs for r in rows)
++    assert all("may still be live" in (r.last_error or "") for r in rows)
++
++
++@pytest.mark.asyncio
++async def test_failed_row_with_live_ref_not_re_poked_by_reconcile(monkeypatch):
++    broker = _FakeProtectiveBroker()
++    monkeypatch.setattr("app.brokers.get_broker_adapter", lambda acc: broker)
++    user_id, acc_id = await _seed_user_and_broker()
++    pos_id = await _seed_position(
++        user_id, acc_id, protection_state=PROTECTION_STATE_PROTECTED
++    )
++    await _seed_protective_row(
++        pos_id, user_id, acc_id,
++        status="FAILED",
++        broker_ref="FAKE-STILL-LIVE",
++        created_seconds_ago=CRASH_WINDOW_STALE_SECONDS + 60,
++    )
++    broker.status_map["FAKE-STILL-LIVE"] = "OPEN"
++
++    await _ENGINE.reconcile_once()
++
++    rows = await _protective_rows(pos_id)
++    assert rows[0].status == "FAILED"  # never re-poked while an order may be live
++    assert broker.placed == []
++
++
++@pytest.mark.asyncio
++async def test_reconcile_recovers_pending_position_with_no_rows(monkeypatch):
++    broker = _FakeProtectiveBroker()
++    monkeypatch.setattr("app.brokers.get_broker_adapter", lambda acc: broker)
++    user_id, acc_id = await _seed_user_and_broker()
++    pos_id = await _seed_position(
++        user_id, acc_id, protection_state=PROTECTION_STATE_PENDING
++    )
++    assert await _protective_rows(pos_id) == []
++
++    report = await _ENGINE.reconcile_once()
++
++    # Crash between the PENDING position commit and the first per-leg commit is
++    # re-armed idempotently ÔÇö the ledger never stays PENDING with no claim.
++    assert any(
++        item["position_id"] == pos_id for item in report["recovered"]
++    )
++    rows = await _protective_rows(pos_id)
++    assert {r.leg for r in rows} == {LEG_STOP_LOSS, LEG_TAKE_PROFIT}
++    assert all(r.status == "PLACED" for r in rows)
++    assert (await _position_state(pos_id)) == PROTECTION_STATE_PROTECTED
++
++
++@pytest.mark.asyncio
++async def test_pending_with_ref_promoted_to_placed_on_broker_open(monkeypatch):
++    broker = _FakeProtectiveBroker()
++    monkeypatch.setattr("app.brokers.get_broker_adapter", lambda acc: broker)
++    user_id, acc_id = await _seed_user_and_broker()
++    pos_id = await _seed_position(
++        user_id, acc_id, protection_state=PROTECTION_STATE_PENDING
++    )
++    await _seed_protective_row(
++        pos_id, user_id, acc_id,
++        leg=LEG_STOP_LOSS,
++        status="PENDING_PLACEMENT",
++        broker_ref="FAKE-ACCEPTED",
++        created_seconds_ago=CRASH_WINDOW_STALE_SECONDS + 60,
++    )
++    broker.status_map["FAKE-ACCEPTED"] = "OPEN"  # broker truth: order is live
++
++    await _ENGINE.reconcile_once()
++
++    rows = await _protective_rows(pos_id)
++    assert rows[0].status == "PLACED"  # honestly promoted from broker truth
++    assert (await _position_state(pos_id)) == PROTECTION_STATE_PROTECTED
++
++
++@pytest.mark.asyncio
++async def test_symbol_context_cancel_used_when_adapter_requires_it(monkeypatch):
++    broker = _SymbolCancelBroker()
++    monkeypatch.setattr("app.brokers.get_broker_adapter", lambda acc: broker)
++    user_id, acc_id = await _seed_user_and_broker()
++    pos_id = await _seed_position(user_id, acc_id)
++
++    await _ENGINE.ensure_position_protection(pos_id)
++    refs = {r.broker_protective_order_id for r in await _protective_rows(pos_id)}
++
++    await _ENGINE.cancel_position_protection(pos_id, reason="position closed")
++
++    rows = await _protective_rows(pos_id)
++    assert all(r.status == "CANCELLED" for r in rows)
++    assert {ref for (_sym, ref) in broker.symbol_cancelled} == refs
++    assert all(sym == "RELIANCE" for (sym, _ref) in broker.symbol_cancelled)
++
++
++@pytest.mark.asyncio
++async def test_live_on_simulated_account_fails_closed(monkeypatch):
++    broker = _FakeProtectiveBroker()
++    monkeypatch.setattr("app.brokers.get_broker_adapter", lambda acc: broker)
++    user_id, acc_id = await _seed_user_and_broker(broker_name="SIMULATED")
++    pos_id = await _seed_position(user_id, acc_id)
++
++    outcome = await _ENGINE.ensure_position_protection(pos_id)
++
++    assert outcome.ok is False
++    assert outcome.fail_closed is True
++    assert outcome.state == PROTECTION_STATE_FAILED
++    assert await _protective_rows(pos_id) == []
++    assert broker.placed == []
++
++
++@pytest.mark.asyncio
++async def test_live_without_broker_account_fails_closed():
++    user_id, _acc_id = await _seed_user_and_broker()
++    pos_id = await _seed_position(user_id, None)
++
++    outcome = await _ENGINE.ensure_position_protection(pos_id)
++
++    assert outcome.ok is False
++    assert outcome.fail_closed is True
++    assert outcome.state == PROTECTION_STATE_FAILED
++    assert await _protective_rows(pos_id) == []
++
++
++@pytest.mark.asyncio
++async def test_broker_rejection_fails_closed(monkeypatch):
++    broker = _RejectingBroker()
++    monkeypatch.setattr("app.brokers.get_broker_adapter", lambda acc: broker)
++    user_id, acc_id = await _seed_user_and_broker()
++    pos_id = await _seed_position(user_id, acc_id)
++
++    outcome = await _ENGINE.ensure_position_protection(pos_id)
++
++    assert outcome.ok is False
++    assert outcome.fail_closed is True
++    assert outcome.state == PROTECTION_STATE_FAILED
++    rows = await _protective_rows(pos_id)
++    assert rows and all(r.status == "FAILED" for r in rows)
++    assert all(not r.broker_protective_order_id for r in rows)  # no fake refs
++
++
++@pytest.mark.asyncio
++async def test_placement_without_broker_ref_fails_closed(monkeypatch):
++    broker = _NoReferenceBroker()
++    monkeypatch.setattr("app.brokers.get_broker_adapter", lambda acc: broker)
++    user_id, acc_id = await _seed_user_and_broker()
++    pos_id = await _seed_position(user_id, acc_id)
++
++    outcome = await _ENGINE.ensure_position_protection(pos_id)
++
++    assert outcome.ok is False
++    assert outcome.fail_closed is True
++    assert outcome.state == PROTECTION_STATE_FAILED
++    rows = await _protective_rows(pos_id)
++    assert rows and all(r.status == "FAILED" for r in rows)
++    assert all(not r.broker_protective_order_id for r in rows)
++    assert all("reference" in (r.last_error or "") for r in rows)
++
++
++@pytest.mark.asyncio
++async def test_upstox_adapter_raises_on_missing_order_id(monkeypatch):
++    """Phase 15C no-fabrication: Upstox must raise, never return a fake id."""
++    from app.brokers.upstox import UpstoxBroker
++    from app.schemas.trading import Side as _Side
++
++    settings.broker_mode = "live"
++
++    class _FakeResp:
++        status_code = 200
++        text = "{}"
++
++        def json(self):
++            return {"data": {}}
++
++    class _FakeClient:
++        def __init__(self, *a, **k):
++            pass
++
++        async def __aenter__(self):
++            return self
++
++        async def __aexit__(self, *a):
++            return False
++
++        async def post(self, *a, **k):
++            return _FakeResp()
++
++    monkeypatch.setattr("app.brokers.upstox.httpx.AsyncClient", _FakeClient)
++    broker = UpstoxBroker(api_key="k", api_secret="s", access_token="tok")
++
++    with pytest.raises(RuntimeError, match="no order_id"):
++        await broker.place_order(
++            OrderRequest(symbol="RELIANCE", side=_Side.BUY, quantity=1)
++        )
++    settings.broker_mode = "simulated"
+\ No newline at end of file

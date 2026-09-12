@@ -1,0 +1,4 @@
+﻿  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+786 passed, 3 warnings in 574.84s (0:09:34)

@@ -42,6 +42,11 @@ class NormalizedTick:
     feed_mode: DataFeedMode
     data_source: str
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    # Explicit honest feed-state hint for providers that cannot be described by
+    # ``feed_mode`` alone (e.g. genuinely-sourced DELAYED data, or a live
+    # provider that is presently UNAVAILABLE).  ``None`` means the provider
+    # relies on the standard feed_mode/LIVE-else-stale classification.
+    feed_state: Optional[str] = None
 
     def age_seconds(self, now: Optional[datetime] = None) -> Optional[float]:
         """Age of this tick in seconds since its reported timestamp (UTC).
@@ -86,6 +91,7 @@ class NormalizedTick:
             "feed_mode": self.feed_mode.value,
             "data_source": self.data_source,
             "timestamp": self.timestamp,
+            "feed_state": self.feed_state,
         }
 
 

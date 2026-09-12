@@ -158,8 +158,18 @@ export default function Dashboard() {
   });
   const searchContainerRef = useRef(null);
 
-  // Central Market Data Feed (Single WebSocket Session Feed)
-  const { quotes: liveMarketMap, isConnected: isWsConnected, tickCount: liveTicksCount } = useMarket();
+  // Central Market Data Feed (Single WebSocket Session Feed + shared REST snapshot).
+  // The REST snapshot is fetched exactly ONCE per app session by MarketProvider;
+  // Dashboard consumes the shared store map instead of issuing its own duplicate
+  // GET /api/market-data calls (Phase 2 API-call hardening).
+  const {
+    quotes: liveMarketMap,
+    isConnected: isWsConnected,
+    tickCount: liveTicksCount,
+    snapshotLoading: marketLoading,
+    snapshotError: marketError,
+    fetchInitialSnapshot: snapshotRefetch,
+  } = useMarket();
 
   // Auth-aware data fetching: authenticated callers get user-scoped data;
   // guests gracefully fall back to the public/demo view.
@@ -167,31 +177,26 @@ export default function Dashboard() {
   const isGuest = !isAuthenticated;
   const toast = useToast();
 
-  // Base API Data Fetchers — market data and risk status are truly public
-  // (no per-user scoping), so always use publicFetch.  Trade, position, and
-  // dashboard-summary endpoints support optional auth: guests get the demo
-  // view while authenticated callers receive their own tenant-scoped data.
+  // Base API Data Fetchers — risk status is truly public (no per-user scoping)
+  // so it always uses publicFetch.  Trade, position, and dashboard-summary
+  // endpoints support optional auth: guests get the demo view while
+  // authenticated callers receive their own tenant-scoped data.
   // /api/trades/positions REQUIRES auth, so it MUST use authFetch when
   // logged in or the endpoint returns 401.
-  const { loading: marketLoading, error: marketError, refetch: refetchMarket } = useApi("/api/market-data", { public: true });
+  // NOTE: market data is intentionally NOT fetched here anymore — the shared
+  // MarketProvider snapshot (single GET /api/market-data per session) feeds it.
   const { data: riskData, loading: riskLoading, error: riskError, refetch: refetchRisk } = useApi("/api/risk-status", { public: true });
   const { data: initialTrades, loading: tradesLoading, error: tradesError, refetch: refetchTrades } = useApi("/api/trades?limit=20", { public: isGuest });
   const { data: summaryData, loading: summaryLoading, error: summaryError, refetch: refetchSummary } = useApi("/api/dashboard/summary", { public: isGuest });
   const { data: positionsData, loading: positionsLoading, error: positionsError, refetch: refetchPositions } = useApi("/api/trades/positions", { public: isGuest });
 
-
-    // Public market widgets — fetched without auth so guests see live heatmaps
-  const { loading: marketWidgetsLoading, error: marketWidgetsError, refetch: refetchWidgets } = useApi("/api/market-data", { public: true });
-  const marketWidgetsFallback = useMemo(() => {
-    if (marketWidgetsError || marketWidgetsLoading) return null;
-    return liveMarketMap;
-  }, [liveMarketMap, marketWidgetsLoading, marketWidgetsError]);
-
+  // Market widgets consume the same shared single-session snapshot as the
+  // ticker grid (liveMarketMap) — no second GET /api/market-data per mount.
   const marketQuotesList = useMemo(() => {
-    const source = liveMarketMap || marketWidgetsFallback;
+    const source = liveMarketMap || {};
     if (!source || typeof source !== "object") return [];
     return Object.values(source).filter((q) => q && typeof q === "object" && "symbol" in q && typeof q.change_pct === "number");
-  }, [liveMarketMap, marketWidgetsFallback]);
+  }, [liveMarketMap]);
 
   const marketTopGainers = useMemo(
     () => [...marketQuotesList].sort((a, b) => b.change_pct - a.change_pct).slice(0, 6),
@@ -289,7 +294,7 @@ export default function Dashboard() {
   };
 
   const refreshAll = () => {
-    refetchMarket();
+    snapshotRefetch(true);
     refetchRisk();
     refetchSummary();
     refetchTrades();
@@ -589,9 +594,9 @@ export default function Dashboard() {
             )}
 
         {/* Market Heatmap + Top Gainers/Losers — gated on live feed, skeleton fallback */}
-        {marketWidgetsError ? (
-          <ErrorState title="Market Widgets Unavailable" error={marketWidgetsError} onRetry={refetchWidgets} />
-        ) : marketWidgetsLoading || !liveMarketMap ? (
+        {marketError ? (
+          <ErrorState title="Market Widgets Unavailable" error={marketError} onRetry={() => snapshotRefetch(true)} />
+        ) : marketLoading || !liveMarketMap ? (
           <div className="grid gap-4 lg:grid-cols-3">
             <SkeletonCard />
             <SkeletonCard />
@@ -773,7 +778,7 @@ export default function Dashboard() {
         <ErrorState
           title="Market Data Pipeline Offline"
           error={marketError}
-          onRetry={refetchMarket}
+          onRetry={() => snapshotRefetch(true)}
         />
       ) : marketLoading && displayedSymbols.length === 0 ? (
         <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">

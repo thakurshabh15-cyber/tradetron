@@ -6,12 +6,16 @@ const RECONNECT_INTERVALS = [1000, 2000, 3000, 5000, 10000];
 let wsInstance = null;
 let reconnectTimeout = null;
 let retryCount = 0;
+let snapshotInFlight = null;
 
 export const useMarketStore = create((set, get) => ({
   quotes: {},
   isConnected: false,
   tickCount: 0,
   lastUpdated: null,
+  snapshotLoading: false,
+  snapshotError: null,
+  snapshotReady: false,
 
   setQuotes: (quotes) => set((state) => ({ quotes: { ...state.quotes, ...quotes } })),
   
@@ -33,25 +37,45 @@ export const useMarketStore = create((set, get) => ({
     return get().quotes[clean] || null;
   },
 
-  fetchInitialSnapshot: async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/market-data`);
-      if (!res.ok) return;
-      const data = await res.json();
-      if (data && data.market && Array.isArray(data.market)) {
-        const initialMap = {};
-        for (const item of data.market) {
-          if (item && item.symbol) {
-            initialMap[item.symbol] = item;
-          }
+  fetchInitialSnapshot: async (force = false) => {
+    // Single-owner REST snapshot: fail-closed with true loading/error state so
+    // consumers never fabricate quotes while the fetch is pending or failed.
+    if (snapshotInFlight) return snapshotInFlight;
+    if (!force && get().snapshotReady) return Promise.resolve(get().quotes);
+
+    const request = (async () => {
+      set({ snapshotLoading: true, snapshotError: null });
+      try {
+        const res = await fetch(`${API_BASE}/api/market-data`);
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
         }
-        set((state) => ({
-          quotes: { ...initialMap, ...state.quotes },
-        }));
+        const data = await res.json();
+        if (data && data.market && Array.isArray(data.market)) {
+          const initialMap = {};
+          for (const item of data.market) {
+            if (item && item.symbol) {
+              initialMap[item.symbol] = item;
+            }
+          }
+          set((state) => ({
+            quotes: { ...initialMap, ...state.quotes },
+            snapshotLoading: false,
+            snapshotError: null,
+            snapshotReady: true,
+          }));
+        }
+        return data;
+      } catch (err) {
+        console.debug("[MarketStore] Initial market data fetch:", err);
+        set({ snapshotLoading: false, snapshotError: err.message || "market data fetch failed" });
+        return null;
+      } finally {
+        snapshotInFlight = null;
       }
-    } catch (err) {
-      console.debug("[MarketStore] Initial market data fetch:", err);
-    }
+    })();
+    snapshotInFlight = request;
+    return request;
   },
 
   connectWebSocket: () => {

@@ -1,0 +1,15 @@
+﻿
+[1m[30m[46m RUN [49m[39m[22m [36mv5.0.0 [39m[90mC:/Users/HP/Desktop/tradetron/fastapi-template/client[39m
+
+ [32mÔ£ô[39m src/utils/deployBroker.test.js [2m([22m[2m5 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32mÔ£ô[39m src/utils/priceFeed.test.js [2m([22m[2m5 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32mÔ£ô[39m src/services/apiClient.test.js [2m([22m[2m3 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32mÔ£ô[39m src/services/alertService.test.js [2m([22m[2m9 tests[22m[2m)[22m[32m 56[2mms[22m[39m
+ [32mÔ£ô[39m src/utils/brokerEquity.test.js [2m([22m[2m8 tests[22m[2m)[22m[32m 128[2mms[22m[39m
+ [32mÔ£ô[39m src/components/OpenPositionsPanel.test.jsx [2m([22m[2m10 tests[22m[2m)[22m[32m 90[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m6 passed[39m[22m[90m (6)[39m
+[2m      Tests [22m [1m[32m40 passed[39m[22m[90m (40)[39m
+[2m   Start at [22m 00:56:14
+[2m   Duration [22m 3.34s[2m (environment 88%, transform 6%, import 2%, tests 2%, worker 1%)[22m
+

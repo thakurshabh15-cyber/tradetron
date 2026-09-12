@@ -107,6 +107,60 @@ table (Client/ follow-up).
   frontend audit (`60/61`) explicitly asserts the honest absence of protection columns so
   the gap stays visible instead of being silently claimed as rendered.
 - Real-time WebSocket market data + periodic live position sync (15C follow-up track).
+
+---
+
+## PHASE 15D — HONEST INDIAN-EQUITY MARKET DATA (2026-09-12)
+
+**Status:** ✅ SHIPPED — honesty-first: the Indian-equity provider can never fabricate
+LIVE ticks.  DEMO (labelled simulated) and DELAYED (genuine yfinance NSE/BSE real
+prices, one tick per refresh, **no synthetic interpolation**) are the only modes that
+emit; LIVE with no verified broker stream is strictly **UNAVAILABLE** (fail-closed).
+Classification: **delay=AMBER · live=RED until a real broker stream is connected**.
+
+**What changed**
+- **`NormalizedTick.feed_state`** (`app/market_data/base.py`) — explicit provenance label
+  (`DEMO` / `DELAYED` / `STALE` / `UNAVAILABLE` / `LIVE`) serialized through `to_dict()`.
+- **Mode-strict provider** (`app/market_data/providers/indian_equity.py`):
+  - `feed_mode` ∈ `demo` (default) / `delayed` / `live` (`_real_mode`).
+  - `delayed` → `_run_real_price_sync()`: real yfinance NSE/BSE/commodity pulls behind
+    `asyncio.to_thread`, emitting **one genuine `NormalizedTick` per refresh** carrying
+    `feed_state="DELAYED"`, real open/high/low/close/change/volume, with
+    `last_sync_success` / `last_sync_error` tracking.  **No micro-ticks, ever.**
+  - `live` → **emits nothing**.  Without a verified broker stream session (requires
+    `ANGEL_JWT_TOKEN` + `smartapi-python` SmartStream), state is `UNAVAILABLE` and the
+    last sync error records why.  A *config flag alone can never claim LIVE*.
+  - `classify_feed_state()` → `DEMO` / `DELAYED` / `STALE` / `UNAVAILABLE` — **never LIVE
+    without a genuine stream**; `_with_freshness()` maps an aged DELAYED quote to STALE.
+- **Honest management** (`app/market_data/unified_manager.py`) — provider selection from
+  `settings.feed_mode_equity` (`delayed` / `live+creds` / `demo`); freshness mapping
+  `DELAYED→DELAYED (STALE after the 5-min window)`, `UNAVAILABLE→UNAVAILABLE`, `DEMO→DEMO`.
+- **Admin no longer claims LIVE from config** (`app/api/admin.py`) —
+  `/api/admin/system/health` renders the real `get_providers_status()` (which reads each
+  provider's live feed state) instead of a static config-derived banner.
+- **Phase 2 API-call hardening** (client): the Dashboard's **3 identical
+  `GET /api/market-data` on mount** (2 × `useApi` + store snapshot) were collapsed into
+  **one shared store snapshot fetch** (`useMarketStore.fetchInitialSnapshot`, in-flight
+  guarded + `snapshotReady` dedupe + force-refresh for the Refresh button); Dashboard now
+  consumes the shared quote map (`useMarket()`) with true `snapshotLoading`/`snapshotError`.
+
+**Validation evidence (2026-09-12)**
+| Check | Result |
+|---|---|
+| `pytest tests/test_indian_equity_honesty.py` — demo honest; live fail-closed UNAVAILABLE (no ticks); delayed real price emission (RELIANCE 2495.25, `feed_state=DELAYED`); no-interpolation between refreshes; pipeline failure → last-good + STALE; `_with_freshness` DELAYED/STALE/UNAVAILABLE mapping; legacy `use_live_feed=True` also fail-closed | **7/7 PASS** |
+| Full backend regression `pytest tests/ -q` | **786 passed, 0 failed, 3 benign warnings** |
+| `GET /api/market-data/providers/status` — real per-provider state (IndianEquity `DEMO`, Crypto `UNAVAILABLE`), **no fake LIVE banners** | **PASS** |
+| `client` `eslint` on edited files + `vite build` | **0 errors**, build OK |
+
+**Remaining before real-money production**
+- Genuine LIVE Indian-equity feed **requires real SmartStream credentials**
+  (`ANGEL_JWT_TOKEN`) + a verified streaming session; until then the provider stays
+  UNAVAILABLE by design and the live certification gate remains **RED**.
+- Broker-sandbox validation of real SL/TP (15C) + `Client/` rendering of protection
+  fields (15C follow-up) + live WebSocket/position sync (15C follow-up track).
+
+---
+
 ## 1. COMPLETE PIPELINE MAP
 
 ```
@@ -133,14 +187,14 @@ MARKET DATA → NORMALIZATION → STRATEGY ENGINE → SIGNAL → RISK ENGINE
 
 **Per-Provider Classification:**
 
-| Provider | DEMO Mode | LIVE Mode | Actual Data Source in LIVE | Classification |
+| Provider | DEMO Mode | DELAYED Mode | LIVE Mode | Classification |
 |---|---|---|---|---|
-| Indian Equity | Random walk around seed prices | Micro-ticks around yfinance anchor (15s refresh) | yfinance REST (delayed, not streaming) | **FALLBACK** |
-| Crypto | Random walk simulation | CoinGecko REST polling (60s interval) | CoinGecko free public API | **REAL** (delayed) |
+| Indian Equity | Labelled simulated ticks (`feed_state=DEMO`) | Genuine yfinance NSE/BSE real prices, one tick per refresh, no interpolation (`feed_state=DELAYED`) | **UNAVAILABLE** — refuses to emit without a verified broker stream session | **AMBER** (delayed genuine) · **RED** (live until SmartStream connected) |
+| Crypto | Random walk simulation | CoinGecko REST polling (60s interval) — real (delayed) | Real (delayed) CoinGecko free public API | **REAL** (delayed) |
 | Forex | Always DEMO (`forex_live = False`) | N/A | N/A | **DEMO** |
 | Option Chain | Black-Scholes model with IV surface | Same model, re-priced with live spot tape | Live spot from other providers | **MOCK** |
 
-**Critical Gap:** No real-time WebSocket market data feed exists. The original Binance WebSocket was removed (HTTP 451 from cloud IPs). No Angel One SmartStream or Zerodha Ticker SDK is integrated. Even in `LIVE_BROKER_VENDOR` mode, Indian equity ticks are synthetic micro-fluctuations around a 15-second-delayed yfinance anchor price.
+**Critical Gap (updated):** No real-time WebSocket market data feed exists. The original Binance WebSocket was removed (HTTP 451 from cloud IPs). No Angel One SmartStream or Zerodha Ticker SDK is integrated. **Since Phase 15D the Indian-equity provider never fabricates micro-ticks**: in `delayed` mode it emits one genuine delayed quote per refresh, and in `live` mode it stays **UNAVAILABLE** until a verified broker stream is connected.
 ---
 
 ### 2.2 NORMALIZATION
@@ -474,13 +528,13 @@ Phase 15E  →  Equity & P&L Hardening (P1 — reporting accuracy)
 **Overall Readiness: AMBER — Partially Ready**
 
 - ✅ **Broker integration:** 4 real adapters with order placement, status query, positions, margins, holdings. OAuth lifecycle, encrypted credentials, daily renewal.
-- ⚠️ **Market data:** Crypto (CoinGecko REST) is real but delayed. Indian equity is synthetic in all modes. No WebSocket streaming.
+- ⚠️ **Market data:** Crypto (CoinGecko REST) and Indian equity (yfinance NSE/BSE) are real but **delayed** (one honest tick per refresh, no interpolation). No WebSocket streaming. **LIVE is never claimed without a verified broker stream** (Indian equity stays UNAVAILABLE until SmartStream is connected — Phase 15D shipped).
 - ✅ **Order lifecycle:** Durable claims, CAS finalization, idempotency, reconciliation, postback verification.
 - ❌ **Live equity/P&L:** Not derived from broker truth. Internal calculation only.
 - ⚠️ **Exchange-level protection:** Engine + durable ledger + fail-closed LIVE arm SHIPPED (15C); pending broker-sandbox validation of real SL/TP semantics and Client/ rendering of protection truth.
 - ✅ **Safety:** 3-layer BROKER_MODE guard, encrypted credentials, tenant isolation, fail-closed design.
 
-**The system is ready for BROKER SANDBOX testing (Binance testnet, broker paper-trading modes). Phase 15B (honest, fail-closed broker/equity display) and Phase 15C backend (exchange-level protective orders: durable ledger, cancel-gated reconcile, fail-closed LIVE entry) are complete and validated (786 passed / 0 failed full regression). It is NOT yet ready for real-money production — remaining follow-ups: periodic live position sync from broker, real-time WebSocket market data, independent broker-sandbox validation of real SL/TP semantics, and Client/ rendering of the new protection fields.**
+**The system is ready for BROKER SANDBOX testing (Binance testnet, broker paper-trading modes). Phase 15B (honest, fail-closed broker/equity display), Phase 15C backend (exchange-level protective orders: durable ledger, cancel-gated reconcile, fail-closed LIVE entry), and Phase 15D (honest Indian-equity market data: DEMO/DELAYED/UNAVAILABLE only — no fabricated LIVE ticks, admin no longer claims LIVE from config, Dashboard duplicate market-data fetches collapsed to one) are complete and validated (786 passed / 0 failed full regression). It is NOT yet ready for real-money production — remaining follow-ups: genuine LIVE Indian-equity streaming feed with verified broker credentials, periodic live position sync from broker, real-time WebSocket market data, independent broker-sandbox validation of real SL/TP semantics, and Client/ rendering of the new protection fields.**
 
 ---
 
@@ -489,7 +543,7 @@ Phase 15E  →  Equity & P&L Hardening (P1 — reporting accuracy)
 | Claim | Evidence |
 |---|---|
 | No WebSocket market data provider | `app/market_data/providers/crypto.py` docstring: "Binance WebSocket + REST implementation was removed because Binance blocks Render infrastructure with HTTP 451" |
-| Indian equity live = yfinance anchor + synthetic ticks | `app/market_data/providers/indian_equity.py` `_run_real_price_sync()` (yfinance 15s) + `_run_feed_loop()` (random gauss micro-ticks) |
+| Indian equity live = yfinance anchor + synthetic ticks | **SUPERSEDED by Phase 15D** — `app/market_data/providers/indian_equity.py` now emits genuine `feed_state=DELAYED` ticks in `delayed` mode and **UNAVAILABLE (no ticks)** in `live` mode without a verified broker stream |
 | Crypto live = CoinGecko REST 60s | `app/market_data/providers/crypto.py` `_POLL_INTERVAL = 60.0`, no WebSocket |
 | BROKER_MODE 3-layer guard | `app/brokers/__init__.py`: `assert_live_dispatch_allowed`, `assert_live_broker_connect_allowed`; adapter + network layers documented |
 | Daily broker renewal cron | `app/engine/broker_cron.py`: 8:45 AM IST scheduler + TOTP renewal |
