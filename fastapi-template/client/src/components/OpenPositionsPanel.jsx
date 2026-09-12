@@ -4,6 +4,7 @@ import { API_BASE } from "../config";
 import { authFetch } from "../services/apiClient";
 import { ErrorState } from "./SkeletonLoaders";
 import { useToast } from "./Toast";
+import { protectionBadge } from "../utils/protection";
 import {
   Layers,
   XCircle,
@@ -20,6 +21,7 @@ const PositionRow = React.memo(function PositionRow({
   fmtCurrency,
 }) {
   const isLong = pos.side === "LONG" || pos.side === "BUY";
+  const badge = protectionBadge(pos.protection_state, pos.protection_error);
 
   return (
     <tr className="hover:bg-white/[0.02] transition-colors">
@@ -69,6 +71,54 @@ const PositionRow = React.memo(function PositionRow({
         </span>
       </td>
 
+      {/* Stop Loss — backend truth (null renders an honest unset state) */}
+      <td className="py-3 px-2.5 text-right font-mono">
+        {pos.stop_loss_price != null ? (
+          <span className="text-rose-300/90">
+            {fmtCurrency(pos.stop_loss_price, pos.symbol)}
+          </span>
+        ) : (
+          <span className="text-slate-600" title="No stop loss set">—</span>
+        )}
+      </td>
+
+      {/* Take Profit — backend truth (null renders an honest unset state) */}
+      <td className="py-3 px-2.5 text-right font-mono">
+        {pos.take_profit_price != null ? (
+          <span className="text-emerald-300/90">
+            {fmtCurrency(pos.take_profit_price, pos.symbol)}
+          </span>
+        ) : (
+          <span className="text-slate-600" title="No take profit set">—</span>
+        )}
+      </td>
+
+      {/* Protection state — verbatim backend truth, never inferred from SL/TP */}
+      <td className="py-3 px-2.5 text-center">
+        {badge ? (
+          <div className="inline-flex flex-col items-center gap-0.5">
+            <span
+              className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${badge.cls}`}
+              data-protection-state={pos.protection_state || ""}
+              data-protection-error={pos.protection_error || ""}
+              title={badge.title || undefined}
+            >
+              {badge.label}
+            </span>
+            {badge.errorText ? (
+              <span
+                className="max-w-[120px] text-[9px] leading-tight text-rose-300/70 truncate"
+                title={badge.errorText}
+              >
+                {badge.errorText}
+              </span>
+            ) : null}
+          </div>
+        ) : (
+          <span className="text-slate-600" title="Protection state not reported">—</span>
+        )}
+      </td>
+
       <td className="py-3 px-3 text-center">
         <span
           className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${
@@ -106,6 +156,10 @@ function arePositionRowPropsEqual(prev, next) {
   if (prev.pos?.quantity !== next.pos?.quantity) return false;
   if (prev.pos?.entry_price !== next.pos?.entry_price) return false;
   if (prev.pos?.mode !== next.pos?.mode) return false;
+  if (prev.pos?.stop_loss_price !== next.pos?.stop_loss_price) return false;
+  if (prev.pos?.take_profit_price !== next.pos?.take_profit_price) return false;
+  if (prev.pos?.protection_state !== next.pos?.protection_state) return false;
+  if (prev.pos?.protection_error !== next.pos?.protection_error) return false;
   if (prev.isClosing !== next.isClosing) return false;
 
   const pMet = prev.metric || {};
@@ -258,7 +312,7 @@ function OpenPositionsPanel({
         </div>
       ) : (
         <div className="overflow-x-auto -mx-3.5 sm:mx-0 px-3.5 sm:px-0">
-          <table className="w-full text-left text-xs min-w-[550px]">
+          <table className="w-full text-left text-xs min-w-[720px]">
             <thead className="bg-surface-800/40 text-slate-400 font-medium border-b border-white/[0.04]">
               <tr>
                 <th className="py-2.5 px-3">Instrument</th>
@@ -267,6 +321,9 @@ function OpenPositionsPanel({
                 <th className="py-2.5 px-3 text-right">Entry Price</th>
                 <th className="py-2.5 px-3 text-right">Live Price</th>
                 <th className="py-2.5 px-3 text-right">Unrealized P&L</th>
+                <th className="py-2.5 px-2.5 text-right">Stop Loss</th>
+                <th className="py-2.5 px-2.5 text-right">Take Profit</th>
+                <th className="py-2.5 px-2.5 text-center">Protection State</th>
                 <th className="py-2.5 px-3 text-center">Mode</th>
                 <th className="py-2.5 px-3 text-right">Action</th>
               </tr>
@@ -314,6 +371,12 @@ function areOpenPositionsPropsEqual(prev, next) {
     if (pList[i].current_price !== nList[i].current_price) return false;
     if (pList[i].unrealized_pnl !== nList[i].unrealized_pnl) return false;
     if (pList[i].status !== nList[i].status) return false;
+    // Protection truth changes (chart-drag SL/TP replace, arm/fail lifecycle)
+    // must re-render instead of being memoized away.
+    if (pList[i].stop_loss_price !== nList[i].stop_loss_price) return false;
+    if (pList[i].take_profit_price !== nList[i].take_profit_price) return false;
+    if (pList[i].protection_state !== nList[i].protection_state) return false;
+    if (pList[i].protection_error !== nList[i].protection_error) return false;
   }
 
   return true;
