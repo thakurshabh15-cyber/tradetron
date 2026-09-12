@@ -190,22 +190,55 @@ def test_equity_provider_demo_label_without_credentials():
 
 def test_candles_endpoint_exposes_source():
     """The candles API must disclose whether candles are REAL exchange data or
-    SIMULATED fallback so clients never mistake synthetic OHLCV for live data."""
+    a degraded/UNAVAILABLE feed so clients never mistake empty payloads for
+    live data.
+
+    The provider is stubbed because CI runner IPs are HTTP-451 geo-blocked
+    by Binance, making a live-network assertion nondeterministic.  Both the
+    REAL and UNAVAILABLE paths are exercised deterministically.
+    """
+    from unittest.mock import AsyncMock, patch
+
     from httpx import ASGITransport, AsyncClient
     from app.main import app
 
     async def run():
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            res = await client.get("/api/market/candles?symbol=BTCUSDT&timeframe=5m&limit=5")
-            assert res.status_code == 200
-            data = res.json()
-            assert "source" in data, "candles response must include a 'source' field"
-            assert data["source"] in {"REAL", "SIMULATED", "UNAVAILABLE"}
-            return data
+            # 1. REAL data path: source disclosed, candles served.
+            with patch.object(
+                unified_market_manager,
+                "get_historical_candles",
+                new=AsyncMock(return_value=[{"time": 1, "open": 1.0, "high": 2.0,
+                                             "low": 0.5, "close": 1.5, "volume": 10.0}]),
+            ) as mock_real:
+                unified_market_manager.last_candle_source = "REAL"
+                res = await client.get("/api/market/candles?symbol=BTCUSDT&timeframe=5m&limit=5")
+                assert res.status_code == 200
+                data = res.json()
+                assert "source" in data, "candles response must include a 'source' field"
+                assert data["source"] in {"REAL", "SIMULATED", "UNAVAILABLE"}
+                assert data["source"] == "REAL"
+                assert len(data["candles"]) == 1
+                mock_real.assert_awaited_once()
 
-    data = asyncio.run(run())
-    assert len(data["candles"]) > 0
+            # 2. UNAVAILABLE path (Binance HTTP-451 / geo-block case): honest
+            # disclosure with an empty payload — never a false REAL claim.
+            with patch.object(
+                unified_market_manager,
+                "get_historical_candles",
+                new=AsyncMock(return_value=[]),
+            ) as mock_empty:
+                unified_market_manager.last_candle_source = "UNAVAILABLE"
+                res = await client.get("/api/market/candles?symbol=BTCUSDT&timeframe=5m&limit=5")
+                assert res.status_code == 200
+                data = res.json()
+                assert data["count"] == 0
+                assert data["source"] == "UNAVAILABLE"
+                assert data["candles"] == []
+                mock_empty.assert_awaited_once()
+
+    asyncio.run(run())
 
 
 def test_providers_status_reports_honest_health():

@@ -261,6 +261,7 @@ class CryptoStreamMarketDataProvider(BaseMarketDataProvider):
         """
         clean_sym = symbol.upper().strip()
         if not clean_sym.endswith("USDT"):
+            self.last_candle_source = "UNAVAILABLE"
             return []
         params: dict[str, Any] = {
             "symbol": clean_sym,
@@ -278,6 +279,9 @@ class CryptoStreamMarketDataProvider(BaseMarketDataProvider):
                 raw = resp.json()
         except Exception as exc:
             logger.error("Binance klines fetch failed for %s: %s", clean_sym, exc)
+            # Fail-closed honesty: no genuine OHLCV was received (e.g. Binance
+            # HTTP-451 geo-blocks cloud/CI runner IPs) — never label it REAL.
+            self.last_candle_source = "UNAVAILABLE"
             return []
 
         candles: list[dict[str, Any]] = []
@@ -285,6 +289,7 @@ class CryptoStreamMarketDataProvider(BaseMarketDataProvider):
         if isinstance(raw, dict) and raw.get("code"):
             # Binance error payload: {"code":-1121,"msg":"Invalid symbol."}
             logger.warning("Binance klines error for %s: %s", clean_sym, raw.get("msg"))
+            self.last_candle_source = "UNAVAILABLE"
             return []
 
         for row in raw:
@@ -299,7 +304,9 @@ class CryptoStreamMarketDataProvider(BaseMarketDataProvider):
                 })
             except (IndexError, TypeError, ValueError):
                 continue
-        self.last_candle_source = "REAL"  # genuine Binance OHLCV, never fabricated
+        # Honest fail-closed disclosure: only genuine Binance OHLCV earns the
+        # REAL label; any empty result (e.g. all rows malformed) is UNAVAILABLE.
+        self.last_candle_source = "REAL" if candles else "UNAVAILABLE"
         return candles
 
     # ── WebSocket message handling ───────────────────────────────────
