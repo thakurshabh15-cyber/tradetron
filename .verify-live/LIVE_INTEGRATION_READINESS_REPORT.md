@@ -42,6 +42,55 @@
 
 ---
 
+---
+
+## PHASE 15C — EXCHANGE-LEVEL PROTECTIVE ORDERS (2026-09-12)
+
+**Status:** ✅ BACKEND SHIPPED — exchange-level protective-order engine, durable per-leg
+ledger and fail-closed LIVE entry verified (**23/23** unit + **5/5** E2E + **786** full-suite
+regression).  **Client/ frontend rendering of protection truth is still pending** (backend
+truth exists and is exposed via the API).
+
+**What changed**
+- **Durable protective-order ledger** — `app/models/protective_order.py` + migration
+  `alembic/versions/0008_protective_orders.py`.  One row per protection leg
+  (STOP_LOSS / TAKE_PROFIT) with broker reference, status lifecycle
+  (PLACED → COMPLETE / CANCELLED / FAILED / RESOLVED), `last_error`, and a unique
+  `(position_id, leg)` index — a second live leg is rejected at the DB.
+- **Honest position protection lifecycle** — `app/engine/protective_orders.py`
+  (`ProtectiveOrderManager`): states UNPROTECTED / PAPER / PROTECTION_PENDING /
+  PROTECTED / PROTECTION_FAILED / STOP_TRIGGERED / TARGET_TRIGGERED; `reconcile_once`
+  sweep (stale-refresh, broker-truth status pull, local resolution of orphans, bounded
+  re-arm that **never re-places while the previous broker order could still be live**).
+- **Fail-closed LIVE entry** — `app/api/trades.py`: a LIVE entry with SL/TP commits its
+  order/trade/position as PROTECTION_PENDING **before** dispatch; protection is armed as
+  soon as the fill is durable; **any arm failure tears the position down**
+  (`cancel_position_protection` + CLOSED + PROTECTION_FAILED + honest `protection_error`);
+  the user gets a **503 failure-closed** response (told protection could not be
+  guaranteed).  Brokers that authorise an order but return no `order_id` now **raise**
+  instead of fabricating a `"UPSTOX_ORDER"` reference (`app/brokers/upstox.py`) — a fake
+  reference would falsely mark a position PROTECTED against an order that does not exist
+  on the exchange.
+- **Open-positions API exposes protection truth** — `GET /api/v1/orders/open-positions`
+  now returns `stop_loss_price`, `take_profit_price`, `protection_state`,
+  `protection_error`, `protected_at`.
+
+**Validation evidence (2026-09-12)**
+| Check | Result |
+|---|---|
+| `pytest tests/test_protective_orders.py` (23) — lifecycle, idempotency, replace/cancel honesty, crash recovery, tenant isolation, reconcile contract | **23/23 PASS** |
+| `pytest tests/test_protective_orders_e2e.py` (5) — PAPER no-arm; LIVE entry→replace→close; LIVE SIMULATED-broker fail-closed arm; broker-unavailable 502 no-ghost-position; protective-reject 503 FAIL-CLOSED tear-down | **5/5 PASS** |
+| **Cancel-gated re-arm** — FAILED row with a live broker ref is never re-placed while the broker rejects the cancel (`_CancelFailingBroker` fixture) | **PASS** |
+| Related trading/broker/reconciliation suites (11 files) | **77 passed** |
+| Full backend regression `pytest tests/ -q` | **786 passed, 0 failed, 3 benign warnings** |
+| Migrations — single head `0008_protective_orders`, no dev-DB drift | **PASS** |
+
+**Remaining before real-money production** (in addition to §10 list)
+- Independent broker-sandbox verification of real SL/TP place / cancel / fill semantics
+  per adapter (Zerodha / Upstox / Angel One) with live credentials.
+- **Client/ dashboard rendering of the new protection fields** (badges, actions, error
+  lanes) — the backend truth exists; frontend rendering is a 15C follow-up.
+- Real-time WebSocket market data + periodic live position sync (15C follow-up track).
 ## 1. COMPLETE PIPELINE MAP
 
 ```
@@ -178,7 +227,6 @@ MARKET DATA → NORMALIZATION → STRATEGY ENGINE → SIGNAL → RISK ENGINE
 | **Binance** | `GET /api/v3/order` with HMAC signing |
 
 ### 2.10 RECONCILIATION
-
 | Dimension | Detail |
 |---|---|
 | **Files** | `app/engine/order_reconciliation.py`, `app/brokers/postback.py` |
@@ -189,6 +237,20 @@ MARKET DATA → NORMALIZATION → STRATEGY ENGINE → SIGNAL → RISK ENGINE
 | **Postback** | Signature-verified (V3 HMAC); broker-account-bound; CAS mutual exclusion |
 | **Scheduler** | Background: startup pass + periodic interval |
 | **Duplicate Prevention** | CAS rowcount=1 claim; `FINALIZED_ORDER_STATUSES` tuple |
+
+### 2.15 PROTECTIVE ORDERS (Phase 15C — exchange-level SL/TP)
+
+| Dimension | Detail |
+|---|---|
+| **Files** | `app/engine/protective_orders.py`, `app/models/protective_order.py`, migration `0008`, `app/api/trades.py`, `app/brokers/upstox.py` |
+| **Classification** | **REAL — backend shipped**; Client/ U.I. rendering pending |
+| **Ledger** | One DB row per protection leg; unique `(position_id, leg)` index; status lifecycle PLACED → COMPLETE / CANCELLED / FAILED / RESOLVED |
+| **Lifecycle** | UNPROTECTED → PAPER → PROTECTION_PENDING → PROTECTED → PROTECTION_FAILED / STOP_TRIGGERED / TARGET_TRIGGERED |
+| **Arming** | After FILLED confirmation; failure tears down the position (CLOSED + PROTECTION_FAILED + 503) — fail-closed, never a silent unprotected LIVE position |
+| **Reconcile** | `reconcile_once`: broker-truth status pull, local orphan resolution, cancel-gated re-arm (no re-poke while a prior broker order may still be live) |
+| **No fabricated refs** | Adapters raise when an accepted order has no `order_id` — the `"UPSTOX_ORDER"` placeholder was removed |
+
+---
 
 ### 2.11 POSITION
 
@@ -315,9 +377,11 @@ MARKET DATA → NORMALIZATION → STRATEGY ENGINE → SIGNAL → RISK ENGINE
 
 | Step | Task | Files | Priority |
 |---|---|---|---|
-| 1 | Place GTC/SL-M orders on broker after FILLED confirmation | `app/engine/order_manager.py`, broker adapters | P0 |
-| 2 | Protective SL-M + target limit placed in same transaction as fill | `app/brokers/postback.py`, `app/engine/order_reconciliation.py` | P0 |
-| 3 | Modify/cancel protective orders on position close | `app/brokers/base.py` (modify_order, cancel_order) | P0 |
+| 1 | ~~Place GTC/SL-M orders on broker after FILLED confirmation~~ — **DONE (15C)** | `app/engine/protective_orders.py` + broker adapters | P0 |
+| 2 | ~~Protective SL-M + target limit placed in same transaction as fill~~ — **DONE (15C)** | `app/models/protective_order.py`, `app/engine/protective_orders.py`, migration `0008` | P0 |
+| 3 | ~~Modify/cancel protective orders on position close~~ — **DONE (15C)** | `cancel_position_protection` in `app/engine/protective_orders.py` | P0 |
+| 4 | Independent broker-sandbox verification of real SL/TP semantics (Zerodha/Upstox/Angel One) | Broker adapters + sandbox credentials | P0 |
+| 5 | Client/ rendering of protection truth (badges, actions, error lanes) | `client/src/pages/` (Positions/Dashboard) | P1 |
 
 ### Phase 15D: Broker Health & Market Calendar (IMPORTANT)
 
@@ -345,7 +409,7 @@ MARKET DATA → NORMALIZATION → STRATEGY ENGINE → SIGNAL → RISK ENGINE
 | B-1 | No real-time WebSocket market data feed | Technical | Integrate SmartAPI SmartStream / Kite Ticker SDKs |
 | B-2 | No live position sync from broker | Technical | Implement background position reconciliation job |
 | B-3 | No live equity from broker truth | Technical | Wire `get_margins()` into periodic sync |
-| B-4 | No exchange-level SL/TP orders | Technical | Place protective orders post-fill confirmation |
+| B-4 | No exchange-level SL/TP orders | Technical | **RESOLVED (15C backend)** — `ProtectiveOrderManager` + fail-closed LIVE entry; remaining: broker-sandbox validation + U.I. rendering |
 | B-5 | No broker API credentials for testing | Operational | Need sandbox/testnet credentials per broker |
 | B-6 | SmartAPI/Kite SDK packages may need install | Dependency | `pip install smartapi-python kiteconnect` (conditionally imported) |
 
@@ -385,6 +449,7 @@ Phase 15E  →  Equity & P&L Hardening (P1 — reporting accuracy)
 | Position normalizer (5 adapters) | ✅ Production-ready |
 | DMA engine (lot-size correction, statutory charges) | ✅ Production-ready |
 | Frontend reconnect logic | ✅ Production-ready |
+| Protective-order engine (durable per-leg ledger, fail-closed LIVE arm, cancel-gated reconcile, no fabricated broker refs) | ✅ Production-ready (pending broker-sandbox validation of real SL/TP semantics) |
 
 ---
 
@@ -396,10 +461,10 @@ Phase 15E  →  Equity & P&L Hardening (P1 — reporting accuracy)
 - ⚠️ **Market data:** Crypto (CoinGecko REST) is real but delayed. Indian equity is synthetic in all modes. No WebSocket streaming.
 - ✅ **Order lifecycle:** Durable claims, CAS finalization, idempotency, reconciliation, postback verification.
 - ❌ **Live equity/P&L:** Not derived from broker truth. Internal calculation only.
-- ❌ **Exchange-level protection:** No SL/TP orders on the exchange. Engine crash = orphan positions.
+- ⚠️ **Exchange-level protection:** Engine + durable ledger + fail-closed LIVE arm SHIPPED (15C); pending broker-sandbox validation of real SL/TP semantics and Client/ rendering of protection truth.
 - ✅ **Safety:** 3-layer BROKER_MODE guard, encrypted credentials, tenant isolation, fail-closed design.
 
-**The system is ready for BROKER SANDBOX testing (Binance testnet, broker paper-trading modes). Phase 15B (honest, fail-closed broker/equity display) is complete and validated; it is NOT yet ready for real-money production — 15C follow-ups remain (periodic live position sync from broker, real-time WebSocket market data, exchange-level SL/TP).**
+**The system is ready for BROKER SANDBOX testing (Binance testnet, broker paper-trading modes). Phase 15B (honest, fail-closed broker/equity display) and Phase 15C backend (exchange-level protective orders: durable ledger, cancel-gated reconcile, fail-closed LIVE entry) are complete and validated (786 passed / 0 failed full regression). It is NOT yet ready for real-money production — remaining follow-ups: periodic live position sync from broker, real-time WebSocket market data, independent broker-sandbox validation of real SL/TP semantics, and Client/ rendering of the new protection fields.**
 
 ---
 
@@ -418,3 +483,6 @@ Phase 15E  →  Equity & P&L Hardening (P1 — reporting accuracy)
 | Idempotent durable claims | `app/api/trades.py` (client_order_id PENDING claim) + `app/engine/copy_trading.py` `_claim_copy_follower_order` |
 | No exchange-level SL/TP | `app/engine/order_manager.py` — SL/TP evaluated on ticks in-process, not placed as broker orders |
 | ADS LiveOptIn gate | `client/src/pages/Dashboard.jsx` `handleModeSwitch("LIVE")` checks `connectedBrokers.length === 0` → fail-closed |
+| Protective-order ledger + lifecycle | `app/models/protective_order.py`, `app/engine/protective_orders.py` (`ProtectiveOrderManager` states + `reconcile_once`) |
+| Fail-closed LIVE entry (503) + no fabricated broker refs | `app/api/trades.py` (arm failure → tear-down + 503), `app/brokers/upstox.py` (raise when an accepted order has no `order_id`) |
+| Open-positions protection fields | `GET /api/v1/orders/open-positions` response: `stop_loss_price`, `take_profit_price`, `protection_state`, `protection_error`, `protected_at` |

@@ -112,6 +112,11 @@ CRASH_WINDOW_STALE_SECONDS = 120.0
 # reconciliation cadence; a startup pass always runs first).
 PROTECTION_RECONCILE_INTERVAL_SECONDS: float = 30.0
 
+# Broker statuses that mean the protective leg is actually live at the broker
+# (used to honestly promote a crash-survivor PENDING row whose placement the
+# broker confirms).
+_LIVE_OPEN_STATUSES = frozenset({"OPEN", "NEW", "PARTIALLY_FILLED"})
+
 # Broker statuses that mean the protective leg reached its terminal fill.
 _FILLED_STATUSES = frozenset({"FILLED", "COMPLETE", "COMPLETED"})
 # Broker statuses that mean the protective leg is no longer at the broker.
@@ -573,12 +578,32 @@ class ProtectiveOrderManager:
                     ok=True, state=state_after, position_id=position_id, mode="LIVE"
                 )
 
+            cancel_failed: list[ProtectiveOrderRecord] = []
             for row in rows:
-                if row.status not in (ROW_PLACED, ROW_COMPLETE) or not row.broker_protective_order_id:
+                if row.status not in (ROW_PLACED, ROW_PENDING) or not row.broker_protective_order_id:
                     continue
-                await self._broker_cancel(db, broker, row, reason or "protection teardown")
+                ok = await self._broker_cancel(
+                    db, broker, row, reason or "protection teardown"
+                )
+                if not ok:
+                    cancel_failed.append(row)
 
-            await self._mark_rows(db, position_id, ROW_CANCELLED, reason or "cancelled")
+            # A leg whose broker cancel did NOT succeed must not be recorded as
+            # locally CANCELLED — the broker order may still be live.  It stays
+            # FAILED with its reference + an explicit error so a later pass or
+            # the operator can see and retry it (never a fabricated teardown).
+            for row in cancel_failed:
+                row.status = ROW_FAILED
+                row.last_error = (
+                    f"cancel failed on {reason or 'protection teardown'} — broker "
+                    f"order {row.broker_protective_order_id} may still be live"
+                )
+                row.updated_at = _utcnow()
+
+            await self._mark_rows(
+                db, position_id, ROW_CANCELLED, reason or "cancelled",
+                skip_statuses={ROW_FAILED, ROW_COMPLETE},
+            )
             await self._set_position_state(
                 db, position, state_after, None,
                 reason or "protection cancelled",
@@ -638,9 +663,15 @@ class ProtectiveOrderManager:
         await db.flush()
 
     async def _mark_rows(
-        self, db: AsyncSession, position_id: str, status: str, reason: str
+        self, db: AsyncSession, position_id: str, status: str, reason: str,
+        *, skip_statuses: frozenset[str] = frozenset(),
     ) -> int:
-        """Bulk-mark every protective row of a position with a status/reason."""
+        """Bulk-mark every protective row of a position with a status/reason.
+
+        ``skip_statuses`` protect honest terminal states from being overwritten
+        (e.g. a row whose broker cancel actually failed, or a COMPLETE leg that
+        already reached its terminal fill).
+        """
         rows = list(
             (
                 await db.execute(
@@ -651,6 +682,8 @@ class ProtectiveOrderManager:
             ).scalars().all()
         )
         for row in rows:
+            if row.status in skip_statuses:
+                continue
             row.status = status
             row.last_error = reason
             row.updated_at = _utcnow()
@@ -662,23 +695,37 @@ class ProtectiveOrderManager:
         broker: Any,
         row: ProtectiveOrderRecord,
         reason: str,
-    ) -> None:
+    ) -> bool:
         """Best-effort broker-side cancellation of ONE protective leg.
 
-        Never raises: a failed cancel is logged and recorded on the row so a
-        later pass can retry — silently dropping a live stop against real
-        inventory is the one failure this manager MUST NOT hide.
+        Returns ``True`` when the broker acknowledged the cancellation (or there
+        was nothing to cancel) and ``False`` when the cancel failed.  Never
+        raises: a failed cancel is logged and recorded on the row so a later
+        pass can retry — silently dropping a live stop against real inventory
+        is the one failure this manager MUST NOT hide.  Callers MUST treat a
+        ``False`` return as \"the broker order may still be live\" and never
+        fabricate a local CANCELLED state or re-place a replacement leg.
+
+        Symbol-context cancellation is preferred when the adapter exposes it
+        (Binance's ``cancel_order`` cannot cancel without ``symbol``); the base
+        contract's ``cancel_order(broker_order_id)`` is the generic fallback.
         """
-        if not row.broker_protective_order_id:
-            return
+        target = row.broker_protective_order_id
+        if not target:
+            return True
+        cancel_with_symbol = getattr(broker, "cancel_order_with_symbol", None)
         try:
-            await broker.cancel_order(row.broker_protective_order_id)
+            if cancel_with_symbol is not None:
+                await cancel_with_symbol(row.symbol, target)
+            else:
+                await broker.cancel_order(target)
             row.broker_reported_status = "CANCELLED"
             row.last_error = None
             logger.info(
                 "[Protection] cancel sent for %s (%s)",
-                row.broker_protective_order_id, reason,
+                target, reason,
             )
+            return True
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - best-effort, logged
@@ -688,8 +735,9 @@ class ProtectiveOrderManager:
             row.last_error = f"cancel failed ({reason}): {str(exc)[:500]}"
             logger.error(
                 "[Protection] cancel FAILED for %s (%s): %s",
-                row.broker_protective_order_id, reason, exc,
+                target, reason, exc,
             )
+            return False
 
     async def _replace_locked(
         self,
@@ -788,9 +836,17 @@ class ProtectiveOrderManager:
                         and row.broker_protective_order_id
                         and broker is not None
                     ):
-                        await self._broker_cancel(
+                        ok = await self._broker_cancel(
                             db, broker, row, "SL/TP removed"
                         )
+                        if not ok:
+                            row.status = ROW_FAILED
+                            row.last_error = (
+                                "SL/TP removed but broker cancel failed — broker "
+                                f"order {row.broker_protective_order_id} may still be live"
+                            )
+                            row.updated_at = _utcnow()
+                            continue
                     if row.status != ROW_COMPLETE:
                         row.status = ROW_CANCELLED
                         row.last_error = "no SL/TP configured"
@@ -967,11 +1023,23 @@ class ProtectiveOrderManager:
             if row.status == ROW_PLACED and row.broker_protective_order_id:
                 if unchanged and not force:
                     return
-                if unchanged:
-                    await self._broker_cancel(db, broker, row, "forced re-arm")
-                else:
-                    # Levels moved on a live leg → universal replace.
-                    await self._broker_cancel(db, broker, row, "levels changed")
+                label = "forced re-arm" if unchanged else "levels changed"
+                # Levels moved on a live leg → universal replace.
+                ok = await self._broker_cancel(db, broker, row, label)
+                if not ok:
+                    # Fail CLOSED: never re-place while the old broker order
+                    # could still be live (that would duplicate protection on
+                    # real inventory).  Keep the old reference visible and mark
+                    # the row FAILED for manual review / a later retry.
+                    row.status = ROW_FAILED
+                    row.last_error = (
+                        f"replace blocked ({label}): broker cancel failed for "
+                        f"{row.broker_protective_order_id} — new level NOT placed "
+                        "to avoid duplicate protection"
+                    )
+                    row.updated_at = _utcnow()
+                    await db.commit()
+                    return
                 row.status = ROW_PENDING
                 row.broker_protective_order_id = None
                 row.broker_reported_status = None
@@ -1009,6 +1077,22 @@ class ProtectiveOrderManager:
             )
             db.add(row)
         else:
+            if row.status == ROW_FAILED and row.broker_protective_order_id:
+                # A FAILED row with an unresolved broker order (failed
+                # replacement / failed teardown).  Do NOT re-arm while the old
+                # order could still be live — attempt a bounded cancel first.
+                ok = await self._broker_cancel(
+                    db, broker, row, "re-arm after failure"
+                )
+                if not ok:
+                    row.last_error = (
+                        "re-arm blocked: previous broker protective order "
+                        f"{row.broker_protective_order_id} could not be cancelled "
+                        "— not re-placing to avoid duplicate protection"
+                    )
+                    row.updated_at = _utcnow()
+                    await db.commit()
+                    return
             row.status = ROW_PENDING
             row.order_type = order_type
             row.trigger_price = trigger_price
@@ -1101,6 +1185,14 @@ class ProtectiveOrderManager:
             ).scalars().all()
         )
         if not rows:
+            # A LIVE position stuck in PROTECTION_PENDING with NO durable rows
+            # is a crash survivor between the PENDING position-state commit and
+            # the first per-leg placement commit (the leg rows were flushed but
+            # their transaction rolled back).  Re-arm it idempotently — never
+            # leave the ledger claiming an in-flight protection that has no
+            # durable claim.
+            if position.protection_state == PROTECTION_STATE_PENDING:
+                report["recovered"].append(position_id)
             return
 
         # ── reference-less crash survivors: fail closed for manual review ────
@@ -1160,6 +1252,16 @@ class ProtectiveOrderManager:
                         ROW_CANCELLED if "CAN" in raw_status else ROW_FAILED
                     )
                     row.last_error = f"broker reported {raw_status}"
+                elif raw_status in _LIVE_OPEN_STATUSES and row.status == ROW_PENDING:
+                    # Crash between broker acceptance and the PLACED write: the
+                    # broker confirms a live open order, so the row is honestly
+                    # promoted to PLACED (broker truth — never a guess).
+                    row.status = ROW_PLACED
+                    row.last_error = None
+                    logger.info(
+                        "[Protection] leg %s confirmed live at broker for %s",
+                        row.leg, position_id,
+                    )
 
         # ── admit freshly FAILED rows for a bounded placement retry ──────────
         if broker is not None:
@@ -1167,6 +1269,12 @@ class ProtectiveOrderManager:
                 if row.status != ROW_FAILED or crash_manual:
                     continue
                 if row.trigger_price is None:
+                    continue
+                if row.broker_protective_order_id:
+                    # Unresolved broker order — a clean placement rejection has
+                    # no reference; a reference means the old order may still be
+                    # live.  Re-poking would risk duplicate protection, so these
+                    # wait for explicit manual/API recovery.
                     continue
                 cap = _protection_capability(broker)
                 plan, _failures = _leg_plan(position=position, capability=cap)

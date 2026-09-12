@@ -168,7 +168,17 @@ class UpstoxBroker(BrokerClient):
                     raise RuntimeError(f"Upstox order failed: {resp.text}")
 
                 data = resp.json().get("data", {})
-                order_id = data.get("order_id", "UPSTOX_ORDER")
+                order_id = data.get("order_id")
+                if not order_id:
+                    # NO FABRICATION (Phase 15C): an accepted order WITHOUT a real
+                    # broker order_id must fail closed — a constant placeholder
+                    # would let the protective-order manager mark a position
+                    # PROTECTED against a reference that does not exist on the
+                    # exchange.
+                    raise RuntimeError(
+                        "Upstox accepted the order but returned no order_id — "
+                        "refusing to fabricate a broker reference"
+                    )
                 logger.info("UPSTOX LIVE ORDER: %s %s %d [order_id=%s]", order.side.value, order.symbol, order.quantity, order_id)
                 return {
                     "broker_order_id": str(order_id),

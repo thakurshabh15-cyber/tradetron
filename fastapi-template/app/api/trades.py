@@ -481,6 +481,14 @@ async def list_open_positions(
             "unrealized_pnl_pct": unrealized_pnl_pct,
             "mode": p.mode,
             "status": p.status,
+            # Phase 15C: SL/TP and honest broker-protection lifecycle state —
+            # the frontend must reflect backend truth (never a fabricated
+            # PROTECTED claim).
+            "stop_loss_price": p.stop_loss_price,
+            "take_profit_price": p.take_profit_price,
+            "protection_state": p.protection_state,
+            "protection_error": p.protection_error,
+            "protected_at": p.protected_at.isoformat() if p.protected_at else None,
             "opened_at": p.opened_at.isoformat() if p.opened_at else datetime.now(timezone.utc).isoformat(),
         })
     return output
@@ -1267,16 +1275,49 @@ async def execute_dma_order(
     )
     db.add(position)
     order.position_id = position.id
-    # Phase 15C: exchange-level protective orders — arm broker-side SL/TP for
-    # LIVE DMA right after the fill is durable.  A fail-closed outcome rolls
-    # the position back before real inventory can sit unprotected at the broker.
-    if req.mode == "LIVE" and (sl_price is not None or tp_price is not None):
-        from app.engine.protective_orders import protection_engine
-
+    # ── Phase 15C: exchange-level protective orders ──────────────────────────
+    # For a LIVE entry with SL/TP, the order/trade/position transaction MUST
+    # be durable BEFORE protection is armed: the protective engine opens its
+    # own short-lived sessions and can only protect a position row that is
+    # already committed (a live, visible OPEN row — never an unflushed object
+    # in this request's transaction).  The position is committed in
+    # PROTECTION_PENDING so a crash between this commit and the protective
+    # placement is a durable, reconcile-recoverable in-flight claim — never a
+    # silent UNPROTECTED state with real inventory at the broker.
+    #
+    # A fail-closed outcome then CLOSES the position (same economic event the
+    # API caller experiences as a rejection) before real inventory can sit
+    # unprotected on the exchange.
+    protection_pending = (
+        req.mode == "LIVE" and (sl_price is not None or tp_price is not None)
+    )
+    if protection_pending:
+        from app.engine.protective_orders import (
+            PROTECTION_STATE_PENDING,
+            protection_engine,
+        )
+        position.protection_state = PROTECTION_STATE_PENDING
+    await db.commit()
+    if protection_pending:
         outcome = await protection_engine.ensure_position_protection(
             position.id, authorized_user_id=user.id
         )
         if not outcome.ok and outcome.fail_closed:
+            # Best-effort teardown of any legs that DID get armed during the
+            # failed attempt (a mid-arm failure can leave a live broker leg
+            # against a position that is about to be rolled back).  Never
+            # fatal — the reconcile sweep also catches leftovers.
+            try:
+                await protection_engine.cancel_position_protection(
+                    position.id,
+                    authorized_user_id=user.id,
+                    reason="fail-closed entry teardown",
+                )
+            except Exception as teardown_exc:  # noqa: BLE001
+                logger.warning(
+                    "[Protection] fail-closed teardown skipped for %s: %s",
+                    position.id, teardown_exc,
+                )
             position.status = "CLOSED"
             position.closed_at = datetime.now(timezone.utc)
             position.protection_state = "PROTECTION_FAILED"
@@ -1292,7 +1333,6 @@ async def execute_dma_order(
                     f"prevent UNPROTECTED inventory. {outcome.error}"
                 ),
             )
-    await db.commit()
     await db.refresh(trade)
     await db.refresh(position)
 
