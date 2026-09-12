@@ -10,7 +10,7 @@ import uuid
 from collections import defaultdict
 from typing import Any
 
-from app.brokers.base import BrokerClient
+from app.brokers.base import BrokerClient, BrokerProtectionCapability
 from app.core.logging import get_logger
 from app.schemas.trading import OrderRequest, Side
 
@@ -118,4 +118,26 @@ class SimulatedBroker(BrokerClient):
             for idx, (symbol, data) in enumerate(self._positions.items(), 1)
             if data["quantity"] != 0
         ]
+
+    def supports_native_protection(self) -> BrokerProtectionCapability:
+        """Simulated broker: NO exchange-level protection by design.
+
+        The simulated adapter has no representation on any exchange, so it can
+        never hold a genuine broker-side SL/TP order.  The protective-order
+        manager treats this as UNSUPPORTED for LIVE accounts — a LIVE position
+        on a SIMULATED account can never be marked ``PROTECTED`` (fail-closed).
+        PAPER trading keeps its deterministic in-engine SL/TP simulation
+        exactly as before.
+        """
+        return BrokerProtectionCapability(
+            adapter="simulated",
+            native_sl=False,
+            native_tp=False,
+            bracket=False,
+            replace=False,
+            reason=(
+                "SimulatedBroker has no exchange representation — exchange-level "
+                "SL/TP protection is unsupported; PAPER SL/TP remain engine-simulated"
+            ),
+        )
 

@@ -35,7 +35,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # mirror the import list used by alembic/env.py.
 ORM_MODULES = (
     "audit", "billing", "broker_account", "broker_state", "copy_trading",
-    "marketplace", "notification", "trading", "user", "visual_strategy",
+    "marketplace", "notification", "protective_order", "trading", "user", "visual_strategy",
     "watchlist",
 )
 

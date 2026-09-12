@@ -7,7 +7,13 @@ from typing import Any, Optional
 
 import httpx
 
-from app.brokers.base import BrokerClient
+from app.brokers.base import (
+    BrokerClient,
+    BrokerProtectionCapability,
+    PROTECTIVE_ORDER_TYPE_SL_LIMIT,
+    PROTECTIVE_ORDER_TYPE_SL_MARKET,
+    PROTECTIVE_ORDER_TYPE_TP_LIMIT,
+)
 from app.config import settings
 from app.core.logging import get_logger
 from app.schemas.trading import OrderRequest
@@ -120,18 +126,37 @@ class UpstoxBroker(BrokerClient):
         from app.brokers import assert_live_dispatch_allowed
         assert_live_dispatch_allowed()
         await self.connect()
+        # ── Phase 15C: normalized protective leg mapping ──────────────────────
+        # SL_MARKET -> "SL-M" (trigger-only market stop)
+        # SL_LIMIT  -> "SL"   (trigger + limit stop)
+        # TP_LIMIT  -> "LIMIT" (take-profit at trigger price)
+        # Anything else keeps the legacy MARKET/LIMIT mapping.
+        order_type_lit = order.order_type or "MARKET"
+        trigger_price = float(order.trigger_price) if order.trigger_price else 0.0
+        if order_type_lit == "SL_MARKET":
+            upstox_order_type = "SL-M"
+            limit_price = 0.0
+        elif order_type_lit == "SL_LIMIT":
+            upstox_order_type = "SL"
+            limit_price = float(order.price) if order.price else trigger_price
+        elif order_type_lit == "TP_LIMIT":
+            upstox_order_type = "LIMIT"
+            limit_price = trigger_price if trigger_price else (float(order.price) if order.price else 0.0)
+        else:
+            upstox_order_type = "MARKET" if order_type_lit == "MARKET" else "LIMIT"
+            limit_price = float(order.price) if order.price else 0.0
         url = f"{self.BASE_URL}/order/place"
         payload = {
             "quantity": order.quantity,
             "product": "I",  # Intraday MIS
             "validity": "DAY",
-            "price": order.price or 0.0,
+            "price": limit_price,
             "tag": "tradetron",
             "instrument_token": f"NSE_EQ|{order.symbol}",
-            "order_type": "MARKET" if order.order_type == "MARKET" else "LIMIT",
+            "order_type": upstox_order_type,
             "transaction_type": order.side.value.upper(),
             "disclosed_quantity": 0,
-            "trigger_price": 0.0,
+            "trigger_price": trigger_price,
             "is_amo": False,
         }
 
@@ -155,6 +180,35 @@ class UpstoxBroker(BrokerClient):
         except Exception as exc:
             logger.error("Upstox place_order error: %s", exc)
             raise
+
+    def supports_native_protection(self) -> BrokerProtectionCapability:
+        """Upstox v2: native SL / SL-M + target LIMIT via the order/place API.
+
+        Real code path implemented (``place_order`` maps SL_MARKET -> SL-M,
+        SL_LIMIT -> SL, TP_LIMIT -> LIMIT with trigger_price).  The Upstox
+        ``PUT /order/modify`` endpoint used by ``modify_order`` only supports
+        quantity/price — it does NOT update a stop trigger — so in-place
+        replacement is declared ``replace=False`` (cancel + re-place instead).
+        ``tested=False``: no Upstox sandbox credentials have been provided.
+        """
+        return BrokerProtectionCapability(
+            adapter="upstox",
+            native_sl=True,
+            native_tp=True,
+            bracket=False,
+            replace=False,  # modify endpoint cannot move triggers — cancel+replace
+            order_types=(
+                PROTECTIVE_ORDER_TYPE_SL_MARKET,
+                PROTECTIVE_ORDER_TYPE_SL_LIMIT,
+                PROTECTIVE_ORDER_TYPE_TP_LIMIT,
+            ),
+            tested=False,
+            reason=(
+                "Upstox v2 SL/SL-M + LIMIT protective orders are implemented but "
+                "NOT verified against an Upstox sandbox (no sandbox credentials); "
+                "order modify does not support trigger moves"
+            ),
+        )
 
     async def modify_order(
         self, broker_order_id: str, quantity: Optional[int] = None, price: Optional[float] = None

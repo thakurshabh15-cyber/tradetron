@@ -34,6 +34,7 @@ from app.models import (  # noqa: F401  (side-effect: populates Base.metadata)
     copy_trading,
     marketplace,
     notification,
+    protective_order,
     trading,
     user,
     visual_strategy,

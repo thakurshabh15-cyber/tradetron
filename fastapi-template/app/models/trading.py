@@ -179,6 +179,18 @@ class PositionRecord(Base):
     take_profit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     mode: Mapped[str] = mapped_column(String(20), default="PAPER")  # "PAPER" | "LIVE"
     status: Mapped[str] = mapped_column(String(20), default="OPEN")  # OPEN, CLOSED
+    # ── Phase 15C: exchange-level protection lifecycle state ─────────────────
+    # LIVE:   UNPROTECTED | PROTECTION_PENDING | PROTECTED | PROTECTION_FAILED
+    #         | STOP_TRIGGERED | TARGET_TRIGGERED (broker-reported terminal leg)
+    # PAPER:  PAPER (engine-simulated SL/TP) when SL/TP configured, else
+    #         UNPROTECTED.  CLOSED after position close / protection teardown.
+    # PROTECTED is set ONLY after genuine broker protective-order placement —
+    # never fabricated, never assumed from engine monitoring.
+    protection_state: Mapped[str] = mapped_column(
+        String(20), default="UNPROTECTED", server_default="UNPROTECTED"
+    )
+    protection_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    protected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

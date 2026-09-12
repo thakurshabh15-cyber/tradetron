@@ -20,9 +20,11 @@ from app.models import (  # noqa: F401
     audit,
     billing,
     broker_account,
+    broker_state,
     copy_trading,
     marketplace,
     notification,
+    protective_order,
     trading,
     user,
     visual_strategy,
@@ -45,8 +47,9 @@ class TestAlembicMigration:
             "marketplace_strategies", "strategy_deployments",
             "creator_payout_settings", "notification_preferences",
             "price_alerts", "watchlists", "revoked_tokens",
-            "user_setup_tasks",  # migration 0006_user_setup_tasks
-            "broker_state",      # migration 0007_broker_state (Phase 15B)
+            "user_setup_tasks",     # migration 0006_user_setup_tasks
+            "broker_state",         # migration 0007_broker_state (Phase 15B)
+            "protective_orders",    # migration 0008_protective_orders (Phase 15C)
         }
         tables = set(Base.metadata.tables.keys())
         missing = expected - tables

@@ -174,6 +174,16 @@ class OrderRequest(BaseModel):
     quantity: int = Field(..., gt=0)
     order_type: str = "MARKET"
     strategy_id: Optional[str] = None
+    # Phase 15C: optional limit price for protective/limit legs.  Set for
+    # LIMIT / SL_LIMIT / TP_LIMIT legs — the adapter maps it into its own limit
+    # field (Kite ``price``, Upstox ``limit_price``, SmartAPI ``price``,
+    # Binance ``price``).  ``None`` for plain MARKET / SL_MARKET triggers.
+    price: Optional[float] = Field(None, gt=0)
+    # Phase 15C: optional exchange-level protective-order trigger.  Set for
+    # STOP/SL-M/STOPLOSS_* legs — the adapter maps it to its own trigger field
+    # (e.g. Kite ``trigger_price``, Upstox ``trigger_price``, SmartAPI
+    # ``triggerprice``, Binance ``stopPrice``).  ``None`` for plain MARKET/LIMIT.
+    trigger_price: Optional[float] = Field(None, gt=0)
 
 
 class TradeRead(BaseModel):

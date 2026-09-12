@@ -10,7 +10,13 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Optional
 
-from app.brokers.base import BrokerClient
+from app.brokers.base import (
+    BrokerClient,
+    BrokerProtectionCapability,
+    PROTECTIVE_ORDER_TYPE_SL_LIMIT,
+    PROTECTIVE_ORDER_TYPE_SL_MARKET,
+    PROTECTIVE_ORDER_TYPE_TP_LIMIT,
+)
 from app.config import settings
 from app.core.logging import get_logger
 from app.schemas.trading import OrderRequest
@@ -189,16 +195,38 @@ class AngelOneBroker(BrokerClient):
         # Resolve symbol token from instrument master
         symbol_token = await self._resolve_symbol_token(order.symbol)
 
+        # ── Phase 15C: normalized protective leg mapping ──────────────────────
+        # SL_MARKET   -> STOPLOSS_MARKET (trigger-only market stop)
+        # SL_LIMIT    -> STOPLOSS_LIMIT  (trigger + limit stop)
+        # TP_LIMIT    -> LIMIT           (take-profit at trigger price)
+        # Anything else keeps the legacy ordertype passthrough (MARKET/LIMIT).
+        order_type_lit = order.order_type or "MARKET"
+        trigger_price = float(order.trigger_price) if order.trigger_price else None
+        if order_type_lit == "SL_MARKET":
+            smart_ordertype = "STOPLOSS_MARKET"
+            smart_price = 0
+        elif order_type_lit == "SL_LIMIT":
+            smart_ordertype = "STOPLOSS_LIMIT"
+            smart_price = float(order.price) if order.price else trigger_price
+        elif order_type_lit == "TP_LIMIT":
+            smart_ordertype = "LIMIT"
+            smart_price = trigger_price if trigger_price else (float(order.price) if order.price else 0)
+        else:
+            smart_ordertype = order_type_lit
+            smart_price = order.price if order_type_lit == "LIMIT" else 0
+
         payload = {
             "variety": "NORMAL",
             "tradingsymbol": order.symbol,
             "symboltoken": symbol_token,
             "transactiontype": order.side.value,
             "exchange": "NSE",
-            "ordertype": order.order_type,
+            "ordertype": smart_ordertype,
             "producttype": "INTRADAY",
             "duration": "DAY",
             "quantity": str(order.quantity),
+            "price": str(smart_price),
+            "triggerprice": str(trigger_price) if trigger_price is not None else "0",
         }
 
         response = await _sdk_call(self._client.placeOrder, payload)
@@ -220,6 +248,34 @@ class AngelOneBroker(BrokerClient):
             "filled_price": 0,
             "filled_quantity": 0,
         }
+
+    def supports_native_protection(self) -> BrokerProtectionCapability:
+        """Angel One SmartAPI: native STOPLOSS_MARKET/STOPLOSS_LIMIT + LIMIT.
+
+        Real code path implemented (``place_order`` maps SL_MARKET ->
+        STOPLOSS_MARKET, SL_LIMIT -> STOPLOSS_LIMIT, TP_LIMIT -> LIMIT with
+        ``triggerprice``).  ``replace=True`` because SmartAPI ``modifyOrder``
+        can move pending quantity/price.  ``tested=False``: no SmartAPI
+        sandbox/testnet credentials have been supplied.
+        """
+        return BrokerProtectionCapability(
+            adapter="angelone",
+            native_sl=True,
+            native_tp=True,
+            bracket=False,  # SmartAPI BO variety not implemented — honest
+            replace=True,
+            order_types=(
+                PROTECTIVE_ORDER_TYPE_SL_MARKET,
+                PROTECTIVE_ORDER_TYPE_SL_LIMIT,
+                PROTECTIVE_ORDER_TYPE_TP_LIMIT,
+            ),
+            tested=False,
+            reason=(
+                "Angel One SmartAPI STOPLOSS_MARKET/STOPLOSS_LIMIT/LIMIT "
+                "protective orders are implemented but NOT verified against a "
+                "SmartAPI sandbox (no sandbox credentials)"
+            ),
+        )
 
     async def _resolve_symbol_token(self, symbol: str) -> str:
         """Resolve trading symbol to Angel One's instrument token via searchScrip."""

@@ -15,7 +15,13 @@ import time
 from typing import Any, Optional
 from urllib.parse import urlencode
 
-from app.brokers.base import BrokerClient
+from app.brokers.base import (
+    BrokerClient,
+    BrokerProtectionCapability,
+    PROTECTIVE_ORDER_TYPE_SL_LIMIT,
+    PROTECTIVE_ORDER_TYPE_SL_MARKET,
+    PROTECTIVE_ORDER_TYPE_TP_LIMIT,
+)
 from app.core.logging import get_logger
 from app.schemas.trading import OrderRequest
 
@@ -140,18 +146,51 @@ class BinanceBroker(BrokerClient):
         self._is_connected = False
 
     async def place_order(self, order: OrderRequest) -> dict[str, Any]:
-        """Submit a real order to Binance Spot API."""
+        """Submit a real order to Binance Spot API.
+
+        Phase 15C: normalized protective legs map onto Binance order types:
+          SL_MARKET -> STOP_LOSS (stopPrice only)
+          SL_LIMIT  -> STOP_LOSS_LIMIT (stopPrice + price + GTC)
+          TP_LIMIT  -> TAKE_PROFIT_LIMIT (stopPrice + price + GTC)
+        These are genuine Binance REST semantics (POST /api/v3/order).
+        """
         await self.connect()
 
-        params = {
+        order_type_lit = order.order_type or "MARKET"
+        trigger_price = float(order.trigger_price) if order.trigger_price else None
+
+        params: dict[str, Any] = {
             "symbol": order.symbol,
             "side": order.side.value,
-            "type": order.order_type or "MARKET",
+            "type": order_type_lit,
             "quantity": str(order.quantity),
         }
-        if order.order_type == "LIMIT" and order.price:
+        if order_type_lit in ("SL_MARKET", "SL_LIMIT", "TP_LIMIT"):
+            # Normalized -> Binance literal mapping
+            if order_type_lit == "SL_MARKET":
+                params["type"] = "STOP_LOSS"
+            elif order_type_lit == "SL_LIMIT":
+                params["type"] = "STOP_LOSS_LIMIT"
+            else:
+                params["type"] = "TAKE_PROFIT_LIMIT"
+            if trigger_price is None:
+                raise RuntimeError(
+                    "Binance protective order requires a trigger_price "
+                    "(stopPrice) — refusing to place a stop/profit order blind."
+                )
+            params["stopPrice"] = str(trigger_price)
+            params["timeInForce"] = "GTC"
+            if order_type_lit != "SL_MARKET":
+                params["price"] = str(float(order.price) if order.price else trigger_price)
+        elif order_type_lit == "LIMIT":
+            if order.price is None:
+                raise RuntimeError("Binance LIMIT order requires a price.")
             params["price"] = str(order.price)
             params["timeInForce"] = "GTC"
+        elif order_type_lit == "MARKET":
+            params["type"] = "MARKET"
+        else:
+            params["type"] = order_type_lit
 
         data = await self._api_request("POST", "/api/v3/order", params)
 
@@ -173,6 +212,39 @@ class BinanceBroker(BrokerClient):
             "executedQty": data.get("executedQty", "0"),
             "cummulativeQuoteQty": data.get("cummulativeQuoteQty", "0"),
         }
+
+    def supports_native_protection(self) -> BrokerProtectionCapability:
+        """Binance Spot: native stop-loss / take-profit orders (and documented OCO).
+
+        Real code path implemented (``place_order`` maps SL_MARKET ->
+        STOP_LOSS, SL_LIMIT -> STOP_LOSS_LIMIT, TP_LIMIT ->
+        TAKE_PROFIT_LIMIT with ``stopPrice``).  Binance also documents the
+        OCO (``POST /api/v3/orderList/oco``) bracket construct, so
+        ``bracket=True`` reflects platform capability — however this adapter
+        protects positions with two independently cancelable orders, which is
+        the safer lifecycle for cancel/replace.  The adapter defaults to the
+        Binance TESTNET (``https://testnet.binance.vision``); ``tested=False``
+        because no testnet credentials have been configured in this repo.
+        """
+        return BrokerProtectionCapability(
+            adapter="binance",
+            native_sl=True,
+            native_tp=True,
+            bracket=True,   # OCO is a real documented Binance construct
+            replace=False,  # Binance has no order modify — cancel + re-place
+            order_types=(
+                PROTECTIVE_ORDER_TYPE_SL_MARKET,
+                PROTECTIVE_ORDER_TYPE_SL_LIMIT,
+                PROTECTIVE_ORDER_TYPE_TP_LIMIT,
+            ),
+            tested=False,
+            reason=(
+                "Binance STOP_LOSS / STOP_LOSS_LIMIT / TAKE_PROFIT_LIMIT are "
+                "implemented against the Binance testnet base URL but NOT "
+                "verified with testnet credentials (none configured); order "
+                "modification unsupported — cancellation + replacement only"
+            ),
+        )
 
     async def modify_order(
         self, broker_order_id: str, quantity: Optional[int] = None, price: Optional[float] = None

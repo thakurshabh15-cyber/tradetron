@@ -79,6 +79,23 @@ jobpage.html
 jobs.json
 run_ci.json
 runlogs.zip
+# Working-area scratch / session checkpoints (release hygiene — never committed)
+.verify-live/
+_zs_*.txt
+build_out*.txt
+lint_out*.txt
+test_out.txt
+claude_p4_*.txt
+claude_p9_*.txt
+fastapi-template/_*.txt
+fastapi-template/_*.py
+fastapi-template/_*.mjs
+fastapi-template/_*.cmd
+fastapi-template/claude_*.txt
+fastapi-template/client/_run_client.cmd
+fastapi-template/client/claude_p2_*.txt
+_release_gate_backend.log
+_release_gate_backend.err
 
 # Coverage
 .coverage

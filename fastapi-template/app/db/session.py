@@ -159,6 +159,7 @@ async def init_db() -> None:
         StrategyRecord,
         TradeRecord,
     )
+    from app.models.protective_order import ProtectiveOrderRecord  # noqa: F401
     from app.models.visual_strategy import VisualStrategyRecord  # noqa: F401
     from app.models.marketplace import (  # noqa: F401
         MarketplaceStrategyRecord,
@@ -281,6 +282,12 @@ async def init_db() -> None:
         # bootstrap keeps pre-existing local DBs in step with the ORM model
         # (production schema is owned by the Alembic migration).
         ("strategy_deployments", "owner_user_id VARCHAR(36)"),
+        # Phase 15C (0008_protective_orders): honest exchange-protection
+        # lifecycle columns on positions.  Dev/test bootstrap keeps pre-existing
+        # local DBs in step with the ORM model (production = Alembic-owned).
+        ("positions", "protection_state VARCHAR(20) DEFAULT 'UNPROTECTED'"),
+        ("positions", "protection_error TEXT"),
+        ("positions", "protected_at TIMESTAMP"),
     ]
 
     # Legacy idempotent column-adds — dev/testing only (P2-6, see above).

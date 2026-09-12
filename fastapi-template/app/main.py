@@ -132,6 +132,13 @@ async def lifespan(application: FastAPI):  # noqa: ARG001
 
     broker_state_sync_scheduler.start()
 
+    # 9. Start the Phase 15C protective-order scheduler: bounded broker-side
+    #    SL/TP reconcile passes (crash recovery, broker-truth verification,
+    #    terminal-leg detection) for LIVE positions with protective orders.
+    from app.engine.protective_orders import protection_scheduler
+
+    protection_scheduler.start()
+
     logger.info(
         "%s ready — broker=%s, symbols=%s",
         settings.app_name,
@@ -146,6 +153,7 @@ async def lifespan(application: FastAPI):  # noqa: ARG001
     broker_scheduler.stop()
     broker_order_reconciliation_scheduler.stop()
     broker_state_sync_scheduler.stop()
+    protection_scheduler.stop()
     if _engine:
         await _engine.stop()
     if _simulator:

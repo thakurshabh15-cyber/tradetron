@@ -601,6 +601,26 @@ async def close_position(
         await db.commit()
         await db.refresh(pos)
 
+        # Phase 15C: best-effort teardown of broker-side protective orders for
+        # the LIVE position being closed.  A cancel failure is logged, never
+        # fatal — the periodic protective-order reconcile sweep also catches
+        # and cleans up leftover rows on CLOSED positions.  PAPER closes are
+        # untouched (no protective rows exist for them).
+        if (pos.mode or "PAPER") == "LIVE":
+            from app.engine.protective_orders import protection_engine
+
+            try:
+                await protection_engine.cancel_position_protection(
+                    pos.id,
+                    authorized_user_id=user.id,
+                    reason="position closed",
+                )
+            except Exception as close_exc:  # noqa: BLE001 - teardown is best-effort
+                logger.warning(
+                    "[Protection] teardown skipped for closed %s: %s",
+                    pos.id, close_exc,
+                )
+
         try:
             broker_client = get_broker_adapter(broker_acc)
             from app.schemas.trading import OrderRequest, Side
@@ -1247,6 +1267,31 @@ async def execute_dma_order(
     )
     db.add(position)
     order.position_id = position.id
+    # Phase 15C: exchange-level protective orders — arm broker-side SL/TP for
+    # LIVE DMA right after the fill is durable.  A fail-closed outcome rolls
+    # the position back before real inventory can sit unprotected at the broker.
+    if req.mode == "LIVE" and (sl_price is not None or tp_price is not None):
+        from app.engine.protective_orders import protection_engine
+
+        outcome = await protection_engine.ensure_position_protection(
+            position.id, authorized_user_id=user.id
+        )
+        if not outcome.ok and outcome.fail_closed:
+            position.status = "CLOSED"
+            position.closed_at = datetime.now(timezone.utc)
+            position.protection_state = "PROTECTION_FAILED"
+            position.protection_error = (
+                f"FAIL-CLOSED entry: {outcome.error or 'protective placement failed'}"
+            )
+            await db.commit()
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"FAIL-CLOSED: exchange-level SL/TP could not be placed for "
+                    f"LIVE position {position.id}; the entry was rolled back to "
+                    f"prevent UNPROTECTED inventory. {outcome.error}"
+                ),
+            )
     await db.commit()
     await db.refresh(trade)
     await db.refresh(position)
@@ -1334,6 +1379,23 @@ async def modify_position_risk_targets(
         pos.take_profit_price = round(req.take_profit_price, 2)
 
     await db.commit()
+    # Phase 15C: a LIVE position with broker-side protection re-arms its SL/TP
+    # whenever the trader drags the levels (cancel + re-place ONLY the changed
+    # leg, idempotent).  PAPER positions keep the engine-simulated SL/TP.
+    if (pos.mode or "PAPER") == "LIVE":
+        from app.engine.protective_orders import protection_engine
+
+        outcome = await protection_engine.replace_position_protection(
+            position_id,
+            authorized_user_id=user.id,
+            new_sl=pos.stop_loss_price,
+            new_tp=pos.take_profit_price,
+        )
+        if not outcome.ok or outcome.fail_closed:
+            logger.warning(
+                "[Protection] risk-target replace did not arm for %s: %s",
+                position_id, outcome.error,
+            )
     from app.market_data.manager import ws_manager
     try:
         await ws_manager.broadcast(f"position:{position_id}", {

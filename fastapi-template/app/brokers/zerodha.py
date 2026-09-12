@@ -14,7 +14,13 @@ import asyncio
 import hashlib
 from typing import Any, Optional
 
-from app.brokers.base import BrokerClient
+from app.brokers.base import (
+    BrokerClient,
+    BrokerProtectionCapability,
+    PROTECTIVE_ORDER_TYPE_SL_LIMIT,
+    PROTECTIVE_ORDER_TYPE_SL_MARKET,
+    PROTECTIVE_ORDER_TYPE_TP_LIMIT,
+)
 from app.config import settings
 from app.core.logging import get_logger
 from app.schemas.trading import OrderRequest
@@ -181,6 +187,30 @@ class ZerodhaKiteBroker(BrokerClient):
 
         exchange = "NFO" if "NIFTY" in order.symbol else "NSE"
         try:
+            # ── Phase 15C: normalized protective leg mapping ──────────────────
+            # SL_MARKET  -> Kite SL-M (trigger-only market stop)
+            # SL_LIMIT   -> Kite SL   (trigger + limit stop)
+            # TP_LIMIT   -> Kite LIMIT (take-profit at the trigger price)
+            # Anything else keeps the legacy MARKET/LIMIT mapping.
+            order_type_lit = order.order_type or "MARKET"
+            trigger_price = float(order.trigger_price) if order.trigger_price else None
+            if order_type_lit == "SL_MARKET":
+                kite_order_type = getattr(self._kite, "ORDER_TYPE_SLM", getattr(self._kite, "ORDER_TYPE_SL"))
+                kite_price = None
+            elif order_type_lit == "SL_LIMIT":
+                kite_order_type = getattr(self._kite, "ORDER_TYPE_SL")
+                kite_price = float(order.price) if order.price else trigger_price
+            elif order_type_lit == "TP_LIMIT":
+                kite_order_type = self._kite.ORDER_TYPE_LIMIT
+                kite_price = trigger_price if trigger_price else (float(order.price) if order.price else None)
+            else:
+                kite_order_type = (
+                    self._kite.ORDER_TYPE_MARKET
+                    if order_type_lit == "MARKET"
+                    else self._kite.ORDER_TYPE_LIMIT
+                )
+                kite_price = order.price if order_type_lit != "MARKET" else None
+
             order_id = await asyncio.to_thread(
                 self._kite.place_order,
                 variety=self._kite.VARIETY_REGULAR,
@@ -188,9 +218,10 @@ class ZerodhaKiteBroker(BrokerClient):
                 tradingsymbol=order.symbol,
                 transaction_type=self._kite.TRANSACTION_TYPE_BUY if order.side.value == "BUY" else self._kite.TRANSACTION_TYPE_SELL,
                 quantity=order.quantity,
-                order_type=self._kite.ORDER_TYPE_MARKET if order.order_type == "MARKET" else self._kite.ORDER_TYPE_LIMIT,
+                order_type=kite_order_type,
                 product=self._kite.PRODUCT_MIS,
-                price=order.price if order.order_type != "MARKET" else None,
+                price=kite_price,
+                trigger_price=trigger_price,
             )
         except Exception as exc:
             logger.error("Zerodha order placement failed: %s", exc)
@@ -214,6 +245,37 @@ class ZerodhaKiteBroker(BrokerClient):
             "price": order.price or 0.0,
             "order_type": order.order_type,
         }
+
+    def supports_native_protection(self) -> BrokerProtectionCapability:
+        """Zerodha Kite: native SL/SL-M + target LIMIT via KiteConnect REGULAR.
+
+        Real code path implemented (``place_order`` maps SL_MARKET -> SL-M,
+        SL_LIMIT -> SL, TP_LIMIT -> LIMIT with trigger_price).  Kite also
+        exposes VARIETY_BO brackets, but bracket placement carries additional
+        exchange/margin/leg rules we have not implemented — declared
+        ``bracket=False`` honestly.  ``tested=False``: no Kite sandbox
+        credentials exist, so the code path is unverified against a live/sandbox
+        broker.
+        """
+        return BrokerProtectionCapability(
+            adapter="zerodha",
+            native_sl=True,
+            native_tp=True,
+            bracket=False,  # VARIETY_BO not implemented — honest
+            replace=True,   # Kite modify supports trigger/price on REGULAR
+            order_types=(
+                PROTECTIVE_ORDER_TYPE_SL_MARKET,
+                PROTECTIVE_ORDER_TYPE_SL_LIMIT,
+                PROTECTIVE_ORDER_TYPE_TP_LIMIT,
+            ),
+            tested=False,
+            reason=(
+                "Zerodha Kite REGULAR SL/SL-M + LIMIT protective orders are "
+                "implemented in the adapter but have NOT been verified against "
+                "a Kite sandbox (no sandbox credentials); VARIETY_BO bracket is "
+                "declared unsupported"
+            ),
+        )
 
     async def modify_order(
         self, broker_order_id: str, quantity: Optional[int] = None, price: Optional[float] = None
