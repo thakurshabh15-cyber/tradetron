@@ -1,48 +1,51 @@
-"""P0-2 RED regression: the TradeThrone signal webhook must persist durable
-order state in the database (source of truth) instead of relying on the
-process-local / in-memory ``OrderManager``.
+"""P0-2 RED regression: the TradeThrone signal webhook must persist a durable
+agent task in the database (source of truth) instead of trusting process-local
+/ in-memory state.
 
-Defect (P0-2): the normal (non-local) webhook path delivers the validated
-signal to ``handle_tradethrone_signal`` (``app/webhooks/handlers/tradethrone_signal.py``),
-which obtains the engine's ``_order_manager`` — an ``OrderManager`` whose entire
-order/position ledger lives in process memory (``active_positions``,
-``closed_positions``, ``execution_history``, ``realized_pnl``) — and calls
-``order_manager.place_order(...)``, a method that does not exist on
-``OrderManager`` (source- and runtime-verified).  The handler's only durable
-artifacts are a Redis idempotency record and a ``trade_audit_logs`` audit row:
-**no** ``OrderRecord`` is ever written.
+Defect (P0-2): the original handler reached the engine's in-memory
+``OrderManager`` and had no durable DB claim before broker dispatch; a crash /
+restart / scale-out lost accepted signal state and a duplicate delivery could
+double-dispatch.
 
-Consequences (failure model):
-  * Process restart / Render deploy / crash between worker receipt and any
-    durable write -> accepted signal state is lost (no DB record).
-  * Multiple workers/processes each own a private in-memory OrderManager; no
-    cross-process order ledger exists.
-  * Retries / duplicate delivery / PEL recovery have no DB idempotency claim to
-    dedupe against, so a second dispatch is not prevented by the DB.
+The governed contract (current implementation): the webhook handler NEVER
+dispatches to a broker.  It accepts the signal through
+``AgentIntentTriggerBridge.submit_webhook_signal`` which:
 
-Invariant being proven (RED, pre-fix):
+  1. validates the TradeThrone payload (fail closed),
+  2. canonicalizes symbol / quantity (lot-size compliance),
+  3. resolves the owner server-side (never trusted from the payload),
+  4. enqueues a durable ``trading_agent`` / ``execute_trade`` ``AgentTaskRecord``
+     whose ``idempotency_key`` is the deterministic envelope-derived trigger key.
+
+Broker dispatch happens exclusively on a later scheduler pass against the
+durable intent (covered by the scheduler / intent suites).
+
+Invariant being proven:
   1. Processing a *valid* entry signal through ``handle_tradethrone_signal``
-     MUST result in a durable ``OrderRecord`` (DB is the source of truth).
-  2. Two deliveries of the same signal MUST NOT create duplicate durable
-     orders.
-
-Both assertions fail against the current implementation (zero durable
-``OrderRecord`` rows), which is exactly the P0-2 regression this file pins.
+     MUST result in a durable ``AgentTaskRecord`` (DB is the source of truth).
+  2. Two deliveries of the same signal MUST NOT create duplicate durable tasks.
 """
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import delete, select
 
-from app.brokers.simulated import SimulatedBroker
 from app.db.session import SessionLocal, init_db
-from app.engine.order_manager import OrderManager
-from app.models.audit import TradeAuditRecord
-from app.models.trading import OrderRecord
+from app.engine.agent_intent_triggers import (
+    AGENT_TYPE_TRADING,
+    TASK_KIND_EXECUTE_TRADE,
+    webhook_trigger_key,
+)
+from app.engine.agent_runtime import ensure_agent_registry
+from app.models.agent import AgentRecord, AgentTaskRecord
+from app.models.broker_account import BrokerAccountRecord
+from app.models.trading import StrategyRecord
+from app.models.user import UserRecord
 from app.webhooks.handlers.tradethrone_signal import handle_tradethrone_signal
 from app.webhooks.queue.redis_streams import QueuedWebhook
 from app.webhooks.validation.schemas import WebhookEnvelope
@@ -51,37 +54,8 @@ _SIGNAL = "entry_long"
 _SYMBOL = "NIFTY"
 _ACTION = "BUY"
 _QTY = 65  # NIFTY lot size (65) --- compliant, no auto-correct surprises.
-
-
-class _AllowRisk:
-    """Permissive pre-trade risk gate: lets the handler reach the dispatch step."""
-
-    def check(self, order_request) -> tuple[bool, str]:  # noqa: ANN001
-        return True, ""
-class _FakeEngine:
-    """Mirror TradingEngine.__init__ wiring: a real (in-memory) OrderManager
-    backed by the SimulatedBroker.  A risk_manager is attached so the handler
-    gets past the pre-trade check deterministically."""
-
-    def __init__(self) -> None:
-        self._order_manager = OrderManager(broker=SimulatedBroker())
-        self._order_manager.risk_manager = _AllowRisk()  # type: ignore[attr-defined]
-
-
-class _CountingEngine(_FakeEngine):
-    """Fake engine whose broker records every dispatched OrderRequest."""
-
-    def __init__(self, dispatched: list) -> None:  # noqa: ANN001
-        super().__init__()
-        self._dispatched = dispatched
-        broker = self._order_manager.broker
-        original = broker.place_order
-
-        async def _counting_place(req):  # noqa: ANN001
-            dispatched.append(req)
-            return await original(req)
-
-        broker.place_order = _counting_place
+_STRATEGY = "red-repro"
+_USER_ID = "u-tradethrone-red"
 
 
 def _webhook(tag: str, ts: datetime | None = None) -> QueuedWebhook:
@@ -95,7 +69,7 @@ def _webhook(tag: str, ts: datetime | None = None) -> QueuedWebhook:
             "symbol": _SYMBOL,
             "action": _ACTION,
             "quantity": _QTY,
-            "strategy_name": "red-repro",
+            "strategy_name": _STRATEGY,
             "order_type": "MARKET",
             "product_type": "INTRADAY",
             "exchange": "NFO",
@@ -111,123 +85,171 @@ async def _init_tables():
     """Real DB tables (same pattern as the other real-DB durability suites)."""
     await init_db()
     yield
-
-
 @pytest.fixture(autouse=True)
-async def _cleanup_audit_rows():
-    """Remove the trade-audit rows this suite writes (best-effort housekeeping)."""
-    yield
-    async with SessionLocal() as db:
-        await db.execute(
-            delete(TradeAuditRecord).where(
-                TradeAuditRecord.provider == "tradethrone",
-                TradeAuditRecord.symbol == _SYMBOL,
-                TradeAuditRecord.signal == _SIGNAL,
-            )
-        )
-        await db.commit()
+async def _seed_governed_stack():
+    """Provision the server-side owner + operator-enabled trading_agent.
 
-
-@pytest.fixture(autouse=True)
-async def _cleanup_signal_orders():
-    """Reset durable order state this suite creates.
-
-    P0-2 durability tests assert EXACT order counts (``len(orders) == 1``), so
-    every test must start from a clean ``orders`` table.  Only rows carrying a
-    tenant-less ``signal_key`` (written exclusively by the webhook signal
-    path) are removed -- user-scoped DMA/strategy rows are never touched.
-    Linked ``TradeRecord`` rows are removed first (FK ``order_id``).
-
-    Cleanup runs BOTH before and after each test to guarantee isolation from
-    other test files that leave stale rows in the shared persistent SQLite
-    database.
+    The governed webhook path resolves ownership server-side (never from the
+    payload): strategy ``red-repro`` -> user -> active broker account.  The
+    ``trading_agent`` registry row is provisioned by ``ensure_agent_registry``
+    and then operator-enabled (matches the migration 0010 ``enabled=False``
+    opt-in contract).
     """
-    from app.models.trading import TradeRecord
+    await ensure_agent_registry()
 
-    async def _remove_signal_rows():
+    async def _seed() -> None:
         async with SessionLocal() as db:
-            order_ids = (
+            agent = (
                 await db.execute(
-                    select(OrderRecord.id).where(OrderRecord.signal_key.is_not(None))
+                    select(AgentRecord).where(
+                        AgentRecord.agent_type == AGENT_TYPE_TRADING
+                    )
                 )
-            ).scalars().all()
-            if order_ids:
-                await db.execute(
-                    delete(TradeRecord).where(TradeRecord.order_id.in_(order_ids))
-                )
-                await db.execute(
-                    delete(OrderRecord).where(OrderRecord.id.in_(order_ids))
-                )
-                await db.commit()
+            ).scalars().first()
+            assert agent is not None, (
+                "trading_agent registry row missing after ensure_agent_registry()"
+            )
+            agent.enabled = True
 
-    await _remove_signal_rows()
+            user = UserRecord(id=_USER_ID, email=f"{_USER_ID}@example.test")
+            db.add(user)
+            await db.flush()
+
+            broker = BrokerAccountRecord(
+                id="ba-tradethrone-red",
+                user_id=user.id,
+                broker_name="SIMULATED",
+                account_name="Red Repro Sim",
+            )
+            broker.set_api_key("test-api-key")
+            broker.set_api_secret("test-api-secret")
+            broker.set_access_token("test-access-token")
+            db.add(broker)
+            await db.flush()
+
+            db.add(
+                StrategyRecord(
+                    id="st-tradethrone-red",
+                    user_id=user.id,
+                    name=_STRATEGY,
+                    symbols_json='["NIFTY"]',
+                    conditions_json="[]",
+                    action_json='{"order_type": "MARKET"}',
+                    enabled=True,
+                    execution_mode="PAPER",
+                    broker_account_id=broker.id,
+                )
+            )
+            await db.commit()
+
+    async def _cleanup() -> None:
+        async with SessionLocal() as db:
+            await db.execute(
+                delete(AgentTaskRecord).where(
+                    AgentTaskRecord.agent_type == AGENT_TYPE_TRADING
+                )
+            )
+            await db.execute(
+                delete(StrategyRecord).where(StrategyRecord.user_id == _USER_ID)
+            )
+            await db.execute(
+                delete(BrokerAccountRecord).where(
+                    BrokerAccountRecord.user_id == _USER_ID
+                )
+            )
+            await db.execute(delete(UserRecord).where(UserRecord.id == _USER_ID))
+            agent = (
+                await db.execute(
+                    select(AgentRecord).where(
+                        AgentRecord.agent_type == AGENT_TYPE_TRADING
+                    )
+                )
+            ).scalars().first()
+            if agent is not None:
+                agent.enabled = False
+            await db.commit()
+
+    await _cleanup()
+    await _seed()
     yield
-    await _remove_signal_rows()
-
-
-@pytest.fixture
-def _fake_engine(monkeypatch):
-    """Make the handler's ``get_engine()`` return a real-OrderManager-backed engine."""
-    import app.main
-
-    engine = _FakeEngine()
-    monkeypatch.setattr(app.main, "_engine", engine)
-    return engine
-
-
+    await _cleanup()
 @pytest.mark.asyncio
-async def test_valid_entry_signal_creates_durable_order_record(_fake_engine):
+async def test_valid_entry_signal_creates_durable_agent_task():
     """P0-2 invariant 1: a valid entry signal MUST be durably committed as an
-    OrderRecord (DB is the source of truth), not only held in the in-memory
-    OrderManager (which is process-local and lost on restart/deploy/scale)."""
+    AgentTaskRecord (DB is the source of truth), never held only in process
+    memory and never dispatched to a broker from the webhook path."""
     await handle_tradethrone_signal(_webhook(tag=uuid.uuid4().hex[:12]))
 
     async with SessionLocal() as db:
-        orders = (
+        tasks = (
             await db.execute(
-                select(OrderRecord).where(
-                    OrderRecord.symbol == _SYMBOL,
-                    OrderRecord.side == _ACTION,
-                    OrderRecord.signal_key.is_not(None),
+                select(AgentTaskRecord).where(
+                    AgentTaskRecord.agent_type == AGENT_TYPE_TRADING,
+                    AgentTaskRecord.task_kind == TASK_KIND_EXECUTE_TRADE,
                 )
             )
         ).scalars().all()
 
-    assert orders, (
+    assert len(tasks) == 1, (
         "handle_tradethrone_signal completed a VALID entry signal without "
-        "creating a durable OrderRecord. The order state exists only in the "
-        "in-memory OrderManager (lost across processes/workers/restarts) -- "
-        "P0-2 invariant violated."
+        "creating a durable AgentTaskRecord. Accepted signal state exists only "
+        "in memory -- P0-2 invariant violated."
     )
+
+    task = tasks[0]
+    assert task.status == "PENDING"
+    assert task.idempotency_key and task.idempotency_key.startswith("ttr-")
+    payload = json.loads(task.input_json)
+    assert payload["symbol"] == "NIFTY"
+    assert payload["side"] == "BUY"
+    assert payload["quantity"] == _QTY
+    assert payload["strategy_name"] == "red-repro"
+    assert payload["trigger_source"] == "webhook"
 
 
 @pytest.mark.asyncio
-async def test_duplicate_signal_delivery_does_not_duplicate_order(_fake_engine):
+async def test_duplicate_signal_delivery_does_not_duplicate_task():
     """P0-2 invariant 2: two deliveries of the same signal (duplicate webhook /
-    PEL recovery re-delivery) must NOT produce duplicate durable orders."""
+    PEL recovery re-delivery) MUST NOT produce duplicate durable tasks."""
     key = uuid.uuid4().hex[:12]
     # SAME envelope timestamp == same coarse-second identity for the
-    # deterministic tenant-less signal_key -- exactly what a PEL /
-    # XAUTOCLAIM re-delivery of the same signal event would carry.  The two
-    # deliveries differ only in event_id/idempotency_key.
+    # deterministic trigger key -- exactly what a PEL / XAUTOCLAIM re-delivery
+    # of the same signal event would carry.
     ts = datetime.now(timezone.utc)
     await handle_tradethrone_signal(_webhook(tag=f"{key}a", ts=ts))
+    first = await _trading_tasks()
+    assert len(first) == 1
+
     await handle_tradethrone_signal(_webhook(tag=f"{key}b", ts=ts))
-
-    async with SessionLocal() as db:
-        orders = (
-            await db.execute(
-                select(OrderRecord).where(
-                    OrderRecord.symbol == _SYMBOL,
-                    OrderRecord.side == _ACTION,
-                    OrderRecord.signal_key.is_not(None),
-                )
-            )
-        ).scalars().all()
-
-    assert len(orders) == 1, (
-        f"Expected exactly 1 durable OrderRecord after two deliveries of the "
-        f"same signal; got {len(orders)}. The signal path has no DB idempotency "
-        f"claim, so duplicate delivery can duplicate state -- P0-2 invariant "
-        f"violated."
+    tasks = await _trading_tasks()
+    assert len(tasks) == 1, (
+        f"Expected exactly 1 durable AgentTaskRecord after two deliveries of "
+        f"the same signal; got {len(tasks)}. The trigger path has no DB "
+        f"idempotency claim, so duplicate delivery can duplicate state -- "
+        f"P0-2 invariant violated."
     )
+    assert tasks[0].id == first[0].id
+    expect_key = webhook_trigger_key(
+        provider="tradethrone",
+        strategy_name=_STRATEGY,
+        symbol=_SYMBOL,
+        side=_ACTION,
+        quantity=_QTY,
+        ts_sec=int(ts.timestamp()),
+        signal=_SIGNAL,
+    )
+    assert tasks[0].idempotency_key == expect_key
+
+
+async def _trading_tasks() -> list[AgentTaskRecord]:
+    async with SessionLocal() as db:
+        return list(
+            (
+                await db.execute(
+                    select(AgentTaskRecord).where(
+                        AgentTaskRecord.agent_type == AGENT_TYPE_TRADING,
+                        AgentTaskRecord.task_kind == TASK_KIND_EXECUTE_TRADE,
+                    )
+                )
+            ).scalars().all()
+        )

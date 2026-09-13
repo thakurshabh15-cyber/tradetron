@@ -6,10 +6,10 @@ paths that had NO live-caller and NO guard — proving they are safe by
 construction / not wired to any real-broker dispatch:
 
 1. Webhook signal handler (``tradethrone_signal.py``)
-   Routes through the engine's startup order manager (``get_engine()``). The
-   broker used by that order manager is fixed at engine-construction time from
-   ``BROKER_MODE``; no user-supplied broker or LIVE override can reach the
-   broker from a webhook payload.
+   Delegates to ``AgentIntentTriggerBridge.submit_webhook_signal``: the signal
+   becomes a durable ``trading_agent``/``execute_trade`` agent task and broker
+   dispatch happens on the governed scheduler pass.  No broker adapter or
+   ``place_*`` call exists in the webhook path at all.
 
 2. Copy-trading fan-out (``copy_trading.py``)
    LIVE follower fan-out is now gated by ``assert_live_dispatch_allowed()``
@@ -64,27 +64,38 @@ def _mock_notify_trade_fill(monkeypatch):
 
 # ── 1. Webhook signal handler → engine startup broker ──────────────────────
 
-def test_webhook_signal_uses_engine_order_manager_not_user_broker():
-    """The webhook handler must dispatch via ``get_engine()._order_manager``.
+def test_webhook_signal_uses_governed_bridge_not_user_broker():
+    """The webhook handler must NEVER reach a broker adapter.
 
-    The broker is selected once at app startup from ``BROKER_MODE`` and passed
-    into the TradingEngine, which builds its ``_order_manager`` around it. A
-    webhook payload carries order fields only — never a broker/client override —
-    so a LIVE override can't be smuggled into the dispatch path.
+    The governed webhook contract: ``handle_tradethrone_signal`` delegates to
+    ``AgentIntentTriggerBridge.submit_webhook_signal`` which durably enqueues a
+    ``trading_agent``/``execute_trade`` agent task.  Broker dispatch happens
+    exclusively on the scheduler governed pass -- a webhook payload can never
+    smuggle a broker/client/LIVE override into the (non-existent) dispatch
+    path of this handler.
     """
     src = inspect.getsource(
         importlib_import("app.webhooks.handlers.tradethrone_signal")
     )
 
-    # It sources the order manager from the shared engine singleton.
-    assert "from app.main import get_engine" in src
-    assert "engine = get_engine()" in src
-    assert "engine._order_manager" in src
-    assert "order_manager.place_order(" in src
+    # It never sources an OrderManager / engine, and never dispatches.
+    assert "get_engine" not in src
+    assert "_order_manager" not in src
+    assert "place_order(" not in src
+    # It delegates to the governed trigger bridge.
+    assert "agent_intent_trigger_bridge" in src
+    assert "submit_webhook_signal" in src
 
-    # It must never construct its own broker, nor accept a broker from payload.
+    # The bridge module must also be broker-free (no adapter import, no place_* calls).
+    bridge_src = inspect.getsource(
+        importlib_import("app.engine.agent_intent_triggers")
+    )
+    assert "place_order" not in bridge_src
+    assert "place_trade" not in bridge_src
+    assert "from app.brokers" not in bridge_src
+
+    # The handler must never construct its own broker.
     assert "Broker(" not in src
-    assert "broker_mode" not in src  # selection happens at startup, not here
 
 
 def test_webhook_signal_handler_has_no_user_broker_input():

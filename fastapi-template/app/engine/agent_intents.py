@@ -32,6 +32,28 @@ Deterministic decision contract (Section 7, persisted, never free-form):
   DECISION_REJECTED / DECISION_FAILED
 An intent row is created ONLY for TRADE / NEEDS_APPROVAL — the other decisions
 are recorded in the task output and the audit trail.
+
+Canonical execution contract (Phase 1 Step 4 — aligned with migration 0010):
+
+  execution modes .. ``PAPER`` | ``LIVE`` are the ONLY persisted modes
+                     (``ck_intent_mode`` CHECK).  ``DEMO`` is an
+                     application-level ALIAS for ``PAPER`` and is normalized
+                     to ``PAPER`` at this service boundary (``evaluate()``).
+                     Persistence and analytics never store ``DEMO`` — a DB
+                     row is never a dual concept (Option 2 contract).
+
+  entry order types  ``MARKET`` | ``LIMIT`` are the ONLY entry order types
+                     (``ck_intent_order_type`` CHECK).  ``STOP_LOSS`` /
+                     ``STOP_LOSS_LIMIT`` are NOT supported entry order types
+                     anywhere in this codebase — no broker adapter maps the
+                     literal for entry dispatch — so they FAIL CLOSED at
+                     validation (``unsupported_order_type``) before any
+                     persistence or broker dispatch.  Genuine risk protection
+                     is expressed via ``stop_loss_price`` /
+                     ``take_profit_price`` and executed by the Phase 15C
+                     protection engine (PAPER engine-simulated with
+                     ``protection_state=PAPER``; LIVE broker-side legs via
+                     ``SL_MARKET``/``SL_LIMIT``/``TP_LIMIT``).
 """
 
 from __future__ import annotations
@@ -76,6 +98,27 @@ INTENT_EXECUTED = "EXECUTED"
 INTENT_REJECTED = "REJECTED"
 INTENT_FAILED = "FAILED"
 INTENT_CLOSED = "CLOSED"
+
+# ── Canonical execution-mode contract (migration 0010 ``ck_intent_mode``) ──
+# Persistence stores ONLY PAPER | LIVE.  DEMO is an application-level alias for
+# PAPER, normalized away at the service boundary (never persisted).
+MODE_PAPER = "PAPER"
+MODE_LIVE = "LIVE"
+MODE_DEMO = "DEMO"
+MODE_ALIASES: dict[str, str] = {MODE_DEMO: MODE_PAPER}
+PERSISTED_MODES = (MODE_PAPER, MODE_LIVE)
+
+# ── Canonical entry order-type contract (migration 0010 ``ck_intent_order_type``) ──
+# MARKET | LIMIT are the only supported entry order types (mirrors the
+# strategy ``Action.order_type`` regex ``^(MARKET|LIMIT)$`` and every broker
+# adapter's entry mapping).  STOP_LOSS / STOP_LOSS_LIMIT are protective
+# concepts expressed via stop_loss_price/take_profit_price and MUST fail
+# closed at validation — they would otherwise violate the DB CHECK and are
+# not mapped by any adapter for entry dispatch.
+ORDER_TYPE_MARKET = "MARKET"
+ORDER_TYPE_LIMIT = "LIMIT"
+INTENT_ORDER_TYPES = (ORDER_TYPE_MARKET, ORDER_TYPE_LIMIT)
+UNSUPPORTED_INTENT_ORDER_TYPES = ("STOP_LOSS", "STOP_LOSS_LIMIT")
 
 # Audit action vocabulary (canonical audit_logs trail).
 _AUDIT_DECISION_REJECTED = "agent.intent.decision_rejected"
@@ -401,6 +444,11 @@ class AgentTradingService:
         """Run every gate and persist a durable intent for TRADE /
         NEEDS_APPROVAL decisions.  All other decisions are journaled and
         return ``intent_id=None``.  NEVER raises on gate rejection."""
+        # 0. Canonical execution-mode normalization at the service boundary:
+        #    DEMO → PAPER (Option 2 contract).  Downstream of this point
+        #    ``requested_mode`` is always PAPER | LIVE and satisfies the
+        #    ``ck_intent_mode`` CHECK.
+        requested_mode = self._normalize_requested_mode(requested_mode)
         # 1. Schema/ownership gates — never trust the agent payload.
         await self._validate_payload(
             user_id=user_id,
@@ -611,6 +659,11 @@ class AgentTradingService:
             updated_at=now,
         )
         intent_id, created = await _insert_intent(intent)
+        logger.info(
+            "intent evaluated: intent_id=%s decision=%s mode=%s symbol=%s "
+            "quantity=%s created=%s",
+            intent_id, decision, requested_mode, symbol, quantity, created,
+        )
         await _write_audit(
             _AUDIT_CREATED if created else _AUDIT_DECISION_REJECTED,
             user_id=user_id,
@@ -633,7 +686,29 @@ class AgentTradingService:
             "decision": decision,
             "status": INTENT_CREATED,
             "reason": reason,
+            "created": created,
+            "mode": requested_mode,
         }
+
+    @staticmethod
+    def _normalize_requested_mode(requested_mode: Optional[str]) -> str:
+        """Canonicalize ``requested_mode`` at the service boundary.
+
+        ``DEMO`` is accepted ONLY as an application-level alias for ``PAPER``
+        (canonical execution-mode contract — Option 2): persistence and
+        analytics store ``PAPER``/``LIVE`` and never ``DEMO``.  Unknown modes
+        fail closed with ``invalid_mode`` — never guessed, never silently
+        upgraded to LIVE.
+        """
+        mode = (requested_mode or "").strip().upper()
+        if mode in MODE_ALIASES:
+            return MODE_ALIASES[mode]
+        if mode in (MODE_PAPER, MODE_LIVE):
+            return mode
+        raise IntentGateError(
+            "invalid_mode",
+            f"requested_mode must be PAPER/DEMO/LIVE, got {requested_mode}",
+        )
 
     async def _validate_payload(
         self,
@@ -653,12 +728,20 @@ class AgentTradingService:
             raise IntentGateError(
                 "invalid_side", f"side must be BUY or SELL, got {side}"
             )
-        if order_type not in ("MARKET", "LIMIT", "STOP_LOSS", "STOP_LOSS_LIMIT"):
+        if order_type in UNSUPPORTED_INTENT_ORDER_TYPES:
+            raise IntentGateError(
+                "unsupported_order_type",
+                "STOP_LOSS/STOP_LOSS_LIMIT are protective order concepts "
+                "expressed via stop_loss_price/take_profit_price, not entry "
+                "order_types; intent rejected before dispatch",
+            )
+        if order_type not in INTENT_ORDER_TYPES:
             raise IntentGateError(
                 "invalid_order_type",
-                f"order_type must be MARKET/LIMIT/STOP_LOSS/STOP_LOSS_LIMIT, got {order_type}",
+                f"order_type must be MARKET or LIMIT, got {order_type!r}",
             )
-        if requested_mode not in ("PAPER", "DEMO", "LIVE"):
+        # Executed-mode contract post canonicalization: PAPER | LIVE only.
+        if requested_mode not in PERSISTED_MODES:
             raise IntentGateError(
                 "invalid_mode",
                 f"requested_mode must be PAPER/DEMO/LIVE, got {requested_mode}",
@@ -836,6 +919,11 @@ class AgentTradingService:
         if row.status not in (INTENT_CREATED, INTENT_SENT):
             # Already executed / rejected / failed — replay the durable state
             # exactly; never dispatch a second time.
+            logger.info(
+                "intent execute replay (no dispatch): intent_id=%s status=%s "
+                "order_id=%s",
+                intent_id, row.status, row.order_id,
+            )
             return {
                 "ok": True,
                 "idempotent": True,
@@ -873,6 +961,8 @@ class AgentTradingService:
 
         # ── Re-run every gate at execution time (fresh price, delivery
         #    capability, broker truth, approval, risk, margin) ──────────────
+        # ``row.requested_mode`` is canonically PAPER | LIVE (DEMO was
+        # normalized at evaluate): LIVE never silently falls back to PAPER.
         book_mode = "LIVE" if row.requested_mode == "LIVE" else "PAPER"
 
         fresh, mkt_status, mkt_age, mkt_price = await self._checked_market_price(
@@ -935,6 +1025,7 @@ class AgentTradingService:
         self, row: TradingIntentRecord, reason: str
     ) -> dict[str, Any]:
         """Fail-closed gate rejection — persisted + audited, never silent."""
+        logger.info("intent REJECTED: intent_id=%s reason=%s", row.id, reason)
         await _persist_intent(
             row.id,
             {
@@ -961,6 +1052,7 @@ class AgentTradingService:
         self, row: TradingIntentRecord, reason: str
     ) -> dict[str, Any]:
         """Dispatch-stage failure — the durable claim was already rejected."""
+        logger.error("intent FAILED: intent_id=%s reason=%s", row.id, reason)
         await _persist_intent(
             row.id,
             {
@@ -1185,6 +1277,12 @@ class AgentTradingService:
                 "execution_reason": None,
                 "error_json": None,
             },
+        )
+        logger.info(
+            "intent EXECUTED: intent_id=%s order_id=%s position_id=%s "
+            "broker_order_id=%s filled_price=%s mode=%s",
+            row.id, claim_id, position_id, broker_order_id, filled_price,
+            book_mode,
         )
         await _write_audit(
             _AUDIT_EXECUTED,

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from fastapi import APIRouter, Request, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 import time
@@ -21,8 +20,6 @@ from app.webhooks.observability.metrics import (
 # Importing the handler registers the TradeThrone signal worker pool
 from app.webhooks.handlers.tradethrone_signal import handle_tradethrone_signal  # noqa: F401
 from app.db.session import ensure_tables_local_dev, get_db
-from app.models.audit import TradeAuditRecord
-from app.brokers.angelone import place_tradethrone_order as place_tradethrone_order_angelone
 from app.core.logging import get_logger
 from app.config import settings
 
@@ -52,13 +49,15 @@ async def _handle_local_mode(
 ) -> JSONResponse:
     """Handle webhook in local testing mode (bypasses queue, rate limiting, idempotency).
 
-    Validates TradeThrone signals, places the order via Angel One and writes
-    the trade-audit record before responding synchronously.
+    Still governed and intent-only: TradeThrone signals are validated and
+    enqueued as durable ``trading_agent`` tasks via the trigger bridge — NEVER
+    placed through a broker adapter.  Broker dispatch happens exclusively on a
+    later scheduler pass against the durable intent.
     """
     logger.info("Local mode: accepting webhook for provider=%s", provider)
 
     validated_data = envelope.payload
-    execution_result = None
+    trigger_result = None
 
     if provider.lower() in TRADETHRONE_PROVIDERS:
         try:
@@ -71,31 +70,30 @@ async def _handle_local_mode(
                 detail=f"Schema validation failed: {e}"
             )
 
-        # Execute order placement for validated TradeThrone signals (Angel One)
-        execution_result = place_tradethrone_order_angelone(validated_data)
-
-        # Ensure tables exist (dev/test only — production schema is Alembic-owned)
+        # Ensure tables exist (dev/test only - production schema is Alembic-owned).
+        # Runs BEFORE the durable task write so trigger acceptance can persist.
         await ensure_tables_local_dev()
 
-        # Create TradeAuditRecord with explicit database session
+        from app.webhooks.queue.redis_streams import QueuedWebhook
+        from app.engine.agent_intent_triggers import (
+            TriggerIntentError,
+            agent_intent_trigger_bridge,
+        )
+
         try:
-            audit_record = TradeAuditRecord(
-                timestamp=datetime.now(timezone.utc),
-                provider=TRADETHRONE_PROVIDER,
-                symbol=validated_data.get("symbol", ""),
-                action=validated_data.get("action", ""),
-                quantity=int(validated_data.get("quantity", 0)),
-                status=execution_result.get("status", "UNKNOWN"),
-                order_id=execution_result.get("order_id", ""),
-                signal=validated_data.get("signal"),
-                price=validated_data.get("price"),
+            trigger_result = await agent_intent_trigger_bridge.submit_webhook_signal(
+                QueuedWebhook(envelope=envelope)
             )
-            db.add(audit_record)
-            await db.commit()
-        except Exception as e:
-            await db.rollback()
-            logger.error(f"Audit DB save error: {e}")
-            # Continue execution gracefully - don't fail the webhook response
+        except TriggerIntentError as exc:
+            logger.warning(
+                "TradeThrone trigger rejected in local mode: code=%s message=%s",
+                exc.code,
+                exc.message,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Trigger rejected: {exc.code}: {exc.message}",
+            )
 
     response_content = {
         "status": "validated",
@@ -103,8 +101,8 @@ async def _handle_local_mode(
         "data": validated_data,
     }
 
-    if provider.lower() in TRADETHRONE_PROVIDERS and execution_result:
-        response_content["execution"] = execution_result
+    if provider.lower() in TRADETHRONE_PROVIDERS and trigger_result:
+        response_content["trigger"] = trigger_result
 
     return JSONResponse(
         status_code=status.HTTP_200_OK,
@@ -209,64 +207,14 @@ async def receive_webhook(
     6. Enqueue to Redis Streams
     7. Return 202 Accepted
     """
-    # Local testing mode: fast path - accept without Redis/rate-limiting/idempotency
+    # Local testing mode: fast path - accept without Redis/rate-limiting/idempotency.
+    # Still governed and intent-only: delegates to _handle_local_mode, which
+    # validates the TradeThrone signal schema and durably enqueues the trigger as
+    # a trading_agent / execute_trade agent task via the trigger bridge. Broker
+    # dispatch happens exclusively on a later scheduler pass against the durable
+    # intent - never synchronously from an HTTP endpoint.
     if settings.webhook_local_mode:
-        logger.info("Local mode: accepting webhook for provider=%s", provider)
-        
-        # Validate payload against the TradeThrone signal schema (the legacy
-        # provider alias "tradetron" is still accepted on the wire).
-        validated_data = envelope.payload
-        if provider.lower() in TRADETHRONE_PROVIDERS:
-            try:
-                tradethrone_payload = TradeThronePayload(**envelope.payload)
-                validated_data = tradethrone_payload.model_dump()
-            except Exception as e:
-                logger.warning("TradeThrone payload validation failed: %s", e)
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"Schema validation failed: {e}"
-                )
-            
-            # Execute order placement for validated TradeThrone signals (Angel One)
-            execution_result = place_tradethrone_order_angelone(validated_data)
-            
-            # Ensure tables exist (dev/test only — production schema is Alembic-owned)
-            await ensure_tables_local_dev()
-            
-            # Create TradeAuditRecord with explicit database session
-            try:
-                audit_record = TradeAuditRecord(
-                    timestamp=datetime.now(timezone.utc),
-                    provider="tradethrone",
-                    symbol=validated_data.get("symbol", ""),
-                    action=validated_data.get("action", ""),
-                    quantity=int(validated_data.get("quantity", 0)),
-                    status=execution_result.get("status", "UNKNOWN"),
-                    order_id=execution_result.get("order_id", ""),
-                    signal=validated_data.get("signal"),
-                    price=validated_data.get("price"),
-                )
-                db.add(audit_record)
-                await db.commit()
-            except Exception as e:
-                await db.rollback()
-                logger.error(f"Audit DB save error: {e}")
-                # Continue execution gracefully - don't fail the webhook response
-        
-        response_content = {
-            "status": "validated",
-            "provider": provider,
-            "data": validated_data,
-        }
-        
-        # Add execution result for TradeThrone provider
-        if provider.lower() in TRADETHRONE_PROVIDERS:
-            response_content["execution"] = execution_result
-        
-        return JSONResponse(
-            status_code=status.HTTP_200_OK,
-            content=response_content,
-        )
+        return await _handle_local_mode(provider, envelope, db)
 
     start_time = time.perf_counter()
     client_ip = request.client.host if request.client else "unknown"

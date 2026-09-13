@@ -1,265 +1,65 @@
-"""TradeThrone signal handler for processing trading signals from TradeThrone.
+"""TradeThrone signal webhook handler — governed, intent-only.
 
-Supports full signal payload:
-- signal: entry_long, entry_short, exit_long, exit_short, reverse_long, reverse_short, close_all
-- symbol: Trading symbol (e.g., NIFTY24AUG25000CE)
-- action: BUY, SELL, BUY_TO_OPEN, SELL_TO_CLOSE, etc.
-- quantity: Number of lots or contracts
-- price: Limit price (optional)
-- strategy_name: Name of the strategy generating the signal
-- signal_type: Type of signal classification
-- order_type: MARKET, LIMIT, SL, SL-M
-- product_type: INTRADAY, CARRYFORWARD, CO, OCO, MIS, NRML
-- exchange: NSE, BSE, NFO, BFO, MCX, CDS
-- trigger_price: Trigger price for SL/SL-M orders
-- validity: DAY, IOC, GTD
-- tag: Custom tag for tracking
-- auth_token: Authentication token
+External signals arrive via the webhook ingress router and are handled here at
+the durable-acceptance boundary.  This handler NEVER calls a broker adapter,
+an ``OrderManager`` or a ``place_*`` helper directly: the signal is normalized,
+its owner is resolved server-side, and it is enqueued as a durable
+``trading_agent`` / ``execute_trade`` agent task whose trigger key is derived
+from the envelope (stable across re-deliveries).  A later scheduler pass
+(``AgentIntentTriggerBridge.handle_scheduler_event``) turns the task into a
+durable ``TradingIntentRecord`` through ``AgentTradingService`` — the only
+component that may reach the broker.
+
+Fail closed: unsupported execution modes / entry order types, unresolved
+owners and invalid payloads raise :class:`TriggerIntentError` so the worker
+nacks / requeues the signal.  The worker never acknowledges a signal that was
+not durably accepted.
 """
 
 from __future__ import annotations
 
-import uuid
-from datetime import datetime, timezone
-from decimal import Decimal
-
-from app.webhooks.queue.redis_streams import QueuedWebhook
-from app.webhooks.validation.schemas import TradeThronePayload
-from app.engine.order_manager import OrderManager
-from app.compliance.lot_sizes import (
-    validate_quantity,
-    get_lot_size,
-    TransactionCharges,
-    convert_input_to_quantity,
-    resolve_symbol,
-)
-from app.schemas.trading import OrderRequest, Side
-from app.db.audit import save_audit_log
 from app.core.logging import get_logger
-from app.config import settings
+from app.engine.agent_intent_triggers import (
+    TriggerIntentError,
+    agent_intent_trigger_bridge,
+)
+from app.webhooks.queue.redis_streams import QueuedWebhook
 
 logger = get_logger("webhook.handlers.tradethrone")
 
 
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _envelope_ts_sec(envelope) -> int:
-    """Coarse per-second identity for a webhook delivery.
-
-    The deterministic signal idempotency key (P0-2) is derived from the
-    ENVELOPE timestamp — stable for re-deliveries of the same event — rather
-    than the processing wall-clock, so a PEL/XAUTOCLAIM re-delivery of the
-    same signal collapses onto the same durable DB claim and can never
-    double-dispatch.
-    """
-    ts = envelope.timestamp
-    if ts is None:
-        import time
-
-        return int(time.time())
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    return int(ts.timestamp())
-
-
-def _parse_side(action: str) -> Side:
-    """Convert action string to Side enum."""
-    action_upper = action.upper()
-    if action_upper in ("BUY", "BUY_TO_OPEN", "BUY_TO_CLOSE"):
-        return Side.BUY
-    return Side.SELL
-
-
-def _parse_signal_type(signal: str) -> str:
-    """Classify signal for routing."""
-    signal_lower = signal.lower()
-    if signal_lower in ("entry_long", "entry_short"):
-        return "entry"
-    elif signal_lower in ("exit_long", "exit_short"):
-        return "exit"
-    elif signal_lower in ("reverse_long", "reverse_short"):
-        return "reverse"
-    elif signal_lower == "close_all":
-        return "close_all"
-    return "unknown"
-
-
 async def handle_tradethrone_signal(webhook: QueuedWebhook) -> None:
-    """Process TradeThrone signal webhook - place order and save audit log."""
+    """Process a TradeThrone signal webhook (durable acceptance only).
+
+    Never dispatches to a broker: the signal becomes a durable agent task here;
+    the scheduler's governed ``execute_trade`` handler is the only path that
+    can create/execute an intent.
+    """
     envelope = webhook.envelope
-    raw_payload = envelope.payload
-    
-    # Validate and parse payload
     try:
-        payload = TradeThronePayload(**raw_payload)
-    except Exception as e:
-        logger.error("TradeThrone payload validation failed: %s", e)
-        await save_audit_log(
-            provider=envelope.provider,
-            payload=raw_payload,
-            execution={"status": "validation_failed", "error": str(e)},
+        result = await agent_intent_trigger_bridge.submit_webhook_signal(webhook)
+    except TriggerIntentError as exc:
+        logger.error(
+            "TradeThrone signal FAILED CLOSED: provider=%s code=%s message=%s",
+            envelope.provider,
+            exc.code,
+            exc.message,
         )
-        return
-
-    logger.info(
-        "Processing TradeThrone signal: signal=%s symbol=%s action=%s quantity=%d strategy=%s",
-        payload.signal,
-        payload.symbol,
-        payload.action,
-        payload.quantity,
-        payload.strategy_name,
-    )
-
-    # Resolve symbol and validate lot size compliance
-    from app.compliance.lot_sizes import resolve_symbol
-    canonical_symbol, exchange = resolve_symbol(payload.symbol)
-    
-    # Convert lots to quantity if needed (payload.quantity could be lots or qty)
-    # For now, assume payload.quantity is lots for index options, qty for stocks
-    lot_size = get_lot_size(canonical_symbol)
-    is_index = canonical_symbol in {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX"}
-    
-    # Validate quantity against lot size
-    validation = validate_quantity(canonical_symbol, payload.quantity, auto_correct=True)
-    if not validation.is_valid and validation.warning:
-        logger.warning("Quantity auto-corrected: %s", validation.warning)
-    
-    final_quantity = validation.corrected_quantity
-    
-    # Calculate estimated charges for risk management
-    estimated_price = payload.price or 0  # Will be filled from market data if market order
-    is_option = "CE" in canonical_symbol.upper() or "PE" in canonical_symbol.upper()
-    is_future = not is_option and canonical_symbol in {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX"}
-    
-    # Get order manager and risk manager from trading engine
-    from app.main import get_engine
-    engine = get_engine()
-    if engine is None:
-        logger.error("Trading engine not initialized")
-        execution_result = {
-            "status": "error",
-            "error": "Trading engine not initialized",
-            "order_id": None,
-            "symbol": canonical_symbol,
-        }
-        await save_audit_log(
-            provider=envelope.provider,
-            payload=raw_payload,
-            execution=execution_result,
-        )
-        return
-    
-    order_manager = engine._order_manager
-    risk_manager = order_manager.risk_manager
-    
-    # Build order request
-    side = _parse_side(payload.action)
-    
-    order_request = OrderRequest(
-        symbol=canonical_symbol,
-        side=side,
-        quantity=final_quantity,
-        order_type=payload.order_type,
-        price=payload.price,
-        trigger_price=payload.trigger_price,
-        product_type=payload.product_type,
-        validity=payload.validity,
-        tag=payload.tag or f"tradethrone:{payload.strategy_name or 'unknown'}",
-    )
-    
-    # Pre-trade risk check
-    allowed, reason = risk_manager.check(order_request)
-    if not allowed:
-        logger.warning("Risk check failed for TradeThrone signal: %s", reason)
-        execution_result = {
-            "status": "rejected",
-            "reason": reason,
-            "order_id": None,
-            "symbol": canonical_symbol,
-        }
-        await save_audit_log(
-            provider=envelope.provider,
-            payload=raw_payload,
-            execution=execution_result,
-        )
-        return
-    
-    # Estimate charges for logging
-    if estimated_price > 0:
-        charges = TransactionCharges.calculate_charges(
-            symbol=canonical_symbol,
-            side=side.value,
-            quantity=final_quantity,
-            price=estimated_price,
-            product_type=payload.product_type,
-            is_option=is_option,
-            is_future=is_future,
-        )
-        logger.info(
-            "Estimated charges for %s %s x%d @ %.2f: Total ₹%.2f (Brokerage: ₹%.2f, STT: ₹%.2f, GST: ₹%.2f)",
-            side.value, canonical_symbol, final_quantity, estimated_price,
-            charges["total_charges"], charges["brokerage"], charges["stt"], charges["gst"]
-        )
-    
-    # Place order via order manager (which uses broker) -- with a durable DB
-    # claim committed BEFORE dispatch and a CAS-finalize AFTER (P0-2).  The
-    # deterministic tenant-less signal_key is derived from the envelope
-    # timestamp so re-deliveries dedupe at the DB layer.
-    try:
-        execution_result = await order_manager.place_order(
-            order_request,
-            provider=envelope.provider,
-            strategy_name=payload.strategy_name,
-            signal=payload.signal,
-            ts_sec=_envelope_ts_sec(envelope),
-        )
-
-        # Add strategy metadata to execution result
-        if isinstance(execution_result, dict):
-            execution_result["strategy_name"] = payload.strategy_name
-            execution_result["signal_type"] = _parse_signal_type(payload.signal)
-            execution_result["signal"] = payload.signal
-            execution_result["tag"] = payload.tag
-
-        logger.info(
-            "TradeThrone signal processed successfully: order_id=%s status=%s symbol=%s qty=%d",
-            execution_result.get("order_id"),
-            execution_result.get("status"),
-            canonical_symbol,
-            final_quantity,
-        )
-
-    except Exception as e:
-        logger.error("Failed to execute TradeThrone signal: %s", e)
-        execution_result = {
-            "status": "error",
-            "error": str(e),
-            "order_id": None,
-            "symbol": canonical_symbol,
-        }
-        await save_audit_log(
-            provider=envelope.provider,
-            payload=raw_payload,
-            execution=execution_result,
-        )
-        # FAIL CLOSED (P0-2): never acknowledge (XACK-as-success) a signal
-        # that was not durably processed.  Re-raise so the worker nacks /
-        # requeues; the durable DB claim + signal_key dedupe reconcile a
-        # retry without double-dispatch.
+        # Fail closed (P0-2): never XACK-as-success a signal that was not
+        # durably accepted.  Re-raise so the worker nacks / requeues; the
+        # durable trigger key dedupes a retry without double-dispatch.
         raise
 
-    # Save audit log
-    await save_audit_log(
-        provider=envelope.provider,
-        payload=raw_payload,
-        execution=execution_result,
+    logger.info(
+        "TradeThrone signal accepted (no dispatch): provider=%s key=%s task=%s",
+        envelope.provider,
+        result.get("trigger_key"),
+        result.get("agent_task_id"),
     )
 
 
 # Register handler for tradethrone pools
-from app.webhooks.workers.pool import worker_pool, WorkerConfig
+from app.webhooks.workers.pool import worker_pool, WorkerConfig  # noqa: E402
 
 # Critical pool for risk alerts
 worker_pool.register_pool(WorkerConfig(
