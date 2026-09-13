@@ -99,3 +99,29 @@
 | Security | secrets encrypted, headers, CORS lock, secret scan clean | ✅ | REAL | none new | — |
 | Resilience | engine tick containment, readyz (DB+Redis), fail-closed gates | ✅ | REAL | — | — |
 | Observability | Prometheus metrics, monitoring sentinel, structured logs | ✅ | REAL | — | — |
+## 8. Session 1 Addendum — Frontend P4 (GET coalescing + reference cache)
+
+**Commit:** `961e0bfc` `feat(client): shared GET coalescing + opt-in reference-data TTL cache (P4)`
+
+- **Transparent in-flight GET dedup** in `services/apiClient.js` (`fetchWithResilience`): concurrent identical GETs (URL + same Authorization) share ONE network request; each caller receives its own `Response.clone()` so parallel consumers each read the body once. Correctness-neutral — results are never served from a stale cache; a follow-up GET always re-fetches after settling. This collapses React-StrictMode double-effect fetches and multi-widget mount races.
+- **Opt-in short-TTL reference cache** (`cacheTtlMs`): enabled ONLY for static/reference endpoints (`/api/billing/plans` via `useApi(..., { cacheTtlMs: 60_000 })`). Trading-truth endpoints remain uncached (WebSocket/event-driven refresh).
+- **Bounds:** 25 stored responses (insertion-order eviction); in-flight map cleared on settle — neither structure grows with usage. Per-token keys prevent cross-user leakage.
+- **Verification:** vitest `45/45` (5 new tests: concurrent dedup = 1 network call, per-token isolation, TTL hit, TTL expiry re-fetch, non-opt-in trading truth always re-fetches); build clean (2.02s); lint 0 errors (25 pre-existing warnings). `pytest` unaffected (backend untouched).
+
+## 9. Storage Audit (read-only)
+
+- `orders`: indexes `symbol`, `status`, `mode`, `(user_id, created_at)`, unique partial `(user_id, client_order_id)`, unique partial `(signal_key)` — matches all real query patterns (user scoping, idempotency claims, reconciliation by status).
+- `positions`: `(user_id, symbol)`, `status`, `mode`. `broker_accounts`: `(user_id, status)`. `protective_orders`: unique `(position_id, leg)`, `(broker_account_id, status)`, `broker_protective_order_id`.
+- Flood defect is eliminated at the SOURCE (engine throttle); no index changes required.
+
+## 10. Final Repository State (Session 1)
+
+```
+feat/autonomous-os @ 961e0bfc
+ 11097514 feat(agent-runtime): Phase 1 Step 1 DB foundation — 0009_agent_runtime migration, ORM models, idempotent seeds (793/793 verified)
+ 93cc682f fix(engine): throttle persistent strategy-signal dispatch (order-table flood)
+ a671ae4f docs(verify): autonomous OS session 1 report — state matrix, pipeline proof, flood-fix evidence
+ 961e0bfc feat(client): shared GET coalescing + opt-in reference-data TTL cache (P4)
+```
+
+Working tree clean; nothing pushed; no live/paper mode change; no credentials touched. Scratch artifacts (`_ao_*`) git-ignored.
