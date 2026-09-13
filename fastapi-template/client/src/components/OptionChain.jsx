@@ -30,6 +30,14 @@ function OptionChain({ symbol = "NIFTY50" }) {
   const [wsState, setWsState] = useState("connecting"); // connecting | live | polling | error
   const wsRef = useRef(null);
   const pollRef = useRef(null);
+  // Latest expiry mirrored into a ref so `loadRest` stays referentially stable
+  // across expiry changes — otherwise loading-resolved expiry would re-create
+  // loadRest, re-run the snapshot effect, and churn the WebSocket (2 sockets +
+  // 2 REST calls per dashboard load instead of 1+1).
+  const expiryRef = useRef(expiry);
+  useEffect(() => {
+    expiryRef.current = expiry;
+  }, [expiry]);
 
   /** Merge a freshly-fetched chain snapshot with per-strike LED flashes derived
    * purely from the PREVIOUS snapshot (state updater closure — no ref reads in
@@ -55,16 +63,17 @@ function OptionChain({ symbol = "NIFTY50" }) {
   const loadRest = useCallback(async () => {
     try {
       const q = new URLSearchParams({ symbol: activeSymbol, levels: "7" });
-      if (expiry) q.set("expiry", expiry);
+      const currentExpiry = expiryRef.current;
+      if (currentExpiry) q.set("expiry", currentExpiry);
       const res = await fetch(`${API_BASE}/api/optionchain?${q}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       applyChain(data);
-      if (!expiry && data.expiry) setExpiry(data.expiry);
+      if (!expiryRef.current && data.expiry) setExpiry(data.expiry);
     } finally {
       setLoading(false);
     }
-  }, [activeSymbol, expiry, applyChain]);
+  }, [activeSymbol, applyChain]);
 
   // First paint + expiry/symbol switches (REST snapshot)
   useEffect(() => {
@@ -72,8 +81,13 @@ function OptionChain({ symbol = "NIFTY50" }) {
     loadRest();
   }, [loadRest]);
 
-  // Live stream: WebSocket w/ auto-reconnect, falls back to 2s polling
+  // Live stream: WebSocket w/ auto-reconnect, falls back to 2s polling.
+  // GATE: do not open the socket until the first REST snapshot has resolved —
+  // that snapshot also settles the chain's `expiry`. Connecting before it
+  // produced a throwaway socket that was immediately re-opened with
+  // `?expiry=...` (2 option-chain connections per dashboard load instead of 1).
   useEffect(() => {
+    if (loading) return undefined;
     let disposed = false;
     let retry = 0;
     let wsTimer;
@@ -115,7 +129,7 @@ function OptionChain({ symbol = "NIFTY50" }) {
       stopPolling();
       if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(); }
     };
-  }, [activeSymbol, expiry, applyChain]);
+  }, [activeSymbol, expiry, applyChain, loading]);
 
   const rows = chain?.rows || [];
   const maxOi = Math.max(1, ...rows.map((r) => Math.max(r.CE.oi, r.PE.oi)));
