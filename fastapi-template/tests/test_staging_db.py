@@ -53,6 +53,7 @@ class TestAlembicMigration:
             "agents",               # migration 0009_agent_runtime (Phase 1 Step 1)
             "agent_tasks",          # migration 0009_agent_runtime (Phase 1 Step 1)
             "agent_runtime_config", # migration 0009_agent_runtime (Phase 1 Step 1)
+            "trading_intents",      # migration 0010_agent_trading_intents (Phase 1 Step 3)
         }
         tables = set(Base.metadata.tables.keys())
         missing = expected - tables

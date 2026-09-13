@@ -322,6 +322,45 @@ class Settings(BaseSettings):
     # Background scheduler interval for per-account broker-state sync.
     broker_state_sync_interval: float = 60.0
 
+    # ── Phase 1 Step 2: autonomous-agent runtime ───────────────────────
+    # All bounds below are enforced fail-closed by app.engine.agent_runtime:
+    # an out-of-range value from the environment can never widen an agent's
+    # authority -- it is clamped/validated before any task executes.
+    # Scheduler cadence for draining the durable agent_tasks queue.
+    agent_runtime_interval: float = 1.0
+    # Max tasks claimed + executed per scheduler pass (bounded work per cycle).
+    agent_runtime_batch_size: int = 5
+    # Default / hard-bounded per-task execution timeout (seconds).
+    agent_task_default_timeout_seconds: float = 30.0
+    agent_task_min_timeout_seconds: float = 1.0
+    agent_task_max_timeout_seconds: float = 3600.0
+    # Default attempt budget for a dispatched task, and the absolute ceiling an
+    # API caller may request (an unbounded retry loop is never allowed).
+    agent_task_default_max_attempts: int = 2
+    agent_task_max_attempts_limit: int = 10
+    # Exponential retry backoff base and cap (seconds).
+    agent_retry_backoff_seconds: float = 5.0
+    agent_retry_backoff_max_seconds: float = 300.0
+    # How long a human approval stays valid before the task must be re-approved.
+    agent_approval_window_seconds: float = 900.0
+    # A RUNNING task whose heartbeat is older than this is treated as a crashed
+    # worker and is recovered (requeued while attempts remain, else FAILED).
+    agent_stale_running_seconds: float = 300.0
+    # Max rows read per bounded scan/list operation (never an unbounded read).
+    agent_max_rows_per_scan: int = 200
+
+    # ── Phase 1 Step 3: governed agent trading intents ─────────────────────
+    # All bounds below are enforced fail-closed by app.engine.agent_intents:
+    # an agent intent can never exceed these operator caps.
+    # Max shares/units a single agent intent may request in one order.
+    agent_max_intent_quantity: int = 1000
+    # A NEEDS_APPROVAL intent whose approval is older than this many seconds
+    # expires and can no longer execute (re-approval required).
+    agent_approval_max_hold_seconds: int = 900
+    # Broker-state snapshot freshness gate for LIVE intent dispatch: a snapshot
+    # older than this (seconds) is treated as stale and blocks LIVE execution.
+    broker_snapshot_max_age_seconds: float = 300.0
+
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",
         env_file_encoding="utf-8",

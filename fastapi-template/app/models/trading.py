@@ -117,6 +117,15 @@ class OrderRecord(Base):
         nullable=True,
         doc="Position row created for this order (idempotent-replay linkage).",
     )
+    # Phase 1 Step 3: agent trading-intent traceability chain.  Nullable, no FK
+    # (trading_intents.order_id is the owning side, which avoids a circular
+    # foreign key between the two durable records).
+    agent_intent_id: Mapped[str | None] = mapped_column(
+        String(36),
+        nullable=True,
+        index=True,
+        doc="TradingIntentRecord.id that produced this order (autonomous pipeline).",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow
     )

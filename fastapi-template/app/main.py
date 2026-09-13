@@ -139,6 +139,18 @@ async def lifespan(application: FastAPI):  # noqa: ARG001
 
     protection_scheduler.start()
 
+    # 10. Start the Phase 1 Step 2 autonomous-agent runtime: idempotently
+    #     provision the code-declared agent registry, then begin draining the
+    #     durable `agent_tasks` queue on the configured interval.  The scheduler
+    #     loop is fail-closed (registry + claim gates) and survives pass errors.
+    from app.engine.agent_runtime import (
+        agent_runtime_scheduler_default,
+        ensure_agent_registry,
+    )
+
+    await ensure_agent_registry()
+    agent_runtime_scheduler_default().start()
+
     logger.info(
         "%s ready — broker=%s, symbols=%s",
         settings.app_name,
@@ -154,6 +166,9 @@ async def lifespan(application: FastAPI):  # noqa: ARG001
     broker_order_reconciliation_scheduler.stop()
     broker_state_sync_scheduler.stop()
     protection_scheduler.stop()
+    from app.engine.agent_runtime import agent_runtime_scheduler_default
+
+    agent_runtime_scheduler_default().stop()
     if _engine:
         await _engine.stop()
     if _simulator:
@@ -313,10 +328,12 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 
 # Mount routers
-from app.api import admin, alerts, auth, backtest, billing, brokers, broker_cron, compliance, copy_trading, dashboard, market_data, payouts, quant_lab, reports, risk_guard, strategies, subscriptions, trades, user, visual_strategies, watchlist, websocket  # noqa: E402
+from app.api import admin, agent_intents, agents, alerts, auth, backtest, billing, brokers, broker_cron, compliance, copy_trading, dashboard, market_data, payouts, quant_lab, reports, risk_guard, strategies, subscriptions, trades, user, visual_strategies, watchlist, websocket  # noqa: E402
 
 app.include_router(auth.router)
 app.include_router(admin.router)
+app.include_router(agents.router)
+app.include_router(agent_intents.router)
 app.include_router(billing.router)
 app.include_router(subscriptions.router)
 app.include_router(alerts.router)

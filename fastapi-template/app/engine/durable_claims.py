@@ -193,9 +193,13 @@ async def finalize_order_claim(
             # Already finalized by a concurrent worker or broker postback.
             await session.rollback()
             finalized = await session.get(OrderRecord, claim_id)
+            # OrderRecord has no ``updated_at`` column (trading.py); fall back
+            # to the row's creation timestamp when the column is absent so a
+            # concurrent-finalize replay can never raise AttributeError.
+            final_ts = getattr(finalized, "updated_at", None)
             exec_time = (
-                finalized.updated_at.isoformat()
-                if finalized and finalized.updated_at
+                final_ts.isoformat()
+                if finalized and final_ts
                 else datetime.now(timezone.utc).isoformat()
             )
             return {
