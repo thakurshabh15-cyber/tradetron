@@ -50,6 +50,9 @@ class TestAlembicMigration:
             "user_setup_tasks",     # migration 0006_user_setup_tasks
             "broker_state",         # migration 0007_broker_state (Phase 15B)
             "protective_orders",    # migration 0008_protective_orders (Phase 15C)
+            "agents",               # migration 0009_agent_runtime (Phase 1 Step 1)
+            "agent_tasks",          # migration 0009_agent_runtime (Phase 1 Step 1)
+            "agent_runtime_config", # migration 0009_agent_runtime (Phase 1 Step 1)
         }
         tables = set(Base.metadata.tables.keys())
         missing = expected - tables

@@ -153,23 +153,25 @@ def test_legacy_schema_upgraded_by_run_migrations(tmp_path):
     finally:
         _restore_env(original)
 
-    # Post-state: columns present, indexes present, version = 0008
+    # Post-state: columns present, indexes present, version = 0009
     assert "client_order_id" in _col_names(db, "orders")
     assert "position_id" in _col_names(db, "orders")
     assert "signal_key" in _col_names(db, "orders")
     assert "ux_orders_user_client_order_id" in _indexes(db, "orders")
     assert "ux_orders_signal_key" in _indexes(db, "orders")
-    assert _version(db) == "0008_protective_orders"
+    assert _version(db) == "0009_agent_runtime"
 
     # Behavioral D: create_all did NOT run — only migration-defined tables
-    # (0006 adds user_setup_tasks; 0007 adds broker_state; earlier revisions
-    # only alter existing tables).
+    # (0006 adds user_setup_tasks; 0007 adds broker_state; 0008 adds
+    # protective_orders; 0009 adds the three agent tables).
     tables = _tables(db)
     assert tables == {
         "orders", "user_setup_tasks", "broker_state", "protective_orders",
+        "agents", "agent_tasks", "agent_runtime_config",
         "alembic_version",
     }, (
-        f"Unexpected tables: {tables - {'orders', 'user_setup_tasks', 'broker_state', 'protective_orders', 'alembic_version'}}"
+        "Unexpected tables: "
+        f"{tables - {'orders', 'user_setup_tasks', 'broker_state', 'protective_orders', 'agents', 'agent_tasks', 'agent_runtime_config', 'alembic_version'}}"
     )
 
 
@@ -187,12 +189,12 @@ def test_second_upgrade_head_is_idempotent(tmp_path):
     original = _patch_env(_set_db_env(db))
     try:
         run_migrations()
-        assert _version(db) == "0008_protective_orders"
+        assert _version(db) == "0009_agent_runtime"
         run_migrations()  # second run: no-op
     finally:
         _restore_env(original)
 
-    assert _version(db) == "0008_protective_orders"
+    assert _version(db) == "0009_agent_runtime"
     assert "client_order_id" in _col_names(db, "orders")
     assert "signal_key" in _col_names(db, "orders")
     assert "ux_orders_signal_key" in _indexes(db, "orders")
