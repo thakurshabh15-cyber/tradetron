@@ -36,6 +36,7 @@ const PortfolioPage = lazy(() => import("./pages/Portfolio"));
 const ExecutionPage = lazy(() => import("./pages/Execution"));
 const KYC = lazy(() => import("./pages/KYC"));
 const TradeJournal = lazy(() => import("./pages/TradeJournal"));
+const AgentConsole = lazy(() => import("./pages/AgentConsole"));
 
 import { Power, Link as LinkIcon, AlertCircle, FileCheck, Radio, Zap } from "lucide-react";
 
@@ -363,6 +364,7 @@ function AppShell() {
                 <Route path="/risk-center" element={<ProtectedRoute><ExecutionPage /></ProtectedRoute>} />
                 <Route path="/kyc" element={<ProtectedRoute><KYC /></ProtectedRoute>} />
                 <Route path="/trade-journal" element={<ProtectedRoute><TradeJournal /></ProtectedRoute>} />
+                  <Route path="/agent-console" element={<ProtectedRoute><AgentConsole /></ProtectedRoute>} />
                 <Route path="/reality-mode" element={<BacktestLab />} />
                 <Route path="*" element={
                   <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">

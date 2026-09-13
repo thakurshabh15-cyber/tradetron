@@ -26,6 +26,7 @@ import {
   BadgeCheck,
   Globe2,
   Crown,
+  Bot,
 } from "lucide-react";
 import AuthModal from "./AuthModal";
 import { useAuthStore } from "../stores/useAuthStore";
@@ -59,6 +60,9 @@ const NAV_GROUPS = [
   { header: "ANALYZE", items: [
     { to: "/history", icon: History, label: "Trade History" },
     { to: "/trade-journal", icon: FileText, label: "AI Trade Journal" },
+  ] },
+  { header: "AUTOMATION", items: [
+    { to: "/agent-console", icon: Bot, label: "Agent Console" },
   ] },
   { header: "SYSTEM", items: [
     { to: "/pricing", icon: CreditCard, label: "Pricing & Plans" },
