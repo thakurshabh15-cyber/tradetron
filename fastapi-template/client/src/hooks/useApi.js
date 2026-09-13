@@ -10,7 +10,7 @@ import { authFetch, publicFetch } from "../services/apiClient";
  * @param {boolean} options.public - Use unauthenticated fetch (default: false)
  * @returns {{ data, loading, error, refetch, post, patch, del }}
  */
-export function useApi(path, { immediate = true, public: isPublic = false } = {}) {
+export function useApi(path, { immediate = true, public: isPublic = false, cacheTtlMs = 0 } = {}) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(immediate);
   const [error, setError] = useState(null);
@@ -21,7 +21,12 @@ export function useApi(path, { immediate = true, public: isPublic = false } = {}
     setLoading(true);
     setError(null);
     try {
-      const res = await fetcher(path);
+      // cacheTtlMs is carried ONLY for GET fetches: static/reference endpoints
+      // may opt into the shared short-TTL cache; trading-truth endpoints keep
+      // cacheTtlMs=0 (correctness wins over request count).  The apiClient
+      // additionally coalesces concurrent identical GETs transparently.
+      const fetchOpts = cacheTtlMs > 0 ? { cacheTtlMs } : undefined;
+      const res = await fetcher(path, fetchOpts);
       // publicFetch returns null on 401/403 — treat as "no data, not an error"
       if (res === null) {
         setData(null);
@@ -37,7 +42,7 @@ export function useApi(path, { immediate = true, public: isPublic = false } = {}
     } finally {
       setLoading(false);
     }
-  }, [path, isPublic, fetcher]);
+  }, [path, isPublic, fetcher, cacheTtlMs]);
 
   useEffect(() => {
     if (immediate) fetchData();

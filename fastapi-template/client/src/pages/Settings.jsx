@@ -29,7 +29,9 @@ export default function Settings() {
   const { data: profileData, refetch: refetchProfile } = useApi("/api/user/profile");
   const { data: notifData, refetch: refetchNotifs } = useApi("/api/user/notifications");
   const { data: subscriptionData, refetch: refetchSub } = useApi("/api/billing/subscription");
-  const { data: plansData } = useApi("/api/billing/plans");
+  // Plans are static reference data — safe to serve from the shared short-TTL
+  // cache (re-fetch at most once per minute per user).
+  const { data: plansData } = useApi("/api/billing/plans", { cacheTtlMs: 60_000 });
   const { data: invoicesData, refetch: refetchInvoices } = useApi("/api/billing/invoices");
 
   // Profile Form State

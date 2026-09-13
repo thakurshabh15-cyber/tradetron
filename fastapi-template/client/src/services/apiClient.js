@@ -23,18 +23,50 @@ function shouldRetry(status) {
   return status === 408 || status === 429 || status >= 500;
 }
 
-/**
- * fetch with a hard timeout plus bounded exponential-backoff retries.
- *
- * Retries happen ONLY for idempotent GET requests and only on network
- * failures, timeouts, or transient server statuses (408/429/5xx); Jitter is
- * added so concurrent refreshes don't stampede the backend.
- */
-async function fetchWithResilience(url, options = {}) {
-  const method = (options.method || "GET").toUpperCase();
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const maxRetries = method === "GET" ? (options.maxRetries ?? MAX_RETRIES) : 0;
+// ── P4: shared GET coalescing + opt-in reference-data cache ────────────────
+// Correctness contract:
+//  * In-flight GET dedup is ON by default and is correctness-neutral: it only
+//    collapses CONCURRENT identical requests (same URL + same Authorization)
+//    into one network call.  Results are never served from a stale cache —
+//    a follow-up GET always hits the network again after the shared request
+//    settles.
+//  * The short-TTL cache (cacheTtlMs > 0) is opt-in PER CALL SITE and is
+//    intended ONLY for static/reference data (plans, marketplace metadata).
+//    Trading-truth endpoints must never enable it (correctness > request
+//    count) — they refresh via WebSocket/event-driven refetches instead.
+// Bounds: at most _CACHE_MAX_ENTRIES stored responses (insertion-order
+// eviction); the in-flight map is always cleared when the shared request
+// settles, so neither structure can grow with usage.
+const _CACHE_MAX_ENTRIES = 25;
+const _inflight = new Map(); // key -> Promise<Response> (raw fetch)
+const _cache = new Map(); // key -> { ts, res }  (Response clones)
 
+function _dedupeKey(url, options) {
+  const auth = (options.headers && options.headers.Authorization) || "";
+  return `${url}|${auth}`;
+}
+
+function _saveToCache(key, entry) {
+  _cache.set(key, entry);
+  if (_cache.size > _CACHE_MAX_ENTRIES) {
+    const oldest = _cache.keys().next().value;
+    if (oldest !== undefined) _cache.delete(oldest);
+  }
+}
+
+/**
+ * TEST-ONLY: clears shared coalescing/cache state between tests.
+ * Never called by application code.
+ */
+export function __resetApiClientCoalescing() {
+  _inflight.clear();
+  _cache.clear();
+}
+
+/**
+ * Real network loop behind fetchWithResilience (retries + timeout).
+ */
+async function runFetchLoop(url, options, method, timeoutMs, maxRetries) {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -58,6 +90,61 @@ async function fetchWithResilience(url, options = {}) {
     return res;
   }
   throw new Error("unreachable");
+}
+
+/**
+ * fetch with a hard timeout plus bounded exponential-backoff retries.
+ *
+ * Retries happen ONLY for idempotent GET requests and only on network
+ * failures, timeouts, or transient server statuses (408/429/5xx); Jitter is
+ * added so concurrent refreshes don't stampede the backend.
+ *
+ * GETs additionally share a single in-flight request when the exact same
+ * URL+Authorization is already being fetched, and honour the opt-in
+ * `cacheTtlMs` reference-data cache (see header note above).  Every caller
+ * receives its own Response clone, so parallel consumers can each read the
+ * body exactly once.
+ */
+async function fetchWithResilience(url, options = {}) {
+  const method = (options.method || "GET").toUpperCase();
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const maxRetries = method === "GET" ? (options.maxRetries ?? MAX_RETRIES) : 0;
+
+  if (method !== "GET") {
+    return runFetchLoop(url, options, method, timeoutMs, maxRetries);
+  }
+
+  const key = _dedupeKey(url, options);
+  const ttlMs = options.cacheTtlMs || 0;
+
+  // 1. Opt-in short-TTL cache (static/reference endpoints only).
+  if (ttlMs > 0) {
+    const hit = _cache.get(key);
+    if (hit && Date.now() - hit.ts < ttlMs) {
+      return hit.res.clone();
+    }
+    if (hit) _cache.delete(key); // expired — replace on next fetch
+  }
+
+  // 2. Coalesce a concurrent identical GET into the shared in-flight request.
+  const shared = _inflight.get(key);
+  if (shared) {
+    return shared.then((res) => res.clone());
+  }
+
+  const raw = (async () => {
+    const res = await runFetchLoop(url, options, method, timeoutMs, maxRetries);
+    if (ttlMs > 0) {
+      _saveToCache(key, { ts: Date.now(), res: res.clone() });
+    }
+    return res;
+  })();
+  _inflight.set(key, raw);
+  raw.then(
+    () => _inflight.delete(key),
+    () => _inflight.delete(key)
+  );
+  return raw.then((res) => res.clone());
 }
 
 let isRefreshing = false;
