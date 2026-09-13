@@ -26,6 +26,8 @@ from app.config import settings
 from app.db.session import Base, normalize_database_url
 
 # Register every ORM model so autogenerate sees the full schema.
+# NOTE: app/models/__init__.py additionally registers agent / agent_intent /
+# agent_control — the explicit listing keeps the full table set visible here.
 from app.models import (  # noqa: F401  (side-effect: populates Base.metadata)
     audit,
     billing,
@@ -39,6 +41,9 @@ from app.models import (  # noqa: F401  (side-effect: populates Base.metadata)
     user,
     visual_strategy,
     watchlist,
+    agent,
+    agent_intent,
+    agent_control,
 )
 
 # this is the Alembic Config object, which provides

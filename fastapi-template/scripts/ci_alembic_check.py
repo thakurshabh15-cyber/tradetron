@@ -36,7 +36,7 @@ ROOT = Path(__file__).resolve().parent.parent
 ORM_MODULES = (
     "audit", "billing", "broker_account", "broker_state", "copy_trading",
     "marketplace", "notification", "protective_order", "trading", "user", "visual_strategy",
-    "watchlist",
+    "watchlist", "agent", "agent_intent", "agent_control",
 )
 
 CREATE_ALL_SNIPPET = (

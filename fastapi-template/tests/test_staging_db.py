@@ -29,6 +29,7 @@ from app.models import (  # noqa: F401
     user,
     visual_strategy,
     watchlist,
+    agent_control,
 )
 
 
@@ -54,6 +55,8 @@ class TestAlembicMigration:
             "agent_tasks",          # migration 0009_agent_runtime (Phase 1 Step 1)
             "agent_runtime_config", # migration 0009_agent_runtime (Phase 1 Step 1)
             "trading_intents",      # migration 0010_agent_trading_intents (Phase 1 Step 3)
+            "agent_configs",        # migration 0011_agent_control (Phase 1 Step 4)
+            "agent_decisions",      # migration 0011_agent_control (Phase 1 Step 4)
         }
         tables = set(Base.metadata.tables.keys())
         missing = expected - tables

@@ -349,6 +349,13 @@ class Settings(BaseSettings):
     # Max rows read per bounded scan/list operation (never an unbounded read).
     agent_max_rows_per_scan: int = 200
 
+    # ── Phase 1 Step 4: autonomous-agent control plane ─────────────────────
+    # Cadence (seconds) of the bounded evaluation loop that turns RUNNING agent
+    # configs into deterministic decisions.  Also defines the idempotency slot
+    # width (a slot key ``cfg:{id}:eval:{slot}`` dedupes re-deliveries), so a
+    # crashed/restarted loop can never enqueue duplicate evaluations.
+    agent_evaluation_interval: float = 15.0
+
     # ── Phase 1 Step 3: governed agent trading intents ─────────────────────
     # All bounds below are enforced fail-closed by app.engine.agent_intents:
     # an agent intent can never exceed these operator caps.

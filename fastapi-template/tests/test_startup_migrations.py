@@ -159,20 +159,21 @@ def test_legacy_schema_upgraded_by_run_migrations(tmp_path):
     assert "signal_key" in _col_names(db, "orders")
     assert "ux_orders_user_client_order_id" in _indexes(db, "orders")
     assert "ux_orders_signal_key" in _indexes(db, "orders")
-    assert _version(db) == "0010_agent_trading_intents"
+    assert _version(db) == "0011_agent_control"
 
     # Behavioral D: create_all did NOT run — only migration-defined tables
     # (0006 adds user_setup_tasks; 0007 adds broker_state; 0008 adds
     # protective_orders; 0009 adds the three agent tables; 0010 adds
-    # trading_intents).
+    # trading_intents; 0011 adds agent_configs + agent_decisions).
     tables = _tables(db)
     assert tables == {
         "orders", "user_setup_tasks", "broker_state", "protective_orders",
         "agents", "agent_tasks", "agent_runtime_config", "trading_intents",
+        "agent_configs", "agent_decisions",
         "alembic_version",
     }, (
         "Unexpected tables: "
-        f"{tables - {'orders', 'user_setup_tasks', 'broker_state', 'protective_orders', 'agents', 'agent_tasks', 'agent_runtime_config', 'trading_intents', 'alembic_version'}}"
+        f"{tables - {'orders', 'user_setup_tasks', 'broker_state', 'protective_orders', 'agents', 'agent_tasks', 'agent_runtime_config', 'trading_intents', 'agent_configs', 'agent_decisions', 'alembic_version'}}"
     )
 
 
@@ -190,12 +191,12 @@ def test_second_upgrade_head_is_idempotent(tmp_path):
     original = _patch_env(_set_db_env(db))
     try:
         run_migrations()
-        assert _version(db) == "0010_agent_trading_intents"
+        assert _version(db) == "0011_agent_control"
         run_migrations()  # second run: no-op
     finally:
         _restore_env(original)
 
-    assert _version(db) == "0010_agent_trading_intents"
+    assert _version(db) == "0011_agent_control"
     assert "client_order_id" in _col_names(db, "orders")
     assert "signal_key" in _col_names(db, "orders")
     assert "ux_orders_signal_key" in _indexes(db, "orders")
