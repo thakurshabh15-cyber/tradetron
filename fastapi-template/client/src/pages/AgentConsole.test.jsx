@@ -19,7 +19,7 @@ import { ToastProvider } from "../components/Toast";
  * first-paint path.
  */
 
-const { mocks } = vi.hoisted(() => ({ mocks: { data: null } }));
+const { mocks } = vi.hoisted(() => ({ mocks: { data: null, wsConnected: false } }));
 
 vi.mock("../hooks/useApi", () => ({
   useApi: () => ({
@@ -27,6 +27,17 @@ vi.mock("../hooks/useApi", () => ({
     loading: false,
     error: null,
     refetch: vi.fn(),
+  }),
+}));
+
+// The live-sync subscription is mocked so the SSR tests stay deterministic:
+// effects never run under renderToStaticMarkup, but the header connection
+// indicator derives from useWebSocket's `isConnected` and stays assertable.
+vi.mock("../hooks/useWebSocket", () => ({
+  useWebSocket: () => ({
+    isConnected: mocks.wsConnected,
+    lastMessage: null,
+    send: vi.fn(),
   }),
 }));
 
@@ -204,5 +215,18 @@ describe("AgentConsole", () => {
     expect(html).toContain("No tasks yet");
     expect(html).toContain("No intents yet.");
     expect(html).toContain("No open positions.");
+  });
+
+  it("shows a compact honest WebSocket connection indicator", () => {
+    mocks.wsConnected = false;
+    const offline = renderConsole(baseBundle());
+    expect(offline).toContain("RECONNECTING…");
+
+    mocks.wsConnected = true;
+    const live = renderConsole(baseBundle());
+    expect(live).toContain("LIVE · WS CONNECTED");
+    expect(live).not.toContain("RECONNECTING…");
+
+    mocks.wsConnected = false;
   });
 });

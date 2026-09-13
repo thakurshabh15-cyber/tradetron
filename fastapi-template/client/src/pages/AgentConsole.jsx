@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
   Play,
@@ -22,6 +22,8 @@ import { useApi } from "../hooks/useApi";
 import { authFetch } from "../services/apiClient";
 import { useToast } from "../components/Toast";
 import StatusBadge from "../components/StatusBadge";
+import { useWebSocket } from "../hooks/useWebSocket";
+import { createLiveRefresher, isConsoleRelevantEvent } from "./consoleLiveSync";
 
 /**
  * Agent Console — the CONTROL PLANE for the autonomous trading agent.
@@ -30,6 +32,14 @@ import StatusBadge from "../components/StatusBadge";
  * the ownership/LIVE/cas gates can never be bypassed by this page. The page is
  * a faithful rendering of the server snapshot — nothing is fabricated; if no
  * agent config exists yet the page shows the "create config" control.
+ *
+ * REAL-TIME SYNC: a single tenant-scoped `/ws/trades` subscription drives
+ * reconciliation. Every console-relevant event (fills, closes, rejections,
+ * trading halts, config/lifecycle/approval/decision broadcasts) already lands
+ * on that channel; events are NEVER rendered as UI state — they only debounce
+ * into a refetch of the authoritative `/api/agent/console` snapshot. While the
+ * socket is live the page never polls; the 10s watchdog is retained ONLY as an
+ * offline fallback while RUNNING with the socket disconnected/reconnecting.
  */
 
 const AUTONOMY_LABELS = {
@@ -88,6 +98,38 @@ function SectionCard({ icon: Icon, title, subtitle, children }) {
 export default function AgentConsole() {
   const toast = useToast();
   const { data, loading, error, refetch } = useApi("/api/agent/console");
+
+  // ── live sync (single tenant-scoped /ws/trades subscription) ─────────────
+  // Every console-relevant event (order_executed, trade_closed, order_rejected,
+  // USER_TRADING_HALT, agent_configured, agent_state_changed, agent_approval,
+  // agent_decision) already broadcasts to the "trades" channel — no new feed.
+  // Events NEVER become UI state: they only debounce into a refetch of the
+  // authoritative snapshot below, so the page always renders server truth.
+  const liveRefresher = useRef(null);
+  // Create the refresher in an effect — refs are never read or written during
+  // render; the effect re-creates only if a future refetch identity ever
+  // changes, and its cleanup cancels a pending debounce timer (no leak on
+  // unmount or pre-emption).
+  useEffect(() => {
+    const refresher = createLiveRefresher({
+      delayMs: 500, // a burst of events collapses into exactly one refetch
+      onRefresh: () => refetch(),
+    });
+    liveRefresher.current = refresher;
+    return () => refresher.cancel();
+  }, [refetch]);
+  // Stable handler (module-level predicate + stable ref) — never re-opens the
+  // socket and costs nothing per render. Ref is read only when a message
+  // arrives (outside render).
+  const handleLiveEvent = useCallback((payload) => {
+    // Fail-open: allowlisted and unknown object events reconcile; only
+    // malformed/non-object payloads are ignored.
+    if (isConsoleRelevantEvent(payload)) liveRefresher.current?.notify();
+  }, []);
+  const { isConnected: wsConnected } = useWebSocket("/ws/trades", {
+    onMessage: handleLiveEvent,
+  });
+
   const [busyAction, setBusyAction] = useState(null);
   const [formDirty, setFormDirty] = useState(false);
   const [createMode, setCreateMode] = useState(false);
@@ -102,6 +144,7 @@ export default function AgentConsole() {
   const [name, setName] = useState(config?.name || "");
   const [symbolsText, setSymbolsText] = useState((config?.symbols || []).join(", "));
   const [executionMode, setExecutionMode] = useState(config?.execution_mode || "PAPER");
+
   const [autonomyLevel, setAutonomyLevel] = useState(config?.autonomy_level ?? 0);
   const [approvalJson, setApprovalJson] = useState(
     JSON.stringify(config?.approval_policy || {}, null, 2),
@@ -110,6 +153,9 @@ export default function AgentConsole() {
     JSON.stringify(config?.risk_policy || {}, null, 2),
   );
 
+  // live-sync guard: a snapshot arrival (initial fetch, manual action refetch
+  // OR WebSocket-driven refetch) must NEVER overwrite an operator's unsaved
+  // edits — formDirty is set on every keystroke/select change.
   useEffect(() => {
     if (!config || formDirty) return;
     setName(config.name || "");
@@ -130,14 +176,26 @@ export default function AgentConsole() {
   const canStop = ["RUNNING", "PAUSED", "IDLE", "FAILED"].includes(config?.status);
   const isRunning = config?.status === "RUNNING";
 
+  // Reconnect reconciliation: the instant the socket (re)opens, re-read the
+  // server snapshot once so any broadcast missed during the outage is never
+  // stuck on screen. wsConnected starts false on mount, so this fires ONLY on
+  // a real disconnected→connected transition — never on the initial fetch.
   useEffect(() => {
-    // Live-refresh knob: re-read the server snapshot while the loop is RUNNING
-    // so the ledger stays near-real-time without websockets. refetch is
-    // render-stable (useCallback over a constant path) so this does not churn.
-    if (!isRunning) return undefined;
+    if (wsConnected) refetch();
+  }, [wsConnected, refetch]);
+
+  // Offline watchdog ONLY: while RUNNING with the WebSocket disconnected or
+  // reconnecting, keep the 10s poll as the fallback. While the socket is live
+  // the console is event-driven — no blind polling at all.
+  useEffect(() => {
+    if (!isRunning || wsConnected) return undefined;
     const t = setInterval(() => refetch(), 10_000);
     return () => clearInterval(t);
-  }, [isRunning, refetch]);
+  }, [isRunning, wsConnected, refetch]);
+
+  // Timers must never survive unmount (the refresher's cleanup effect above
+  // cancels the debounce timer; the watchdog clears its interval on re-run).
+  // No separate unmount effect needed — both are covered by their own cleanups.
 
 const runLifecycle = async (action) => {
     setBusyAction(action);
@@ -295,11 +353,23 @@ return (
             </p>
           </div>
         </div>
-        {config && (
-          <span className={`px-3 py-1 text-[11px] font-bold rounded-full ${STATUS_COLORS[config.status] || "bg-slate-500/20 text-slate-300"}`}>
-            {config.status}
+        <div className="flex items-center gap-2">
+          <span
+            className={`inline-flex items-center gap-1.5 px-3 py-1 text-[11px] font-bold rounded-full border ${
+              wsConnected
+                ? "border-cyan-500/20 bg-cyan-500/10 text-cyan-300"
+                : "border-amber-500/20 bg-amber-500/10 text-amber-300"
+            }`}
+          >
+            <span className={`h-1.5 w-1.5 rounded-full ${wsConnected ? "bg-cyan-400 animate-pulse" : "bg-amber-400"}`} />
+            {wsConnected ? "LIVE · WS CONNECTED" : "RECONNECTING…"}
           </span>
-        )}
+          {config && (
+            <span className={`px-3 py-1 text-[11px] font-bold rounded-full ${STATUS_COLORS[config.status] || "bg-slate-500/20 text-slate-300"}`}>
+              {config.status}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* ── Autonomy gate strip (read-only truth) ───────────────────────── */}
