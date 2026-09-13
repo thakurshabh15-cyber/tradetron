@@ -38,7 +38,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.config import settings
 from app.core.logging import get_logger
@@ -83,6 +83,36 @@ ERR_EVALUATION_FAILED = "EVALUATION_FAILED"
 
 #: Bound on how many decision rows the link-back sweep touches per pass.
 _LINK_BACK_BATCH = 50
+
+# ── Shared rolling-indicator state for the evaluation loop (bounded) ───────
+# The TradingEngine keeps ONE persistent StrategyEvaluator for its whole
+# lifetime so SMA/EMA/RSI/MACD/ATR/BOLLINGER and cross_above/cross_below
+# conditions see genuine price history.  The agent loop mirrors exactly that:
+# one shared, bounded evaluator (per-symbol deques capped at 1000 points)
+# namespaced per strategy, so an indicator condition keeps its rolling history
+# across slots instead of resetting to a single tick on every evaluation.
+_SHARED_EVALUATOR: Optional[Any] = None
+
+
+def get_shared_evaluator() -> Any:
+    """Return the process-wide :class:`StrategyEvaluator` (lazy, bounded)."""
+    global _SHARED_EVALUATOR
+    if _SHARED_EVALUATOR is None:
+        from app.engine.strategy_evaluator import StrategyEvaluator
+
+        _SHARED_EVALUATOR = StrategyEvaluator()
+    return _SHARED_EVALUATOR
+
+
+def reset_shared_evaluator() -> None:
+    """Drop the shared evaluator so its history starts fresh.
+
+    Tests use this to keep every hermetic environment independent.  A process
+    restart naturally loses in-memory history too — indicator conditions simply
+    require warm-up again (honest behavior, documented, never a fabricated signal).
+    """
+    global _SHARED_EVALUATOR
+    _SHARED_EVALUATOR = None
 
 
 class AgentControlError(Exception):
@@ -788,11 +818,14 @@ class AgentControlService:
                         "conditions_json": srow.conditions_json,
                     }
 
-        from app.engine.strategy_evaluator import StrategyEvaluator
-
-        evaluator = StrategyEvaluator()
+        # ONE shared, bounded evaluator (rolling indicator history across slots)
+        # — mirrors the persistent evaluator the TradingEngine keeps alive.
+        evaluator = get_shared_evaluator()
         decisions: list[dict[str, Any]] = []
         max_position = int(risk_policy.get("max_position_size", settings.max_position_size))
+        rate_budget = int(risk_policy.get("max_orders_per_minute", settings.max_orders_per_minute))
+        max_open_positions = int(risk_policy.get("max_open_positions", 1))
+        open_symbols = await self._open_position_symbols(user_id, symbols)
 
         for symbol in symbols:
             row = AgentDecisionRecord(
@@ -811,6 +844,10 @@ class AgentControlService:
             decision_row = await self._decide_symbol(
                 row, symbol, strategy, evaluator, autonomy_level,
                 approval_policy, max_position,
+                open_symbols=open_symbols,
+                max_open_positions=max_open_positions,
+                orders_this_window=await self._recent_action_count(config_id, symbol),
+                max_orders_per_minute=rate_budget,
             )
             async with SessionLocal() as db:
                 db.add(decision_row)
@@ -832,6 +869,54 @@ class AgentControlService:
             )
         return decisions
 
+    async def _open_position_symbols(self, user_id: str, symbols: list[str]) -> set[str]:
+        """Symbols (upper-cased) with an OPEN position owned by this tenant.
+
+        Feeds the loop-safety ``max_open_positions`` guard so a still-matching
+        strategy can never pile a second entry onto a symbol it already holds.
+        """
+        from app.models.trading import PositionRecord
+
+        if not symbols:
+            return set()
+        syms = [str(s).strip().upper() for s in symbols]
+        async with SessionLocal() as db:
+            rows = (
+                await db.execute(
+                    select(PositionRecord.symbol).where(
+                        PositionRecord.user_id == user_id,
+                        PositionRecord.status == "OPEN",
+                        PositionRecord.symbol.in_(syms),
+                    )
+                )
+            ).scalars().all()
+        return {str(s).upper() for s in rows}
+
+    async def _recent_action_count(self, config_id: str, symbol: str) -> int:
+        """TRADE/NEEDS_APPROVAL decisions persisted for (config, symbol) in the
+        last minute — the per-config action-window budget.
+
+        The decision being evaluated is NOT yet committed, so the first N
+        qualifying slots are allowed and the (N+1)-th is blocked deterministically.
+        """
+        cutoff = _utcnow() - timedelta(seconds=60)
+        async with SessionLocal() as db:
+            value = (
+                await db.execute(
+                    select(func.count())
+                    .select_from(AgentDecisionRecord)
+                    .where(
+                        AgentDecisionRecord.agent_config_id == config_id,
+                        AgentDecisionRecord.symbol == symbol,
+                        AgentDecisionRecord.decision.in_(
+                            (DECISION_TRADE, DECISION_NEEDS_APPROVAL)
+                        ),
+                        AgentDecisionRecord.created_at >= cutoff,
+                    )
+                )
+            ).scalar_one()
+        return int(value or 0)
+
     async def _decide_symbol(
         self,
         row: AgentDecisionRecord,
@@ -841,6 +926,11 @@ class AgentControlService:
         autonomy_level: int,
         approval_policy: dict[str, Any],
         max_position: int,
+        *,
+        open_symbols: Optional[set[str]] = None,
+        max_open_positions: int = 1,
+        orders_this_window: int = 0,
+        max_orders_per_minute: int = 30,
     ) -> AgentDecisionRecord:
         """Deterministic decision for ONE symbol (fail-closed; never guesses)."""
         from app.market_data.unified_manager import unified_market_manager
@@ -861,6 +951,34 @@ class AgentControlService:
             row.reason = "no market quote available (feed unavailable)"
             row.risk_result = "FEED_UNAVAILABLE"
             row.risk_reason = "market data provider returned no fresh quote"
+            return row
+
+        # Fail-closed feed-state gate: a decision may ONLY be derived from a
+        # quote whose data_status is genuinely usable (LIVE / DELAYED within its
+        # freshness window / explicitly DEMO).  STALE/UNAVAILABLE cached prices
+        # never produce a TRADE decision here — the intent boundary would reject
+        # them later, but the durable decision row must stay honest.
+        status = str(quote.get("data_status") or "UNKNOWN").upper()
+        is_stale = quote.get("is_stale")
+        age = quote.get("age_seconds")
+        if status in ("STALE", "UNAVAILABLE") or is_stale is True:
+            row.decision = DECISION_NO_TRADE
+            row.reason = (
+                f"market feed {status} (age={age}); autonomous decisions "
+                "require fresh market data"
+            )
+            row.risk_result = (
+                "FEED_STALE"
+                if (status == "STALE" or is_stale is True)
+                else "FEED_UNAVAILABLE"
+            )
+            row.risk_reason = f"feed data_status={status} is_stale={is_stale} age={age}"
+            return row
+        if status not in ("LIVE", "DELAYED", "DEMO"):
+            row.decision = DECISION_NO_TRADE
+            row.reason = f"market feed in unknown state {status!r}; decision fail-closed"
+            row.risk_result = "FEED_UNKNOWN"
+            row.risk_reason = f"feed data_status={status}"
             return row
 
         evaluator.update_price(symbol, price)
@@ -895,13 +1013,39 @@ class AgentControlService:
             row.reason = f"{note}; observe-only autonomy (level 0)"
             return row
 
+        side = _side_for_action(action)
+        # Loop-safety guards (bounded autonomous action rate — never slot-rate-
+        # proportional order creation): a still-matching strategy may not open a
+        # second position on a symbol it already holds, and may not exceed the
+        # operator's per-config order window (max_orders_per_minute).
+        if (
+            side == "BUY"
+            and max_open_positions > 0
+            and str(symbol).strip().upper() in (open_symbols or set())
+        ):
+            row.decision = DECISION_NO_TRADE
+            row.reason = (
+                f"{note}; open position already held for {symbol} "
+                f"(max_open_positions={max_open_positions})"
+            )
+            row.risk_result = "OPEN_POSITION_LIMIT"
+            return row
+        if max_orders_per_minute > 0 and orders_this_window >= max_orders_per_minute:
+            row.decision = DECISION_NO_TRADE
+            row.reason = (
+                f"{note}; per-config order window exhausted "
+                f"({orders_this_window}/{max_orders_per_minute} in the last minute)"
+            )
+            row.risk_result = "RATE_LIMIT"
+            return row
+
         quantity = max(
             1,
             min(int(action.get("quantity", 1)), max_position, settings.agent_max_intent_quantity),
         )
         approval_required = bool(approval_policy.get("approval_required", True)) or autonomy_level == 1
         row.decision = DECISION_NEEDS_APPROVAL if approval_required else DECISION_TRADE
-        row.side = _side_for_action(action)
+        row.side = side
         row.quantity = quantity
         row.reason = note
         row.approval_result = "REQUIRED" if approval_required else "NOT_REQUIRED"

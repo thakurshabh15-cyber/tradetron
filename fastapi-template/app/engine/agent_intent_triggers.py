@@ -523,7 +523,8 @@ class AgentIntentTriggerBridge:
                 outcome.get("order_id") if isinstance(outcome, dict) else None
             ),
         }
-async def handle_scheduler_event(self, ctx: AgentContext) -> dict[str, Any]:
+
+    async def handle_scheduler_event(self, ctx: AgentContext) -> dict[str, Any]:
         """Registered ``trading_agent`` / ``execute_trade`` handler.
 
         Invoked by the ``AgentRuntimeScheduler`` when it drains an accepted

@@ -132,6 +132,9 @@ class ControlEnv:
 @pytest.fixture
 async def env(tmp_path, monkeypatch):
     db_file = tmp_path / "agent_control_test.db"
+    # Isolate the shared rolling-indicator evaluator: every test environment
+    # starts with empty price history (a process restart behaves identically).
+    ac.reset_shared_evaluator()
     engine = create_async_engine(
         f"sqlite+aiosqlite:///{db_file}",
         connect_args={"check_same_thread": False, "timeout": 30},
