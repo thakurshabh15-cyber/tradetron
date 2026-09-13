@@ -39,10 +39,13 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 _IDX_NAME = "ix_strategy_deployments_owner_user_id"
+# Conventional SQLAlchemy FK name (identical to what ``create_all`` produces so a
+# legacy upgrade converges with a fresh-boot schema on PostgreSQL).
+_FK_NAME = "strategy_deployments_owner_user_id_fkey"
 
 
 def upgrade() -> None:
-    """Add the nullable owner_user_id column + index."""
+    """Add the nullable owner_user_id column + index (+ FK on PostgreSQL)."""
     bind = op.get_bind()
     inspector = sa.inspect(bind)
 
@@ -69,6 +72,39 @@ def upgrade() -> None:
             ["owner_user_id"],
         )
 
+    # FK parity (Phase P2, PostgreSQL drift guard): on a FRESH database the 0001
+    # baseline (``Base.metadata.create_all``) already created the FK, but on a
+    # LEGACY database whose ``strategy_deployments`` pre-dates the owner column
+    # this migration adds the column without any FK — a constraint drift that is
+    # invisible on SQLite but a real referential-integrity gap on PostgreSQL.
+    # Close it when the column exists but no FK references users.id through it.
+    #
+    # SQLite cannot add a FK to an existing table (ALTER ADD CONSTRAINT is not
+    # supported), so the repair is deliberately PostgreSQL-only; SQLite dev/CI
+    # databases are always freshly created from the ORM and therefore already
+    # carry the constraint.
+    if _is_postgresql(bind):
+        fks = inspector.get_foreign_keys("strategy_deployments")
+        has_owner_fk = any(
+            fk.get("referred_table") == "users"
+            and "owner_user_id" in (fk.get("constrained_columns") or [])
+            for fk in fks
+        )
+        if not has_owner_fk:
+            op.create_foreign_key(
+                _FK_NAME,
+                "strategy_deployments",
+                "users",
+                ["owner_user_id"],
+                ["id"],
+                ondelete="SET NULL",
+            )
+
+
+def _is_postgresql(bind) -> bool:
+    """True when the migration bind is PostgreSQL (dialect name without suffix)."""
+    return (bind.dialect.name or "").startswith("postgresql")
+
 
 def downgrade() -> None:
     """Reverse the schema change (best-effort; SQLite needs batch mode)."""
@@ -77,6 +113,16 @@ def downgrade() -> None:
 
     if "strategy_deployments" not in inspector.get_table_names():
         return
+
+    # FK first (PostgreSQL legacy-path repair added it in a later upgrade).
+    if _is_postgresql(bind):
+        fk_names = {
+            fk.get("name")
+            for fk in inspector.get_foreign_keys("strategy_deployments")
+            if fk.get("name") == _FK_NAME
+        }
+        if _FK_NAME in fk_names:
+            op.drop_constraint(_FK_NAME, "strategy_deployments", type_="foreignkey")
 
     index_names = {ix["name"] for ix in inspector.get_indexes("strategy_deployments")}
     if _IDX_NAME in index_names:
