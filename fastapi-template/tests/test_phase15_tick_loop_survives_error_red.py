@@ -37,6 +37,13 @@ async def test_tick_loop_survives_transient_persist_failure():
     """
     await init_db()
 
+    # Deterministic two-tick flow: disable the strategy-signal cooldown the
+    # engine now applies to continuously-satisfied conditions (each tick must
+    # reach _persist_trade here regardless of the throttle).
+    from app.config import settings
+
+    settings.strategy_signal_cooldown_seconds = 0.0
+
     tick_queue: asyncio.Queue = asyncio.Queue()
     from app.brokers.simulated import SimulatedBroker
 

@@ -22,6 +22,7 @@ from typing import Any, Optional
 from app.brokers import BrokerModeBlockedError, assert_live_dispatch_allowed, get_broker_adapter
 from app.brokers.base import BrokerClient
 from app.brokers.simulated import SimulatedBroker
+from app.config import settings
 from app.core.logging import get_logger
 from app.db.session import SessionLocal
 from app.engine.order_manager import OrderManager, Position, TradeExecution
@@ -259,6 +260,10 @@ class TradingEngine:
         # in-memory lifecycle manager share ONE risk source.
         self._order_manager.risk_manager = self._risk  # type: ignore[attr-defined]
         self._task: asyncio.Task | None = None
+        # Per-(strategy, symbol) monotonic timestamps of the last dispatched
+        # signal — enforces the strategy-signal cooldown (bounded throttle for
+        # persistent threshold conditions; pruned on strategy reload).
+        self._last_strategy_signal_ts: dict[tuple[str, str], float] = {}
         self._running = False
 
         # In-memory cache of active user-defined strategies
@@ -314,6 +319,19 @@ class TradingEngine:
                         "broker_account_id": getattr(row, "broker_account_id", None),
                         "capital_allocated": getattr(row, "capital_allocated", 10000.0),
                     }
+
+                # Prune signal-cooldown entries whose strategy is no longer
+                # enabled/loaded so the throttle map stays bounded over long
+                # runs (strategies deleted or disabled after reload).
+                active_pairs = {
+                    (sid, sym)
+                    for sid, s in self._strategies.items()
+                    if s["enabled"]
+                    for sym in s["symbols"]
+                }
+                self._last_strategy_signal_ts = {
+                    k: v for k, v in self._last_strategy_signal_ts.items() if k in active_pairs
+                }
         except Exception as exc:
             logger.warning("Notice on loading active strategies from DB: %s", exc)
 
@@ -451,6 +469,17 @@ class TradingEngine:
             )
 
             if triggered:
+                # Strategy-signal cooldown: a continuously-satisfied condition
+                # (e.g. RSI < 30) would otherwise dispatch on every tick and
+                # flood the DB with fills / risk-blocked REJECTED rows.  One
+                # attempt per (strategy, symbol) per cooldown window.
+                now_mono = time.monotonic()
+                sig_key = (strat_id, symbol)
+                last_ts = self._last_strategy_signal_ts.get(sig_key)
+                cooldown = settings.strategy_signal_cooldown_seconds
+                if cooldown > 0 and last_ts is not None and (now_mono - last_ts) < cooldown:
+                    continue
+                self._last_strategy_signal_ts[sig_key] = now_mono
                 await self._execute_signal(strat, symbol, price)
 
     # ── Signal execution pipeline for custom strategies ─────────────

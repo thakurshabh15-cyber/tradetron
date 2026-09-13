@@ -270,6 +270,16 @@ class Settings(BaseSettings):
     max_daily_loss: float = 10_000.0
     max_orders_per_minute: int = 30
 
+    # Strategy-signal execution throttle (seconds).  Bounds how often the engine
+    # may dispatch the SAME strategy on the SAME symbol.  Persistent threshold
+    # conditions (e.g. RSI < 30, price < lower Bollinger band) would otherwise
+    # re-trigger on EVERY incoming tick and flood the orders/audit tables with
+    # repeated fills and risk-blocked REJECTED rows; the cooldown coalesces a
+    # continuously-satisfied condition into one attempt per window.
+    # Crossover/transition signals fire once per transition and are effectively
+    # unaffected.  LIVE and PAPER strategy execution share this throttle.
+    strategy_signal_cooldown_seconds: float = 60.0
+
     # ── Market data simulator ────────────────────────────────────────
     sim_symbols: str = "AAPL,MSFT,NVDA,GOOGL,AMZN"
     sim_tick_interval: float = 0.5  # seconds between simulated ticks (500ms live cadence)
