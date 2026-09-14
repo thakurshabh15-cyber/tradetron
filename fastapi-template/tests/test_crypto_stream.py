@@ -30,7 +30,7 @@ class FakeStream:
     def __init__(self, status=StreamStatus.OPEN):
         self._status = status
         self.sent = []
-        self._last_message_at = None
+        self._last_message_at: datetime | None = None
 
     @property
     def status(self):
@@ -141,7 +141,7 @@ def test_subscribe_sends_wire_subscription():
     """subscribe() must emit a Binance SUBSCRIBE message for trade+ticker."""
     p = _mk_provider()
     fake = FakeStream()
-    p._stream = fake
+    p._stream = fake  # type: ignore[assignment]
     p._ever_connected = True
 
     async def run():
@@ -163,7 +163,7 @@ def test_non_usdt_symbols_queued_as_unresolved():
     """INR-denominated symbols have no Binance stream — tracked as unresolved."""
     p = _mk_provider()
     fake = FakeStream()
-    p._stream = fake
+    p._stream = fake  # type: ignore[assignment]
     p._ever_connected = True
 
     async def run():
@@ -179,14 +179,14 @@ def test_resubscribe_restores_full_set():
     """After reconnect the provider must re-send the entire subscription set."""
     p = _mk_provider()
     fake = FakeStream()
-    p._stream = fake
+    p._stream = fake  # type: ignore[assignment]
     p._ever_connected = True
     # Simulate an established subscription, then a reconnect where the server
     # forgot everything.
     asyncio.run(p.subscribe(["BTCUSDT", "SOLUSDT"]))
 
     fake2 = FakeStream()  # fresh socket after reconnect
-    p._stream = fake2
+    p._stream = fake2  # type: ignore[assignment]
     asyncio.run(p._resubscribe_all())
 
     import json
@@ -207,7 +207,7 @@ def test_feed_state_live_when_open_fresh():
     asyncio.run(_feed_ticker_and_trade(p, ticker=_ticker_frame()))
     fake = FakeStream()
     fake._last_message_at = datetime.now(timezone.utc)
-    p._stream = fake
+    p._stream = fake  # type: ignore[assignment]
     p._ever_connected = True
     assert p.classify_feed_state() == FeedState.LIVE
 
@@ -218,7 +218,7 @@ def test_feed_state_stale_when_open_but_aged():
     asyncio.run(_feed_ticker_and_trade(p, ticker=_ticker_frame()))
     fake = FakeStream()
     fake._last_message_at = datetime.now(timezone.utc) - timedelta(minutes=10)
-    p._stream = fake
+    p._stream = fake  # type: ignore[assignment]
     p._ever_connected = True
     assert p.classify_feed_state() == FeedState.STALE
 
@@ -228,7 +228,7 @@ def test_feed_state_stale_when_reconnecting_after_connection():
     p._subscribers.add("BTCUSDT")
     asyncio.run(_feed_ticker_and_trade(p, ticker=_ticker_frame()))
     fake = FakeStream(status=StreamStatus.RECONNECTING)
-    p._stream = fake
+    p._stream = fake  # type: ignore[assignment]
     p._ever_connected = True
     assert p.classify_feed_state() == FeedState.STALE
 

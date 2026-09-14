@@ -143,7 +143,7 @@ async def _seed_order(order_status: str = "OPEN") -> dict:
         }
 
 
-async def _fetch_order(order_id: str) -> OrderRecord:
+async def _fetch_order(order_id: str) -> OrderRecord | None:
     async with SessionLocal() as db:
         return await db.get(OrderRecord, order_id)
 
@@ -222,6 +222,7 @@ async def test_queued_complete_reaches_filled_path():
     seeded = await _seed_order()
     await handle_broker_postback(_queued(seeded, "COMPLETE"))
     order = await _fetch_order(seeded["order_id"])
+    assert order is not None
     assert order.status == "FILLED"
     assert order.filled_quantity == 50
     assert order.filled_price == 24850.0
@@ -237,6 +238,7 @@ async def test_queued_completed_maps_to_filled():
     seeded = await _seed_order()
     await handle_broker_postback(_queued(seeded, "COMPLETED"))
     order = await _fetch_order(seeded["order_id"])
+    assert order is not None
     assert order.status == "FILLED"
     assert len(await _fetch_postback_trades(seeded["user_id"])) == 1
 
@@ -247,6 +249,7 @@ async def test_queued_filled_stays_filled():
     seeded = await _seed_order()
     await handle_broker_postback(_queued(seeded, "FILLED"))
     order = await _fetch_order(seeded["order_id"])
+    assert order is not None
     assert order.status == "FILLED"
     assert len(await _fetch_postback_trades(seeded["user_id"])) == 1
 
@@ -257,6 +260,7 @@ async def test_queued_rejected_remains_terminal_no_fill():
     seeded = await _seed_order()
     await handle_broker_postback(_queued(seeded, "REJECTED"))
     order = await _fetch_order(seeded["order_id"])
+    assert order is not None
     assert order.status == "REJECTED"
     assert await _fetch_postback_trades(seeded["user_id"]) == []
     assert await _fetch_postback_positions(seeded["user_id"]) == []
@@ -270,6 +274,7 @@ async def test_queued_cancelled_and_canceled_remain_terminal():
         seeded = await _seed_order()
         await handle_broker_postback(_queued(seeded, raw))
         order = await _fetch_order(seeded["order_id"])
+        assert order is not None
         assert order.status == "CANCELLED", raw
         assert await _fetch_postback_trades(seeded["user_id"]) == []
     assert await _fetch_postback_positions(seeded["user_id"]) == []
@@ -282,6 +287,7 @@ async def test_queued_open_non_terminal_does_not_fabricate_fill():
         seeded = await _seed_order()
         await handle_broker_postback(_queued(seeded, raw))
         order = await _fetch_order(seeded["order_id"])
+        assert order is not None
         assert order.status == "OPEN", raw
         assert await _fetch_postback_trades(seeded["user_id"]) == []
         assert await _fetch_postback_positions(seeded["user_id"]) == []
@@ -294,6 +300,7 @@ async def test_queued_unknown_status_fails_safe_no_mutation():
     seeded = await _seed_order()
     await handle_broker_postback(_queued(seeded, "SOME_UNKNOWN_STATUS"))
     order = await _fetch_order(seeded["order_id"])
+    assert order is not None
     # Order stays in its pre-event state (still OPEN, not guessed terminal).
     assert order.status == "OPEN"
     assert order.filled_quantity == 0
@@ -308,6 +315,7 @@ async def test_duplicate_normalized_filled_delivery_idempotent():
     for _ in range(2):
         await handle_broker_postback(_queued(seeded, "COMPLETE"))
     order = await _fetch_order(seeded["order_id"])
+    assert order is not None
     assert order.status == "FILLED"
     trades = await _fetch_postback_trades(seeded["user_id"])
     assert len(trades) == 1, f"expected 1 TradeRecord, got {len(trades)}"
@@ -340,6 +348,7 @@ async def test_direct_rest_path_unchanged_and_converges_on_same_reconciler():
         assert resp.json()["event_processed"] is True
 
     order = await _fetch_order(seeded["order_id"])
+    assert order is not None
     assert order.status == "FILLED"
     assert order.filled_quantity == 50
     trades = await _fetch_postback_trades(seeded["user_id"])

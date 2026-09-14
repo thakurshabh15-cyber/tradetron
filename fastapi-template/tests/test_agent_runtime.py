@@ -220,7 +220,7 @@ async def env(tmp_path, monkeypatch):
     assert PROBE_AGENT in created, "probe agent not registered"
 
     ag_env = AgentEnv(factory, ar.AgentRuntime())
-    ag_env.engine = engine
+    ag_env.engine = engine  # type: ignore[attr-defined]
     yield ag_env
     await engine.dispose()
 

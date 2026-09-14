@@ -539,6 +539,7 @@ class TestPipelineInvariants:
             broker.update_price("RELIANCE", 2985.40)
             om = OrderManager(broker=broker)
             exec_result = await om.process_signal("RELIANCE", "BUY", 2985.40, quantity=10)
+            assert exec_result is not None
             assert om.active_positions["RELIANCE"].quantity == 10
             assert exec_result.price == 2985.40
             # Signal reversal closes BUY and opens SELL

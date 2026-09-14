@@ -34,6 +34,8 @@ from app.market_data.manager import ws_manager
 from app.models.broker_account import BrokerAccountRecord
 from app.models.trading import OrderRecord, PositionRecord, TradeRecord
 
+from app.db.session import rows_affected
+
 logger = get_logger("brokers.postback")
 
 # Local order statuses that mean the fill is ALREADY finalized (booked on the
@@ -215,7 +217,7 @@ async def reconcile_broker_postback(
             .execution_options(synchronize_session=False)
         )
 
-        if claim.rowcount != 1:
+        if rows_affected(claim) != 1:
             # Another finalizer already booked this fill: duplicate broker
             # delivery, the reconciliation engine won the race, or a local
             # REST/DMA/copy-trading entry finalized first.  Never re-book the

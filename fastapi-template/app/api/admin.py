@@ -20,13 +20,13 @@ from app.api.auth import get_current_user
 from app.core.audit import log_audit_event
 from app.core.logging import get_logger
 from app.core.security import create_access_token, hash_password, hash_token, verify_password
-from app.db.session import get_db
+from app.db.session import get_db, rows_affected
 from app.market_data.manager import ws_manager
 from app.models.audit import AuditLogRecord
 from app.models.billing import InvoiceRecord, PaymentRecord, SubscriptionRecord
 from app.models.broker_account import BrokerAccountRecord
 from app.models.marketplace import StrategyDeploymentRecord
-from app.models.trading import OrderRecord, PositionRecord, StrategyRecord
+from app.models.trading import OrderRecord, PositionRecord, StrategyRecord, TradeRecord
 from app.models.user import RevokedTokenRecord, UserRecord
 from app.models.broker_account import BrokerSessionLogRecord
 from app.models.copy_trading import CopyFollowerRecord, CopyGroupRecord
@@ -661,7 +661,7 @@ async def kill_switch_user(
         .values(enabled=False)
     )
     result = await db.execute(pause_stmt)
-    paused_count = result.rowcount
+    paused_count = rows_affected(result)
     await db.commit()
 
     # Make the halt take effect immediately on the live engine.

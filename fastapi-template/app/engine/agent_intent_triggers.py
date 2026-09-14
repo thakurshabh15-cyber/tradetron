@@ -543,7 +543,7 @@ class AgentIntentTriggerBridge:
                 symbol=str(payload.get("symbol") or ""),
                 side=str(payload.get("side") or "SELL"),
                 quantity=int(payload.get("quantity") or 0),
-                order_type=str(payload.get("order_type") or ORDER_TYPE_MARKET),
+                order_type=str(payload.get("order_type") or "MARKET"),
                 limit_price=payload.get("limit_price"),
                 trigger_price=payload.get("trigger_price"),
                 stop_loss_price=payload.get("stop_loss_price"),

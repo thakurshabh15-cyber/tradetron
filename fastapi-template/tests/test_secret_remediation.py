@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -157,7 +158,7 @@ from app.config import _KNOWN_BAD_JWT_SECRET_SHA256, Settings
 
 def _prod_settings(**overrides) -> Settings:
     """Construct production Settings with all safe flags pinned (no .env pickup)."""
-    base = dict(
+    base: dict[str, Any] = dict(
         environment="production",
         jwt_secret="h" * 48,
         skip_signature_verification=False,

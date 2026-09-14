@@ -56,7 +56,12 @@ class IdempotencyStore:
         - is_new=False: Key exists, return existing result if completed
         """
         redis_key = f"idempotency:{key}"
-        
+        if self._redis is None:
+            # No Redis available — fail OPEN (allow request through).  The
+            # existing try/except below covers transient errors, this guard
+            # covers a store that was never initialized.
+            return True, None
+
         # Atomic check-and-set using Lua
         lua_script = """
         local key = KEYS[1]
@@ -129,6 +134,10 @@ class IdempotencyStore:
         """
         if not key:
             return False
+        if self._redis is None:
+            # Never initialized: indeterminate lookup must NOT be treated as
+            # completed (fail-safe) — same contract as the error path below.
+            return False
         try:
             value = await self._redis.get(f"idempotency:{key}")
         except Exception as exc:
@@ -147,6 +156,9 @@ class IdempotencyStore:
         return record.get("status") == "completed"
 
     async def mark_completed(self, key: str, result: dict[str, Any]) -> None:
+        if self._redis is None:
+            logger.warning("mark_completed(%s) skipped: Redis store not initialized", key)
+            return
         redis_key = f"idempotency:{key}"
         record = {
             "key": key,
@@ -158,6 +170,9 @@ class IdempotencyStore:
         await self._redis.set(redis_key, json.dumps(record), ex=self._ttl)
     
     async def mark_failed(self, key: str, error: str) -> None:
+        if self._redis is None:
+            logger.warning("mark_failed(%s) skipped: Redis store not initialized", key)
+            return
         redis_key = f"idempotency:{key}"
         record = {
             "key": key,

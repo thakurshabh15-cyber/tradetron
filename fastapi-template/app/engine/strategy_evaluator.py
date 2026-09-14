@@ -76,7 +76,7 @@ class StrategyEvaluator:
         for cond in conditions:
             indicator = cond["indicator"].upper()
             raw_operator = cond["operator"].lower()
-            operator = _OPERATOR_ALIASES.get(raw_operator, raw_operator)
+            operator = _OPERATOR_ALIASES.get(raw_operator, raw_operator) or "gt"
             threshold = float(cond["value"])
             period = int(cond.get("period", 14))
 

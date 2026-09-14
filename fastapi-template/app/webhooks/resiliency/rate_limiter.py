@@ -58,6 +58,7 @@ class TokenBucketRateLimiter:
             return self._check_local(key, config, cost)
     
     async def _check_distributed(self, key: str, config: RateLimitConfig, cost: int) -> tuple[bool, dict]:
+        assert self._redis is not None  # guarded by check_limit before dispatch
         redis_key = f"{config.key_prefix}:{key}"
         now = time.time()
         

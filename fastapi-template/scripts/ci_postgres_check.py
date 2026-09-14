@@ -182,7 +182,7 @@ def _schema_snapshot(db_url: str) -> dict[str, dict]:
                     repr(
                         (
                             ix.get("name") or "",
-                            tuple(sorted(ix.get("column_names") or [])),
+                            tuple(sorted(c for c in (ix.get("column_names") or []) if c is not None)),
                             bool(ix.get("unique", False)),
                         )
                     )

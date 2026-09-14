@@ -61,6 +61,7 @@ async def _seed_users():
     return master_id, follower_id
 
 
+
 async def _get_connected_broker_id(follower_id: str) -> str:
     async with SessionLocal() as db:
         return (
@@ -71,6 +72,8 @@ async def _get_connected_broker_id(follower_id: str) -> str:
                 )
             )
         ).scalar_one().id
+
+
 @pytest.mark.asyncio
 async def test_resume_without_mode_keeps_live_broker_linkage():
     client = TestClient(app)
@@ -163,18 +166,7 @@ async def test_resume_switching_to_paper_detaches_broker():
 
     async with SessionLocal() as db:
         row = await db.get(CopyFollowerRecord, follower_row_id)
+        assert row is not None
         assert row.mode == "PAPER"
         assert row.broker_account_id is None
     return master_id, follower_id
-
-
-async def _get_connected_broker_id(follower_id: str) -> str:
-    async with SessionLocal() as db:
-        return (
-            await db.execute(
-                select(BrokerAccountRecord).where(
-                    BrokerAccountRecord.user_id == follower_id,
-                    BrokerAccountRecord.status == "CONNECTED",
-                )
-            )
-        ).scalar_one().id

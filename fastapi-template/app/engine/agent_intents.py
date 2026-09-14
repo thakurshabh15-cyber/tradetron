@@ -68,7 +68,7 @@ from sqlalchemy import and_, select, update
 
 from app.config import settings
 from app.core.logging import get_logger
-from app.db.session import SessionLocal
+from app.db.session import SessionLocal, rows_affected
 from app.engine.durable_claims import (
     claim_order_record,
     fetch_claim_by_key,
@@ -484,9 +484,13 @@ class AgentTradingService:
                 "reason": f"market data {mkt_status} (age={mkt_age})",
             }
         price = mkt_price
+        # Invariant: the freshness gate above returns fresh=True ONLY when the
+        # quote had a positive numeric price (see _quote_fresh).  Assert it so
+        # the margin/risk gates below statically see a real float.
+        assert price is not None and price > 0
         order = OrderRequest(
             symbol=symbol,
-            side=side,
+            side=Side(side),
             quantity=int(quantity),
             order_type=(
                 "MARKET" if decision == DECISION_NEEDS_APPROVAL else order_type
@@ -831,7 +835,10 @@ class AgentTradingService:
             )
         except Exception as exc:  # noqa: BLE001 - fail closed
             return f"broker snapshot unavailable for margin: {exc}"
-        available = float(snap.available_margin or 0.0) if snap else 0.0
+        # BrokerStateRecord persists broker-reported available margin under the
+        # normalized ``available_cash`` column (broker_state_sync maps the wire
+        # fields "available_margin"/"availableCash"/"availableBalance" into it).
+        available = float(snap.available_cash or 0.0) if snap else 0.0
         if required > available:
             return (
                 f"margin required {required:.2f} exceeds available {available:.2f}"
@@ -942,7 +949,7 @@ class AgentTradingService:
                 .values(status=INTENT_SENT, updated_at=_utcnow())
             )
             await db.commit()
-            if claimed.rowcount != 1:
+            if rows_affected(claimed) != 1:
                 async with SessionLocal() as db2:
                     row2 = await db2.get(TradingIntentRecord, intent_id)
                 return {
@@ -1374,7 +1381,7 @@ class AgentTradingService:
                 .values(status="CLOSED", closed_at=_utcnow())
             )
             await db.commit()
-            if result.rowcount != 1:
+            if rows_affected(result) != 1:
                 return {
                     "ok": True,
                     "idempotent": True,

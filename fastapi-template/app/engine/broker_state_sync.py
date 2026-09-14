@@ -273,7 +273,7 @@ class BrokerStateSyncEngine:
         return lock
 
     async def get_snapshot(
-        self, broker_account_id: str
+        self, broker_account_id: Optional[str]
     ) -> Optional[BrokerStateRecord]:
         """Return the persisted snapshot row (or None) for an account."""
         async with SessionLocal() as db:

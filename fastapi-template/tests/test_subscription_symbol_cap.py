@@ -62,13 +62,13 @@ async def test_quote_cache_pruned_to_subscribed_universe(monkeypatch):
         # A quote for a symbol no provider subscribes to is stale by definition
         # and must be dropped from the presentational cache once the next
         # subscribe happens (it would otherwise accumulate forever).
-        unified_market_manager._quotes["GHOST"] = object()
+        unified_market_manager._quotes["GHOST"] = object()  # type: ignore[arg-type]
         await unified_market_manager.subscribe(["RELIANCE", "TCS"])
         assert "GHOST" not in unified_market_manager._quotes
         equity = next(
             p for p in set(unified_market_manager._providers.values())
             if getattr(p, "asset_class", None) is not None
-            and getattr(p, "asset_class", None).value == "EQUITY"
+            and getattr(p, "asset_class", None).value == "EQUITY"  # type: ignore[union-attr]
         )
         assert "RELIANCE" in equity._subscribers
         assert "TCS" in equity._subscribers

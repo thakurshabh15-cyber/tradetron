@@ -360,7 +360,7 @@ class UnifiedMarketDataManager:
         if not quotes:
             for p in set(self._providers.values()):
                 if hasattr(p, "_quotes"):
-                    quotes.extend(list(p._quotes.values()))
+                    quotes.extend(list(getattr(p, "_quotes", {}).values()))
 
         # If still empty on initial cold start, populate default seed ticks
         if not quotes:
@@ -428,7 +428,7 @@ class UnifiedMarketDataManager:
             if callable(classifier):
                 try:
                     candidate = classifier()
-                    feed_state = candidate.value if hasattr(candidate, "value") else str(candidate)
+                    feed_state = getattr(candidate, "value", None) or str(candidate)
                 except Exception:  # noqa: BLE001 - classifier never breaks status
                     feed_state = None
             result.append({
@@ -442,8 +442,9 @@ class UnifiedMarketDataManager:
                 "status": status,
                 "last_sync_error": getattr(provider, "last_sync_error", None),
                 "last_sync_success": (
-                    getattr(provider, "last_sync_success", None).isoformat()
-                    if getattr(provider, "last_sync_success", None) else None
+                    last_sync_ts.isoformat()
+                    if (last_sync_ts := getattr(provider, "last_sync_success", None))
+                    else None
                 ),
                 "stale_symbols_count": self._count_stale_for(provider),
             })

@@ -408,6 +408,7 @@ async def test_b_crash_after_acceptance_claim_survives_recovery_no_redispatch(
     assert summary["filled"] == 1, summary
 
     order = await _fetch_order(seeded["follower_id"])
+    assert order is not None
     assert order.status == "FILLED"
     position = await _fetch_position(seeded["follower_id"])
     assert position is not None and position.status == "OPEN"
@@ -466,6 +467,7 @@ async def test_b2_crash_after_ref_commit_window_b_recovery(monkeypatch):
     summary = await _reconcile_once(now=_stale_now())
     assert summary["filled"] == 1, summary
     order = await _fetch_order(seeded["follower_id"])
+    assert order is not None
     assert order.status == "FILLED"
     assert len(broker.dispatches) == 1
 
@@ -499,7 +501,9 @@ async def test_d_duplicate_master_signal_single_dispatch(monkeypatch):
 
     assert await _count_rows(OrderRecord, seeded["follower_id"]) == 1
     order = await _fetch_order(seeded["follower_id"])
+    assert order is not None
     assert order.status == "FILLED"
+    assert order.client_order_id is not None
     assert len(order.client_order_id) <= 64
     assert order.client_order_id.startswith("cpy-")
 
@@ -540,6 +544,7 @@ async def test_d2_different_followers_do_not_collide(monkeypatch):
                 CopyGroupRecord.master_user_id == master_id
             )
         )).scalars().first()
+        assert group is not None
         db.add(CopyFollowerRecord(
             group_id=group.id,
             follower_user_id=second_follower,
@@ -649,6 +654,7 @@ async def test_c_db_failure_after_acceptance_recoverable_no_redispatch(
     summary = await _reconcile_once(now=_stale_now())
     assert summary["filled"] == 1, summary
     order = await _fetch_order(seeded["follower_id"])
+    assert order is not None
     assert order.status == "FILLED"
     assert len(broker.dispatches) == 1, "DB failure must never re-dispatch"
 
@@ -698,6 +704,7 @@ async def test_f_ambiguous_broker_response_stays_pending_no_fill(monkeypatch):
     summary = await _reconcile_once(now=_stale_now())
     assert summary["filled"] == 1, summary
     order = await _fetch_order(seeded["follower_id"])
+    assert order is not None
     assert order.status == "FILLED"
     assert len(broker.dispatches) == 1, "ambiguity must never re-dispatch"
 
@@ -733,6 +740,7 @@ async def test_f2_reference_but_no_price_is_recoverable(monkeypatch):
     summary = await _reconcile_once(now=_stale_now())
     assert summary["filled"] == 1, summary
     order = await _fetch_order(seeded["follower_id"])
+    assert order is not None
     assert order.status == "FILLED"
 # ── G. Successful broker fill ─────────────────────────────────────────────────
 
@@ -807,6 +815,7 @@ async def test_h_broker_rejection_cas_same_claim_no_duplicate_row(monkeypatch):
         "rejection must not create a second REJECTED row"
     )
     order = await _fetch_order(seeded["follower_id"])
+    assert order is not None
     assert order.status == "REJECTED"
     assert order.client_order_id and order.client_order_id.startswith("cpy-")
     assert order.error_message
@@ -1112,6 +1121,7 @@ async def test_n_recovered_entry_then_close_exactly_once(monkeypatch):
     assert close1["closed_count"] == 1, close1
 
     position = await _fetch_position(seeded["follower_id"])
+    assert position is not None
     assert position.status == "CLOSED"
     assert position.realized_pnl is not None and position.realized_pnl > 0, (
         "long closed above entry must book positive realized PnL"

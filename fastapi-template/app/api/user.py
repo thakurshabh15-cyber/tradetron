@@ -404,12 +404,13 @@ async def submit_kyc(
         details={"pan_number": f"{pan_clean[:2]}***{pan_clean[-2:]}", "id_proof_type": user.id_proof_type},
     )
 
+    submitted_at = user.kyc_submitted_at
     return {
         "success": True,
         "message": "KYC documents submitted successfully. Status is now PENDING review.",
         "kyc_status": "PENDING",
         "pan_number": pan_clean,
         "id_proof_type": user.id_proof_type,
-        "kyc_submitted_at": user.kyc_submitted_at.isoformat(),
+        "kyc_submitted_at": submitted_at.isoformat() if submitted_at is not None else None,
     }
 

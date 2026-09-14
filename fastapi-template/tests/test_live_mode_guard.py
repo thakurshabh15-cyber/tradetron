@@ -40,7 +40,7 @@ def test_guard_primitive_allowed_in_live_mode(monkeypatch):
 
 # ── API-level guard tests ────────────────────────────────────────────────
 
-async def _register_and_connect_broker(client) -> str:
+async def _register_and_connect_broker(client) -> tuple[dict[str, str], str]:
     """Register a fresh user, return an auth header."""
     uid = int(time.time() * 1000) % 10_000_000
     email = f"guard_{uid}_{uuid.uuid4().hex[:6]}@tradetron.io"

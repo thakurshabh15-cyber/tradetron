@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 
 from app.brokers.angelone import AngelOneBroker, SmartConnect
 from app.brokers.simulated import SimulatedBroker
-from app.brokers.zerodha import KiteConnect, ZerodhaKiteBroker
+from app.brokers.zerodha import KiteConnect, ZerodhaKiteBroker  # type: ignore[attr-defined]
 from app.config import settings
 from app.main import app, get_engine
 

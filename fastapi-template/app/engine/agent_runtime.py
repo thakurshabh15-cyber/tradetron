@@ -59,7 +59,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.logging import get_logger
-from app.db.session import IS_SQLITE, SessionLocal
+from app.db.session import IS_SQLITE, SessionLocal, rows_affected
 from app.models.agent import (
     AgentRecord,
     AgentRuntimeConfigRecord,
@@ -578,20 +578,26 @@ async def _engineering_monitor_queue_audit(ctx: AgentContext) -> dict[str, Any]:
                 "heartbeat_at": last_beacon.isoformat(timespec="seconds"),
             })
 
+    oldest_pending_iso: str | None = None
+    if oldest_pending is not None:
+        resolved = _as_utc(oldest_pending)
+        if resolved is not None:
+            oldest_pending_iso = resolved.isoformat(timespec="seconds")
+
+    oldest_running_iso: str | None = None
+    if oldest_running is not None:
+        resolved = _as_utc(oldest_running)
+        if resolved is not None:
+            oldest_running_iso = resolved.isoformat(timespec="seconds")
+
     return {
         "generated_at": now.isoformat(timespec="seconds"),
         "readonly": ctx.readonly,
         "autonomy_granted": ctx.autonomy_granted,
         "tasks_by_status": by_status,
         "pending_awaiting_approval": pending_awaiting_approval,
-        "oldest_pending_created_at": (
-            _as_utc(oldest_pending).isoformat(timespec="seconds")
-            if oldest_pending else None
-        ),
-        "oldest_running_started_at": (
-            _as_utc(oldest_running).isoformat(timespec="seconds")
-            if oldest_running else None
-        ),
+        "oldest_pending_created_at": oldest_pending_iso,
+        "oldest_running_started_at": oldest_running_iso,
         "stale_running_count": len(stale_running),
         "stale_running": stale_running[:20],
         "stale_running_after_seconds": settings.agent_stale_running_seconds,
@@ -626,7 +632,8 @@ def task_to_dict(rec: AgentTaskRecord) -> dict[str, Any]:
     def _iso(value: Optional[datetime]) -> Optional[str]:
         if value is None:
             return None
-        return _as_utc(value).isoformat(timespec="seconds")
+        resolved = _as_utc(value)
+        return resolved.isoformat(timespec="seconds") if resolved is not None else None
 
     return {
         "id": rec.id,
@@ -1073,7 +1080,7 @@ class AgentRuntime:
                         error_json=None,
                     )
                 )
-                if result.rowcount == 1:
+                if rows_affected(result) == 1:
                     claimed.append(rec.id)
             await db.commit()
         return claimed
@@ -1099,7 +1106,7 @@ class AgentRuntime:
                 )
             )
             await db.commit()
-        if result.rowcount == 1:
+        if rows_affected(result) == 1:
             logger.info("[AgentRuntime] task %s SUCCEEDED (attempt %d)", task_id, attempt)
             return {"outcome": "succeeded", "task_id": task_id, "status": STATUS_SUCCEEDED}
         return {"outcome": "superseded", "task_id": task_id, "status": None}
@@ -1159,7 +1166,7 @@ class AgentRuntime:
                 },
             )
             await db.commit()
-        if result.rowcount != 1:
+        if rows_affected(result) != 1:
             return {"outcome": "superseded", "task_id": task_id, "status": None}
         logger.warning(
             "[AgentRuntime] task %s attempt %d -> %s (%s)",
@@ -1342,7 +1349,7 @@ class AgentRuntime:
                     )
                     .values(**values)
                 )
-                recovered += int(result.rowcount)
+                recovered += rows_affected(result)
             if recovered:
                 await db.commit()
         return recovered

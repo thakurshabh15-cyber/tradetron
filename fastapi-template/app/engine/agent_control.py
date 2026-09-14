@@ -940,10 +940,12 @@ class AgentControlService:
         if quote is not None and isinstance(quote, dict):
             for key in ("price", "ltp", "last_price", "close", "last"):
                 try:
-                    value = float(quote.get(key))
-                    if value > 0:
-                        price = value
-                        break
+                    raw = quote.get(key)
+                    if raw is not None:
+                        value = float(raw)
+                        if value > 0:
+                            price = value
+                            break
                 except (TypeError, ValueError):
                     continue
         if price is None:
@@ -958,6 +960,7 @@ class AgentControlService:
         # freshness window / explicitly DEMO).  STALE/UNAVAILABLE cached prices
         # never produce a TRADE decision here — the intent boundary would reject
         # them later, but the durable decision row must stay honest.
+        assert quote is not None and isinstance(quote, dict)
         status = str(quote.get("data_status") or "UNKNOWN").upper()
         is_stale = quote.get("is_stale")
         age = quote.get("age_seconds")
@@ -1001,7 +1004,8 @@ class AgentControlService:
             row.reason = note
             return row
 
-        action = _load(strategy.get("action_json") or {}) or {}
+        assert strategy is not None
+        action = _load(strategy.get("action_json")) or {}
         if not isinstance(action, dict) or not action.get("side") or not action.get("quantity"):
             row.decision = DECISION_NO_TRADE
             row.reason = f"{note}; strategy action is incomplete"

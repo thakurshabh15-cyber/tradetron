@@ -21,7 +21,7 @@ def main():
     
     # Add coverage if available
     try:
-        import pytest_cov
+        import pytest_cov  # type: ignore[import-not-found]
         cmd.extend(["--cov=app.webhooks", "--cov-report=term-missing"])
     except ImportError:
         pass

@@ -99,7 +99,7 @@ def test_order_manager_hook_feeds_closed_pnl(monkeypatch):
         async def place_order(self, req):
             return {"filled_price": 90.0, "broker_order_id": "T1"}
 
-    om = OrderManager(broker=StaticBroker())
+    om = OrderManager(broker=StaticBroker())  # type: ignore[arg-type]
     monkeypatch.setattr(om, "risk_manager", FakeRM(), raising=False)
 
     pos = Position(

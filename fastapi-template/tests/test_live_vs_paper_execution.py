@@ -200,6 +200,7 @@ async def test_live_order_execution_and_margin_rejection():
             rejected_order = res.scalars().all()[0]
             assert rejected_order is not None
             assert rejected_order.mode == "LIVE"
+            assert rejected_order.error_message is not None
             assert "Insufficient margin" in rejected_order.error_message
 
     # B. Reseed SUFFICIENT broker-truth cash BEFORE the successful placement

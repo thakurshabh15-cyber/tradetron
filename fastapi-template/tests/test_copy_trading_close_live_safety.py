@@ -175,6 +175,7 @@ async def test_live_close_guard_block_never_fabricates_close(monkeypatch):
 
     async with SessionLocal() as db:
         position = await db.get(PositionRecord, seeded["position_id"])
+        assert position is not None
         assert position.status == "OPEN", "LIVE close must NEVER be fabricated on guard block"
         assert position.realized_pnl == 0.0
 
@@ -200,6 +201,7 @@ async def test_live_close_guard_block_never_fabricates_close(monkeypatch):
         assert trades == [], "no fabricated exit trade on guard block"
 
         follower = await db.get(CopyFollowerRecord, seeded["follower_sub_id"])
+        assert follower is not None
         assert (follower.realized_pnl or 0.0) == 0.0
 
 
@@ -230,6 +232,7 @@ async def test_live_close_invokes_assert_live_dispatch_allowed(monkeypatch):
 
     async with SessionLocal() as db:
         position = await db.get(PositionRecord, seeded["position_id"])
+        assert position is not None
         assert position.status == "OPEN"
         order = (
             await db.execute(
@@ -281,6 +284,7 @@ async def test_live_close_successful_dispatch_persists_confirmed_state(monkeypat
 
     async with SessionLocal() as db:
         position = await db.get(PositionRecord, seeded["position_id"])
+        assert position is not None
         assert position.status == "CLOSED"
         assert position.realized_pnl == round((260.5 - 250.0) * 20, 2)  # = 210.0
         assert position.broker_account_id == seeded["broker_id"]
@@ -313,6 +317,7 @@ async def test_live_close_successful_dispatch_persists_confirmed_state(monkeypat
         assert trade.pnl == 210.0
 
         follower = await db.get(CopyFollowerRecord, seeded["follower_sub_id"])
+        assert follower is not None
         assert (follower.realized_pnl or 0.0) == 210.0
 @pytest.mark.asyncio
 async def test_live_close_dispatch_failure_never_fabricates_close(monkeypatch):
@@ -339,6 +344,7 @@ async def test_live_close_dispatch_failure_never_fabricates_close(monkeypatch):
 
     async with SessionLocal() as db:
         position = await db.get(PositionRecord, seeded["position_id"])
+        assert position is not None
         assert position.status == "OPEN", "no fabricated close on broker failure"
         assert position.realized_pnl == 0.0
 
@@ -386,6 +392,7 @@ async def test_live_close_no_owned_connected_broker_rejected(monkeypatch):
 
     async with SessionLocal() as db:
         position = await db.get(PositionRecord, seeded["position_id"])
+        assert position is not None
         assert position.status == "OPEN"
 
         order = (
@@ -427,6 +434,7 @@ async def test_live_close_cross_tenant_broker_never_selected(monkeypatch):
 
     async with SessionLocal() as db:
         position = await db.get(PositionRecord, seeded["position_id"])
+        assert position is not None
         assert position.status == "OPEN", "no fabricated close through a foreign broker"
 
         order = (
@@ -461,6 +469,7 @@ async def test_paper_close_unchanged_no_broker_involved(monkeypatch):
 
     async with SessionLocal() as db:
         position = await db.get(PositionRecord, seeded["position_id"])
+        assert position is not None
         assert position.status == "CLOSED"
         assert position.realized_pnl == round((255.0 - 250.0) * 20, 2)  # = 100.0
 
@@ -492,9 +501,11 @@ async def test_paper_close_unchanged_no_broker_involved(monkeypatch):
         )
 
         user = await db.get(UserRecord, seeded["follower_id"])
+        assert user is not None
         assert user.paper_balance == round(1_000_000.0 + 100.0, 2)
 
         follower = await db.get(CopyFollowerRecord, seeded["follower_sub_id"])
+        assert follower is not None
         assert (follower.realized_pnl or 0.0) == 100.0
 @pytest.mark.asyncio
 async def test_paper_master_close_never_creates_live_follower_close(monkeypatch):
@@ -520,6 +531,7 @@ async def test_paper_master_close_never_creates_live_follower_close(monkeypatch)
 
     async with SessionLocal() as db:
         position = await db.get(PositionRecord, seeded["position_id"])
+        assert position is not None
         assert position.status == "OPEN", "LIVE follower must not be closed by a simulated-mode fan-out"
         live_filled = (
             await db.execute(

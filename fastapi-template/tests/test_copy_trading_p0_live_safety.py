@@ -221,6 +221,7 @@ async def test_update_rejects_cross_tenant_broker_account_id():
 
     async with SessionLocal() as db:
         follower_row = await db.get(CopyFollowerRecord, sub_id)
+        assert follower_row is not None
         assert follower_row.broker_account_id == own_broker_id
 
     resp = client.patch(
@@ -313,7 +314,8 @@ async def test_live_follower_blocked_never_fabricates_fill(monkeypatch):
     snap, broker_id, user_id = await _setup_engine_scenario("LIVE")
 
     outcome = await copy_trading_engine._execute_single_follower_order(
-        follower=snap, symbol="NIFTY50", side="BUY", master_qty=10,
+        follower=snap,  # type: ignore[arg-type]
+        symbol="NIFTY50", side="BUY", master_qty=10,
         order_type="MARKET", price=250.0, master_mode="LIVE",
         master_order_id="M1",
     )
@@ -365,7 +367,8 @@ async def test_live_follower_invokes_assert_live_dispatch_allowed(monkeypatch):
     snap, broker_id, user_id = await _setup_engine_scenario("LIVE")
 
     outcome = await copy_trading_engine._execute_single_follower_order(
-        follower=snap, symbol="NIFTY50", side="BUY", master_qty=10,
+        follower=snap,  # type: ignore[arg-type]
+        symbol="NIFTY50", side="BUY", master_qty=10,
         order_type="MARKET", price=250.0, master_mode="LIVE",
         master_order_id="M2",
     )
@@ -394,7 +397,8 @@ async def test_live_follower_successful_dispatch_persists_correct_state(monkeypa
     snap, broker_id, user_id = await _setup_engine_scenario("LIVE")
 
     outcome = await copy_trading_engine._execute_single_follower_order(
-        follower=snap, symbol="NIFTY50", side="BUY", master_qty=10,
+        follower=snap,  # type: ignore[arg-type]
+        symbol="NIFTY50", side="BUY", master_qty=10,
         order_type="MARKET", price=250.0, master_mode="LIVE",
         master_order_id="M3",
     )
@@ -462,7 +466,8 @@ async def test_live_follower_dispatch_failure_never_fabricates_fill(monkeypatch)
     snap, broker_id, user_id = await _setup_engine_scenario("LIVE")
 
     outcome = await copy_trading_engine._execute_single_follower_order(
-        follower=snap, symbol="NIFTY50", side="BUY", master_qty=10,
+        follower=snap,  # type: ignore[arg-type]
+        symbol="NIFTY50", side="BUY", master_qty=10,
         order_type="MARKET", price=250.0, master_mode="LIVE",
         master_order_id="M4",
     )
@@ -504,7 +509,8 @@ async def test_paper_follower_unchanged_no_broker_involved(monkeypatch):
     snap, broker_id, user_id = await _setup_engine_scenario("PAPER")
 
     outcome = await copy_trading_engine._execute_single_follower_order(
-        follower=snap, symbol="NIFTY50", side="BUY", master_qty=10,
+        follower=snap,  # type: ignore[arg-type]
+        symbol="NIFTY50", side="BUY", master_qty=10,
         order_type="MARKET", price=250.0, master_mode="PAPER",
         master_order_id="M5",
     )
@@ -566,7 +572,8 @@ async def test_engine_uses_server_derived_identity_cannot_use_other_users_broker
         user_id = follower.id
 
     outcome = await copy_trading_engine._execute_single_follower_order(
-        follower=snap, symbol="NIFTY50", side="BUY", master_qty=10,
+        follower=snap,  # type: ignore[arg-type]
+        symbol="NIFTY50", side="BUY", master_qty=10,
         order_type="MARKET", price=250.0, master_mode="LIVE",
         master_order_id="M6",
     )

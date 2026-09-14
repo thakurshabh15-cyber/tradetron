@@ -42,7 +42,7 @@ def _engine():
     class _StubBroker:
         pass
 
-    return TradingEngine(broker=_StubBroker(), tick_queue=asyncio.Queue())
+    return TradingEngine(broker=_StubBroker(), tick_queue=asyncio.Queue())  # type: ignore[arg-type]
 
 
 # ── 1. No quote → blocked ────────────────────────────────────────────────

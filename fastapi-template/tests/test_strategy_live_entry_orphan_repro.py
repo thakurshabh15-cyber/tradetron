@@ -100,7 +100,7 @@ class _ErrorPositions(_ConfirmingBroker):
 
 
 class _NonListPositions(_ConfirmingBroker):
-    async def get_positions(self):
+    async def get_positions(self):  # type: ignore[override]
         return None
 
 
@@ -138,7 +138,7 @@ async def test_live_entry_crash_recovered_by_window_c(monkeypatch):
     monkeypatch.setattr(TradingEngine, "_persist_strategy_live_fill",
                         _crash_on_persist)
 
-    engine = TradingEngine(broker=_CrashBroker(), tick_queue=asyncio.Queue())
+    engine = TradingEngine(broker=_CrashBroker(), tick_queue=asyncio.Queue())  # type: ignore[arg-type]
     strategy = {
         "id": str(uuid.uuid4()), "name": "Orphan LIVE Strat",
         "action": {"side": "BUY", "quantity": 10, "order_type": "MARKET"},
@@ -279,7 +279,7 @@ async def test_duplicate_signal_no_double_dispatch(monkeypatch):
     monkeypatch.setattr("app.brokers.get_broker_adapter",
                         lambda rec: broker)
 
-    engine = TradingEngine(broker=broker, tick_queue=asyncio.Queue())
+    engine = TradingEngine(broker=broker, tick_queue=asyncio.Queue())  # type: ignore[arg-type]
     strategy = {
         "id": str(uuid.uuid4()), "name": "Idempotency Strat",
         "action": {"side": "BUY", "quantity": 10, "order_type": "MARKET"},

@@ -142,7 +142,9 @@ FEATURE_LABELS: dict[str, str] = {
 }
 
 # Feature → which plan unlocks it (for upgrade_required hints)
-FEATURE_UPGRADE_PLAN: dict[str, dict[str, str]] = {
+# The value is the plan to move TO; None means the feature is not offered on
+# higher plans (copy trading caps at PRO).
+FEATURE_UPGRADE_PLAN: dict[str, dict[str, str | None]] = {
     "broker_link": {"FREE": "PRO", "PRO": "INSTITUTIONAL"},
     "strategy_create": {"FREE": "PRO", "PRO": "INSTITUTIONAL"},
     "copy_trading": {"FREE": "PRO", "PRO": None},

@@ -21,7 +21,7 @@ from app.webhooks.validation.signatures import (
 from app.webhooks.queue.redis_streams import webhook_queue, QueuedWebhook
 from app.webhooks.resiliency.idempotency import idempotency_store
 from app.webhooks.resiliency.rate_limiter import rate_limiter
-from app.webhooks.workers.pool import worker_pool
+from app.webhooks.workers.pool import worker_pool, WorkerPool
 from app.config import settings
 
 
@@ -150,7 +150,7 @@ class TestSignatureVerification:
         body = json.dumps(zerodha_order_fill_payload, separators=(',', ':')).encode()
         result = verifier.verify(body, {})
         assert result.valid is False
-        assert "Invalid Zerodha checksum" in result.error
+        assert result.error is not None and "Invalid Zerodha checksum" in result.error
 
     def test_razorpay_hmac_verification_valid(self, razorpay_payment_captured_payload):
         """Test valid Razorpay HMAC verification."""
@@ -169,7 +169,7 @@ class TestSignatureVerification:
         headers = {"X-Razorpay-Signature": "invalid_signature"}
         result = verifier.verify(body, headers)
         assert result.valid is False
-        assert "Invalid signature" in result.error
+        assert result.error is not None and "Invalid signature" in result.error
 
     def test_upstox_hmac_verification_valid(self):
         """Test valid Upstox HMAC verification."""
@@ -686,6 +686,7 @@ class TestQueueIntegration:
                 timestamp=datetime.now(timezone.utc),
                 provider="zerodha",
                 payload={"order_id": "TEST1"},
+                idempotency_key=None,
             ),
             attempt=1,
         )
@@ -720,6 +721,7 @@ class TestQueueIntegration:
                 timestamp=datetime.now(timezone.utc),
                 provider="zerodha",
                 payload={"order_id": "TEST2"},
+                idempotency_key=None,
             ),
             attempt=5,  # At max_retries for broker_critical
         )
@@ -775,6 +777,7 @@ class TestQueueIntegration:
                 timestamp=datetime.now(timezone.utc),
                 provider="zerodha",
                 payload={"order_id": "TEST6"},
+                idempotency_key=None,
             ),
             attempt=0,
         )
@@ -858,6 +861,7 @@ class TestQueueIntegration:
                 timestamp=datetime.now(timezone.utc),
                 provider="zerodha",
                 payload={"order_id": "TEST7"},
+                idempotency_key=None,
             ),
             attempt=5,
         )
@@ -911,6 +915,7 @@ class TestQueueIntegration:
                 timestamp=datetime.now(timezone.utc),
                 provider="zerodha",
                 payload={"order_id": "TEST3"},
+                idempotency_key=None,
             ),
             attempt=0,
         )
@@ -1217,6 +1222,7 @@ class TestQueueIntegration:
                         timestamp=datetime.now(timezone.utc),
                         provider="zerodha",
                         payload={"order_id": "TEST5"},
+                        idempotency_key=None,
                     ),
                     attempt=0,
                 ),
@@ -1465,6 +1471,7 @@ class TestQueueIntegration:
                 timestamp=datetime.now(timezone.utc),
                 provider="zerodha",
                 payload={"order_id": "NOKEY1"},
+                idempotency_key=None,
             ),
             attempt=0,
         )
@@ -1610,6 +1617,7 @@ class TestPELRecovery:
         # the min-idle safety threshold to Redis verbatim.
         mock_redis.xautoclaim.assert_awaited_once()
         call = mock_redis.xautoclaim.await_args
+        assert call is not None
         assert call.args[1] == "workers"
         assert call.args[2] == "recovery-test"
         assert call.args[3] == 120_000
@@ -1636,7 +1644,9 @@ class TestPELRecovery:
 
         assert results == []
         mock_redis.xautoclaim.assert_awaited_once()
-        assert mock_redis.xautoclaim.await_args.args[3] == 120_000
+        await_args = mock_redis.xautoclaim.await_args
+        assert await_args is not None
+        assert await_args.args[3] == 120_000
 
     @pytest.mark.asyncio
     async def test_pel_recovery_skips_queue_with_no_pending(self, mock_redis):
@@ -1676,7 +1686,9 @@ class TestPELRecovery:
         assert len(results) == 2
         # A single bounded XAUTOCLAIM per queue - no unbounded drain loop.
         assert mock_redis.xautoclaim.await_count == 1
-        assert mock_redis.xautoclaim.await_args.kwargs["count"] == 2
+        await_args = mock_redis.xautoclaim.await_args
+        assert await_args is not None
+        assert await_args.kwargs["count"] == 2
 
     @pytest.mark.asyncio
     async def test_pel_recovery_multiple_queues_same_group(self, mock_redis):
@@ -1845,8 +1857,10 @@ class TestPELRecovery:
             await pool._recover_once()
 
         mock_nack.assert_called_once()
-        assert mock_nack.await_args.args[0] == "webhooks:broker:critical"
-        assert mock_nack.await_args.args[1] == "100-13"
+        await_args = mock_nack.await_args
+        assert await_args is not None
+        assert await_args.args[0] == "webhooks:broker:critical"
+        assert await_args.args[1] == "100-13"
     @pytest.mark.asyncio
     async def test_pel_recovery_error_does_not_crash_pool(self, mock_redis):
         """Recovery failures are contained: a broken XPENDING/XAUTOCLAIM must

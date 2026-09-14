@@ -145,7 +145,7 @@ def main() -> int:
     failures = []
     # CRITICAL invariant: total allowed calls across ALL workers must NOT exceed max_requests
     # This proves the global rate limit is enforced across process boundaries via Redis
-    if rl.get("_total_allowed_calls", 0) > rl.get("_max_requests"):
+    if (rl.get("_total_allowed_calls", 0) or 0) > (rl.get("_max_requests") or 0):
         failures.append(
             f"global rate limit violated: {rl['_total_allowed_calls']} allowed "
             f"exceeds max {rl['_max_requests']}"

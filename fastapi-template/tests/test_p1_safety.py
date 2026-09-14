@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import pytest
 from pydantic import ValidationError
+from typing import Any
 
 from app.brokers import BrokerModeBlockedError
 from app.config import Settings, settings
@@ -54,7 +55,7 @@ ZERODHA_PAYLOAD = dict(
 
 
 def _prod(**overrides) -> Settings:
-    base = dict(
+    base: dict[str, Any] = dict(
         environment="production",
         broker_mode="simulated",
         jwt_secret="p" * 40,

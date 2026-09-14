@@ -59,7 +59,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import app.brokers
 from app.brokers.postback import FINALIZED_ORDER_STATUSES
 from app.core.logging import get_logger
-from app.db.session import SessionLocal
+from app.db.session import SessionLocal, rows_affected
 from app.models.broker_account import BrokerAccountRecord
 from app.models.trading import OrderRecord, PositionRecord, TradeRecord
 
@@ -439,7 +439,7 @@ class BrokerOrderReconciliationEngine:
                 )
                 .execution_options(synchronize_session=False)
             )
-            if result.rowcount != 1:
+            if rows_affected(result) != 1:
                 await db.rollback()
                 return "skipped", "concurrent_finalize_won"
             await db.refresh(order)
@@ -503,7 +503,7 @@ class BrokerOrderReconciliationEngine:
             )
             .execution_options(synchronize_session=False)
         )
-        if result.rowcount != 1:
+        if rows_affected(result) != 1:
             await db.rollback()
             return "skipped", "concurrent_finalize_won"
         await db.commit()

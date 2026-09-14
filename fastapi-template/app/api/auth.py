@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Header, Request, status
-from sqlalchemy import or_, select
+from sqlalchemy import false, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -164,7 +164,7 @@ async def register(
     stmt = select(UserRecord).where(
         or_(
             UserRecord.email == email_clean,
-            (UserRecord.phone == phone_clean) if phone_clean else False,
+            (UserRecord.phone == phone_clean) if phone_clean else false(),
         )
     )
     res = await db.execute(stmt)
@@ -723,8 +723,8 @@ async def oauth_login(
                 detail="Google OAuth is not configured. Set GOOGLE_OAUTH_CLIENT_ID in .env",
             )
         try:
-            from google.oauth2 import id_token as google_id_token
-            from google.auth.transport import requests as google_requests
+            from google.oauth2 import id_token as google_id_token  # pyright: ignore[reportMissingImports]  # optional dep — guarded by ImportError below
+            from google.auth.transport import requests as google_requests  # pyright: ignore[reportMissingImports]  # optional dep — guarded by ImportError below
 
             id_info = google_id_token.verify_oauth2_token(
                 req.token, google_requests.Request(), app_settings.google_oauth_client_id

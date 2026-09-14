@@ -141,7 +141,7 @@ async def _seed_user_and_broker(broker_name: str = "ZERODHA") -> tuple[str, str]
 
 async def _seed_position(
     user_id: str,
-    broker_account_id: str,
+    broker_account_id: str | None,
     *,
     mode: str = "LIVE",
     sl: float | None = 100.0,

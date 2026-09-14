@@ -253,6 +253,8 @@ def run_backtest(
     def _close_trade(exit_idx: int, exit_price: float, reason: str) -> None:
         nonlocal equity, peak_equity, max_drawdown_pct, holding_bars_total, open_trade
         t = open_trade
+        if t is None:  # defensive: never close a position that is not open
+            return
 
         # Statutory charges per executed leg (exact, not proportional)
         if t.side == "BUY":

@@ -31,7 +31,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.db.session import SessionLocal
+from app.db.session import SessionLocal, rows_affected
 from app.brokers import (
     BrokerModeBlockedError,
     assert_live_dispatch_allowed,
@@ -112,7 +112,7 @@ async def _claim_copy_follower_order(
                     position_id=None,
                 )
             )
-            if retry.rowcount == 1:
+            if rows_affected(retry) == 1:
                 await session.commit()
                 return existing.id
             await session.rollback()
@@ -179,7 +179,7 @@ async def _reject_copy_follower_claim(
                 broker_account_id=None,
             )
         )
-        if result.rowcount == 1:
+        if rows_affected(result) == 1:
             await session.commit()
         else:
             await session.rollback()
@@ -230,7 +230,7 @@ async def _persist_copy_follower_live_fill(
             )
             .execution_options(synchronize_session=False)
         )
-        if result.rowcount != 1:
+        if rows_affected(result) != 1:
             await session.rollback()
             finalized = await session.get(OrderRecord, claim_id)
             return {
@@ -903,6 +903,12 @@ class CopyTradingEngine:
             # 3. Concurrently close all follower positions
             tasks = []
             for pos in positions:
+                if pos.user_id is None:
+                    logger.warning(
+                        "Mirrored close: position %s has no owner; left untouched",
+                        pos.id,
+                    )
+                    continue
                 follower = followers_by_user.get(pos.user_id)
                 if follower is None:
                     logger.warning(
@@ -1008,7 +1014,6 @@ class CopyTradingEngine:
                         )
                         return {"success": False, "reason": "no_owned_broker"}
 
-                if p.mode == "LIVE":
                     # B. LIVE dispatch MUST pass the guard before any broker call.
                     try:
                         assert_live_dispatch_allowed()
@@ -1032,7 +1037,7 @@ class CopyTradingEngine:
                         .where(PositionRecord.id == p.id, PositionRecord.status == "OPEN")
                         .values(status="CLOSED", closed_at=datetime.now(timezone.utc))
                     )
-                    if cas_result.rowcount != 1:
+                    if rows_affected(cas_result) != 1:
                         return {"success": False, "reason": "already_closed"}
                     p.status = "CLOSED"
                     p.closed_at = datetime.now(timezone.utc)
@@ -1131,7 +1136,7 @@ class CopyTradingEngine:
                         .where(PositionRecord.id == p.id, PositionRecord.status == "OPEN")
                         .values(status="CLOSED", closed_at=datetime.now(timezone.utc))
                     )
-                    if paper_cas.rowcount != 1:
+                    if rows_affected(paper_cas) != 1:
                         return {"success": False, "reason": "already_closed"}
                     p.status = "CLOSED"
                     p.closed_at = datetime.now(timezone.utc)

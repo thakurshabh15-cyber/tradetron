@@ -219,12 +219,15 @@ async def oauth_callback(
             details={"broker": "ZERODHA", "client_id": client_code},
         )
 
+        token_expires_at = acc.token_expires_at
+        expires_at_iso = token_expires_at.isoformat() if token_expires_at is not None else None
+
         return {
             "success": True,
             "message": "Zerodha Kite Connect linked successfully via OAuth!",
             "account_id": acc.id,
             "status": "CONNECTED",
-            "token_expires_at": acc.token_expires_at.isoformat(),
+            "token_expires_at": expires_at_iso,
         }
 
     elif broker_norm == "UPSTOX":
@@ -269,12 +272,15 @@ async def oauth_callback(
             details={"broker": "UPSTOX", "client_id": client_code},
         )
 
+        token_expires_at = acc.token_expires_at
+        expires_at_iso = token_expires_at.isoformat() if token_expires_at is not None else None
+
         return {
             "success": True,
             "message": "Upstox Pro linked successfully via OAuth!",
             "account_id": acc.id,
             "status": "CONNECTED",
-            "token_expires_at": acc.token_expires_at.isoformat(),
+            "token_expires_at": expires_at_iso,
             }
 
     elif broker_norm == "ANGEL_ONE":
@@ -327,12 +333,15 @@ async def oauth_callback(
             details={"broker": "ANGEL_ONE", "client_code": client_code},
         )
 
+        token_expires_at = acc.token_expires_at
+        expires_at_iso = token_expires_at.isoformat() if token_expires_at is not None else None
+
         return {
             "success": True,
             "message": "Angel One SmartAPI linked successfully!",
             "account_id": acc.id,
             "status": "CONNECTED",
-            "token_expires_at": acc.token_expires_at.isoformat(),
+            "token_expires_at": expires_at_iso,
             "totp_code": totp_code,
         }
 
@@ -598,7 +607,8 @@ async def link_broker_manual(
         )
         db.add(acc)
 
-        acc.set_api_key(req.api_key)
+        if req.api_key:
+            acc.set_api_key(req.api_key)
     if req.api_secret:
         acc.set_api_secret(req.api_secret)
     if req.access_token:

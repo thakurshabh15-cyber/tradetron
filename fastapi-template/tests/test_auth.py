@@ -70,7 +70,9 @@ async def test_auth_full_lifecycle():
         )
         assert otp_req_res.status_code == 200, otp_req_res.text
         # Fetch real generated OTP from secure memory store
-        otp_code = _IN_MEMORY_OTP_STORE.get(otp_identifier)["code"]
+        otp_entry = _IN_MEMORY_OTP_STORE.get(otp_identifier)
+        assert otp_entry is not None
+        otp_code = otp_entry["code"]
 
         otp_verify_res = await client.post(
             "/api/auth/verify-otp",

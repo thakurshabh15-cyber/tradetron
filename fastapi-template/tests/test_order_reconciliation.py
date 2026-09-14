@@ -101,13 +101,14 @@ async def _seed_order(
         return order.id
 
 
-async def _fetch_order(order_id: str) -> OrderRecord:
+async def _fetch_order(order_id: str) -> OrderRecord | None:
     async with SessionLocal() as db:
         return await db.get(OrderRecord, order_id)
 
 
 async def _counts_for(order_id: str) -> tuple[int, int]:
     order = await _fetch_order(order_id)
+    assert order is not None
     async with SessionLocal() as db:
         trades = (
             await db.execute(
@@ -195,6 +196,7 @@ async def test_stale_pending_filled_is_finalized(monkeypatch):
     summary = await engine.reconcile_once()
 
     order = await _fetch_order(oid)
+    assert order is not None
     assert order.status == "FILLED"
     assert order.filled_price == 2505.0
     assert order.filled_quantity == 10
@@ -225,6 +227,7 @@ async def test_stale_pending_open_stays_pending(monkeypatch):
     summary = await engine.reconcile_once()
 
     order = await _fetch_order(oid)
+    assert order is not None
     assert order.status == "PENDING"
     trades, positions = await _counts_for(oid)
     assert trades == 0 and positions == 0
@@ -251,6 +254,7 @@ async def test_stale_pending_rejected_marks_local_rejected(monkeypatch):
     summary = await engine.reconcile_once()
 
     order = await _fetch_order(oid)
+    assert order is not None
     assert order.status == "REJECTED"
     assert "REJECTED" in (order.error_message or "")
     trades, positions = await _counts_for(oid)
@@ -278,6 +282,7 @@ async def test_unknown_status_no_fabrication_no_placement(monkeypatch):
     summary = await engine.reconcile_once()
 
     order = await _fetch_order(oid)
+    assert order is not None
     assert order.status == "PENDING"
     assert order.error_message is None
     trades, positions = await _counts_for(oid)
@@ -308,6 +313,7 @@ async def test_adapter_without_status_api_is_safely_skipped(monkeypatch):
     summary = await engine.reconcile_once()
 
     order = await _fetch_order(oid)
+    assert order is not None
     assert order.status == "PENDING"
     trades, positions = await _counts_for(oid)
     assert trades == 0 and positions == 0
@@ -337,6 +343,7 @@ async def test_fresh_pending_order_is_not_reconciled(monkeypatch):
     assert fake.status_calls == 0
     assert fake.place_calls == 0
     order = await _fetch_order(oid)
+    assert order is not None
     assert order.status == "PENDING"
     assert summary["scanned"] == 0
 
@@ -371,6 +378,7 @@ async def test_missing_broker_reference_reconciled_via_positions(monkeypatch):
     assert fake.place_calls == 0  # reconciliation is strictly read-only
     assert fake.status_calls == 0  # Window-C uses get_positions, not status
     order = await _fetch_order(oid)
+    assert order is not None
     # No live exposure found → the claim stays PENDING (uncertain; never
     # fabricate CANCELLED from a positions snapshot).
     assert order.status == "PENDING"
@@ -435,6 +443,8 @@ async def test_user_tenant_isolation_enforced(monkeypatch):
 
     order_a = await _fetch_order(oid_a)
     order_b = await _fetch_order(oid_b)
+    assert order_a is not None
+    assert order_b is not None
     assert order_a.status == "FILLED"
     assert order_b.status == "PENDING", "cross-tenant order must not be touched"
     assert summary["filled"] == 1
@@ -513,6 +523,8 @@ async def test_reconciliation_errors_do_not_crash(monkeypatch):
     assert summary["filled"] == 1
     order_ok = await _fetch_order(oid_ok)
     order_bad = await _fetch_order(oid_bad)
+    assert order_ok is not None
+    assert order_bad is not None
     assert order_ok.status == "FILLED"
     assert order_bad.status == "PENDING"
 
@@ -675,6 +687,7 @@ async def test_broker_mode_simulated_blocks_real_status_read(monkeypatch):
     summary = await engine.reconcile_once()
 
     order = await _fetch_order(oid)
+    assert order is not None
     assert order.status == "PENDING"
     assert summary["unknown"] >= 1 or summary["errors"] >= 1
     trades, positions = await _counts_for(oid)
@@ -722,6 +735,7 @@ async def test_concurrent_passes_do_not_overlap(monkeypatch):
     )
 
     order = await _fetch_order(oid)
+    assert order is not None
     assert order.status == "FILLED"
     assert s1["filled"] + s2["filled"] == 1, (
         "exactly one pass may finalize; the other observes a non-PENDING row"

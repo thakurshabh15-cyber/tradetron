@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import asyncio
 from dataclasses import dataclass, asdict
-from typing import Any, Optional
+from typing import Any, Optional, cast
 from datetime import datetime, timezone
 import redis.asyncio as redis
 from redis.asyncio import Redis
@@ -23,7 +23,7 @@ class QueuedWebhook:
     """Webhook event in the queue"""
     envelope: WebhookEnvelope
     attempt: int = 0
-    queued_at: datetime = None
+    queued_at: datetime | None = None
     last_error: str | None = None
     
     def __post_init__(self):
@@ -34,7 +34,7 @@ class QueuedWebhook:
         return {
             "envelope": self.envelope.model_dump_json(),
             "attempt": str(self.attempt),
-            "queued_at": self.queued_at.isoformat(),
+            "queued_at": self.queued_at.isoformat() if self.queued_at is not None else "",
             "last_error": self.last_error or "",
         }
     
@@ -96,14 +96,14 @@ class WebhookQueue:
         queue_name = route.queue_name
         
         queued = QueuedWebhook(envelope=envelope)
-        entry_id = await self._redis.xadd(queue_name, queued.to_stream_entry())
+        entry_id = await self._redis.xadd(queue_name, cast(Any, queued.to_stream_entry()))
         
         # Track metrics
         await self._redis.hincrby("webhook:metrics:enqueued", queue_name, 1)
         await self._redis.hincrby("webhook:metrics:enqueued", "total", 1)
         
         logger.debug("Enqueued webhook %s to %s (entry: %s)", envelope.event_id, queue_name, entry_id)
-        return entry_id
+        return str(entry_id)
     
     async def dequeue(
         self, 
@@ -118,7 +118,7 @@ class WebhookQueue:
         # Read from highest priority queue first
         for queue_name in queue_names:
             try:
-                streams = {queue_name: ">"}
+                streams = cast(Any, {queue_name: ">"})
                 results = await self._redis.xreadgroup(
                     groupname="workers",
                     consumername=worker_pool,
@@ -129,7 +129,9 @@ class WebhookQueue:
                 
                 if results:
                     events = []
-                    for stream_name, entries in results:
+                    for stream_name, entries in cast(
+                        Any, results
+                    ):
                         for entry_id, data in entries:
                             events.append((entry_id, QueuedWebhook.from_stream_entry(entry_id, data)))
                     return events
@@ -262,7 +264,7 @@ class WebhookQueue:
             # Requeue with incremented attempt
             webhook.attempt += 1
             webhook.last_error = error
-            await self._redis.xadd(queue_name, webhook.to_stream_entry())
+            await self._redis.xadd(queue_name, cast(Any, webhook.to_stream_entry()))
             # Resolve the original pending entry immediately after the retry
             # copy is durably written — and BEFORE the best-effort metric call
             # below, so a metric failure can never re-leak the entry into the
@@ -285,7 +287,7 @@ class WebhookQueue:
             "failed_at": datetime.now(timezone.utc).isoformat(),
             "original_queue": resolve_route(webhook.envelope.provider, webhook.envelope.event_type).queue_name,
         }
-        await self._redis.xadd("webhooks:dlq", dlq_entry)
+        await self._redis.xadd("webhooks:dlq", cast(Any, dlq_entry))
         try:
             await self._redis.hincrby("webhook:metrics:dlq", "total", 1)
         except Exception as exc:

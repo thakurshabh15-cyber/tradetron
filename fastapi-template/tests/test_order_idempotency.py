@@ -69,14 +69,16 @@ async def _create_connected_broker(user_id: str) -> str:
 
 async def _order_rows_for(user_id: str, key: str) -> list[OrderRecord]:
     async with SessionLocal() as db:
-        return (
-            await db.execute(
-                select(OrderRecord).where(
-                    OrderRecord.user_id == user_id,
-                    OrderRecord.client_order_id == key,
+        return list(
+            (
+                await db.execute(
+                    select(OrderRecord).where(
+                        OrderRecord.user_id == user_id,
+                        OrderRecord.client_order_id == key,
+                    )
                 )
-            )
-        ).scalars().all()
+            ).scalars().all()
+        )
 
 
 # ── manual /api/trades/place ────────────────────────────────────────────────
@@ -308,6 +310,7 @@ async def test_broker_failure_persists_rejected_then_retry_succeeds(monkeypatch)
             ).scalar_one()
             row_id = claim.id
             assert claim.status == "REJECTED"
+            assert claim.error_message is not None
             assert "outage" in claim.error_message
             trades = (
                 await db.execute(

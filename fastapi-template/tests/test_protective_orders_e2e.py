@@ -244,6 +244,7 @@ async def test_e2e_live_protection_lifecycle_protected_replace_cleanup(monkeypat
         assert {r.leg for r in rows} == {LEG_STOP_LOSS, LEG_TAKE_PROFIT}
         for r in rows:
             assert r.status == "PLACED"
+            assert r.broker_protective_order_id is not None
             assert r.broker_protective_order_id.startswith("FAKE-")
         assert len(protect_broker.placed) == 2
         assert protect_broker.cancelled == []

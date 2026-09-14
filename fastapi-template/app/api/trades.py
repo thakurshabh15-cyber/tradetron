@@ -11,10 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user, get_optional_current_user
 from app.core.logging import get_logger
-from app.db.session import get_db
+from app.db.session import get_db, rows_affected
 from app.models.trading import TradeRecord
 from app.models.user import UserRecord
-from app.schemas.trading import TradePublicRead, TradeRead, TradeStats
+from app.schemas.trading import Side, TradePublicRead, TradeRead, TradeStats
 
 logger = get_logger("api.trades")
 
@@ -61,7 +61,7 @@ async def list_trades(
                 order_id=r.order_id,
                 strategy_name=r.strategy_name,
                 symbol=r.symbol,
-                side=r.side,
+                side=Side(r.side),
                 quantity=r.quantity,
                 price=Decimal(str(r.price)),
                 pnl=Decimal(str(r.pnl)) if r.pnl is not None else None,
@@ -74,7 +74,7 @@ async def list_trades(
         TradePublicRead(
             id=r.id,
             symbol=r.symbol,
-            side=r.side,
+            side=Side(r.side),
             quantity=r.quantity,
             price=Decimal(str(r.price)),
             executed_at=r.executed_at,
@@ -160,6 +160,8 @@ def _quote_price(quote) -> float | None:
             for attr in ("price", "last_price", "ltp", "close")
         )
     for value in candidates:
+        if value is None:
+            continue
         try:
             value = float(value)
         except (TypeError, ValueError):
@@ -307,7 +309,7 @@ async def _claim_or_replay_order(
                 position_id=None,
             )
         )
-        if retry_update.rowcount == 1:
+        if rows_affected(retry_update) == 1:
             await db.commit()
             await db.refresh(existing)
             return "claimed", existing
@@ -537,7 +539,7 @@ async def close_position(
         .where(PositionRecord.id == position_id, PositionRecord.status == "OPEN")
         .values(status="CLOSED", closed_at=datetime.now(timezone.utc))
     )
-    if result.rowcount != 1:
+    if rows_affected(result) != 1:
         raise HTTPException(
             status_code=404,
             detail="Open position not found or already closed by concurrent request",
@@ -842,6 +844,7 @@ async def place_manual_order(
     #    deployment must never leave a PENDING claim behind that would brick
     #    retries for the key.
     broker_account_id = None
+    broker_acc: Optional[BrokerAccountRecord] = None
     if req.mode == "LIVE":
         broker_stmt = select(BrokerAccountRecord).where(
             BrokerAccountRecord.user_id == user.id,
@@ -1132,6 +1135,7 @@ async def execute_dma_order(
     #    guard — both fire BEFORE any durable idempotency claim (a blocked
     #    deployment must never leave a PENDING claim behind).
     broker_account_id = None
+    acc_row: Optional[BrokerAccountRecord] = None
     if req.mode == "LIVE":
         stmt_acc = select(BrokerAccountRecord).where(
             BrokerAccountRecord.user_id == user.id,
@@ -1288,14 +1292,15 @@ async def execute_dma_order(
     # A fail-closed outcome then CLOSES the position (same economic event the
     # API caller experiences as a rejection) before real inventory can sit
     # unprotected on the exchange.
+    # 5. Entry-level protective orders (P2-3)
+    from app.engine.protective_orders import (
+        PROTECTION_STATE_PENDING,
+        protection_engine,
+    )
     protection_pending = (
         req.mode == "LIVE" and (sl_price is not None or tp_price is not None)
     )
     if protection_pending:
-        from app.engine.protective_orders import (
-            PROTECTION_STATE_PENDING,
-            protection_engine,
-        )
         position.protection_state = PROTECTION_STATE_PENDING
     await db.commit()
     if protection_pending:
@@ -1337,6 +1342,7 @@ async def execute_dma_order(
     await db.refresh(position)
 
     # 6. Notifications / audit / fan-out (best-effort)
+    from app.core.audit import log_audit_event
     try:
         from app.engine.alerts import notify_trade_fill
         await notify_trade_fill(user.id, symbol=clean_sym, side=req.side, quantity=quantity, price=executed_price, mode=req.mode)

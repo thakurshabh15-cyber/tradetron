@@ -53,10 +53,10 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 15  # Short-lived access token lifetime (production: 1440)
 
     # ── Broker credentials (Angel One) ───────────────────────────────
-    angel_api_key: str = Field("", validation_alias=AliasChoices("angel_api_key", "ANGEL_API_KEY"))
-    angel_client_id: str = Field("", validation_alias=AliasChoices("angel_client_id", "ANGEL_CLIENT_ID", "angel_client_code", "ANGEL_CLIENT_CODE"))
-    angel_pin: str = Field("", validation_alias=AliasChoices("angel_pin", "ANGEL_PIN", "angel_password", "ANGEL_PASSWORD"))
-    angel_totp_key: str = Field("", validation_alias=AliasChoices("angel_totp_key", "ANGEL_TOTP_KEY", "angel_totp_secret", "ANGEL_TOTP_SECRET"))
+    angel_api_key: str = Field(default="", validation_alias=AliasChoices("angel_api_key", "ANGEL_API_KEY"))
+    angel_client_id: str = Field(default="", validation_alias=AliasChoices("angel_client_id", "ANGEL_CLIENT_ID", "angel_client_code", "ANGEL_CLIENT_CODE"))
+    angel_pin: str = Field(default="", validation_alias=AliasChoices("angel_pin", "ANGEL_PIN", "angel_password", "ANGEL_PASSWORD"))
+    angel_totp_key: str = Field(default="", validation_alias=AliasChoices("angel_totp_key", "ANGEL_TOTP_KEY", "angel_totp_secret", "ANGEL_TOTP_SECRET"))
     broker_mode: str = "simulated"  # "simulated" | "live"
     environment: str = "development"  # "development" | "testing" | "production"
 
@@ -117,6 +117,7 @@ class Settings(BaseSettings):
     twilio_from_number: str = ""
     msg91_auth_key: str = ""
     msg91_sender_id: str = ""
+    msg91_template_id: str = ""  # MSG91 OTP template id (optional)
     # ── Razorpay Payment Gateway ─────────────────────────────────────
     razorpay_key_id: str = ""
     razorpay_key_secret: str = ""

@@ -14,6 +14,7 @@ import urllib.request
 import ssl
 import sys
 from datetime import datetime, timezone
+from typing import Any
 
 BASE = "https://tradetron-8jkz.onrender.com"
 CTX = ssl.create_default_context()
@@ -21,7 +22,7 @@ CTX = ssl.create_default_context()
 P = []
 
 
-def req(method: str, path: str, body=None, token=None, headers=None, timeout=25):
+def req(method: str, path: str, body=None, token=None, headers=None, timeout=25) -> tuple[int, Any]:
     url = BASE + path
     h = {}
     if token:

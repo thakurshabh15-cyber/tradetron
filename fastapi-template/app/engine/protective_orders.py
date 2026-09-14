@@ -602,7 +602,7 @@ class ProtectiveOrderManager:
 
             await self._mark_rows(
                 db, position_id, ROW_CANCELLED, reason or "cancelled",
-                skip_statuses={ROW_FAILED, ROW_COMPLETE},
+                skip_statuses=frozenset({ROW_FAILED, ROW_COMPLETE}),
             )
             await self._set_position_state(
                 db, position, state_after, None,
@@ -1095,8 +1095,10 @@ class ProtectiveOrderManager:
                     return
             row.status = ROW_PENDING
             row.order_type = order_type
-            row.trigger_price = trigger_price
-            row.limit_price = limit_price
+            if trigger_price is not None:
+                row.trigger_price = trigger_price
+            if limit_price is not None:
+                row.limit_price = limit_price
             row.side = entry["side"]
             row.quantity = position.quantity
             row.broker_protective_order_id = None

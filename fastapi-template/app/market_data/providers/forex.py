@@ -11,7 +11,7 @@ from app.core.logging import get_logger
 from app.market_data.base import AssetClass, BaseMarketDataProvider, DataFeedMode, NormalizedTick
 
 import math
-from typing import Any
+from typing import Any, cast
 
 logger = get_logger("market.forex")
 
@@ -122,14 +122,15 @@ class ForexMarketDataProvider(BaseMarketDataProvider):
                 df = df.tail(limit)
                 candles = []
                 for idx, row in df.iterrows():
-                    ts = int(idx.timestamp()) if hasattr(idx, "timestamp") else int(idx.to_pydatetime().timestamp())
+                    idx_pd = cast(Any, idx)
+                    ts = int(idx_pd.timestamp())
                     candles.append({
                         "time": ts,
-                        "open": round(float(row["Open"]), 4),
-                        "high": round(float(row["High"]), 4),
-                        "low": round(float(row["Low"]), 4),
-                        "close": round(float(row["Close"]), 4),
-                        "volume": float(row.get("Volume", 0)),
+                        "open": round(float(cast(Any, row["Open"])), 4),
+                        "high": round(float(cast(Any, row["High"])), 4),
+                        "low": round(float(cast(Any, row["Low"])), 4),
+                        "close": round(float(cast(Any, row["Close"])), 4),
+                        "volume": int(float(cast(Any, row.get("Volume", 0)))),
                     })
                 return candles
             except Exception as e:
@@ -187,16 +188,16 @@ class ForexMarketDataProvider(BaseMarketDataProvider):
                     yf_tickers = [_FOREX_YF_MAP.get(s, f"{s}=X") for s in symbols]
                     data = yf.download(yf_tickers, period="1d", interval="1m", progress=False)
                     updated = {}
-                    if not data.empty and "Close" in data:
+                    if data is not None and not data.empty and "Close" in data:
                         close_data = data["Close"]
                         for s in symbols:
                             yf_s = _FOREX_YF_MAP.get(s, f"{s}=X")
                             try:
                                 if len(yf_tickers) == 1:
-                                    last_val = close_data.dropna().iloc[-1]
+                                    last_val = cast(Any, close_data).dropna().iloc[-1]
                                 else:
-                                    last_val = close_data[yf_s].dropna().iloc[-1]
-                                if last_val and not math.isnan(last_val):
+                                    last_val = cast(Any, close_data[yf_s]).dropna().iloc[-1]
+                                if last_val is not None and not math.isnan(float(last_val)):
                                     updated[s] = float(last_val)
                             except Exception:
                                 pass

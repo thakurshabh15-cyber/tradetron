@@ -14,7 +14,7 @@ fallback so the endpoint never 500s if the library is ever missing.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse, Response
@@ -24,36 +24,44 @@ try:  # prometheus-client is a declared runtime dependency
 
     _PROM_CLIENT_AVAILABLE = True
 except Exception:  # pragma: no cover — defensive fallback only
-    CollectorRegistry = Counter = Gauge = generate_latest = None  # type: ignore[assignment,misc]
     _PROM_CLIENT_AVAILABLE = False
+    # Keep the names bound (None at runtime) so the guarded constructions
+    # below stay valid; ``cast`` at the call sites preserves their types.
+    CollectorRegistry = None  # type: ignore[assignment]
+    Counter = None  # type: ignore[assignment]
+    Gauge = None  # type: ignore[assignment]
+    generate_latest = None  # type: ignore[assignment]
 
 
-APP_REGISTRY = CollectorRegistry() if _PROM_CLIENT_AVAILABLE else None
+APP_REGISTRY = cast(Any, CollectorRegistry)() if _PROM_CLIENT_AVAILABLE else None
 
 if _PROM_CLIENT_AVAILABLE:
-    http_requests_total = Counter(
+    http_requests_total = cast(Any, Counter)(
         "tradetron_http_requests_total",
         "HTTP requests by method, route template and status",
         ["method", "route", "status"],
         registry=APP_REGISTRY,
     )
-    engine_state = Gauge(
+    engine_state = cast(Any, Gauge)(
         "tradetron_engine_state",
         "1 when the trading engine is running, else 0",
         registry=APP_REGISTRY,
     )
-    broker_mode_live = Gauge(
+    broker_mode_live = cast(Any, Gauge)(
         "tradetron_broker_mode_live",
         "1 when BROKER_MODE=live, else 0",
         registry=APP_REGISTRY,
     )
-    ws_channels = Gauge(
+    ws_channels = cast(Any, Gauge)(
         "tradetron_ws_channels",
         "Current number of websocket subscribers",
         registry=APP_REGISTRY,
     )
 else:  # pragma: no cover — defensive fallback
-    http_requests_total = engine_state = broker_mode_live = ws_channels = None  # type: ignore[assignment]
+    http_requests_total = None  # type: ignore[assignment]
+    engine_state = None  # type: ignore[assignment]
+    broker_mode_live = None  # type: ignore[assignment]
+    ws_channels = None  # type: ignore[assignment]
 
 
 async def metrics_middleware(request: Request, call_next: Any):
@@ -97,7 +105,7 @@ def render_metrics() -> Response:
     """
     if _PROM_CLIENT_AVAILABLE and APP_REGISTRY is not None:
         return Response(
-            content=generate_latest(APP_REGISTRY),
+            content=cast(Any, generate_latest)(APP_REGISTRY),
             media_type="text/plain; version=0.0.4",
         )
     return PlainTextResponse(  # pragma: no cover — defensive fallback

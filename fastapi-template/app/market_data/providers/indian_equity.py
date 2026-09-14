@@ -22,7 +22,7 @@ import asyncio
 import math
 import random
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from app.core.logging import get_logger
 from app.market_data.base import AssetClass, BaseMarketDataProvider, DataFeedMode, NormalizedTick
@@ -256,14 +256,15 @@ class IndianEquityMarketDataProvider(BaseMarketDataProvider):
                 df = df.tail(limit)
                 candles = []
                 for idx, row in df.iterrows():
-                    ts = int(idx.timestamp()) if hasattr(idx, "timestamp") else int(idx.to_pydatetime().timestamp())
+                    idx_pd = cast(Any, idx)
+                    ts = int(idx_pd.timestamp())
                     candles.append({
                         "time": ts,
-                        "open": round(float(row["Open"]), 2),
-                        "high": round(float(row["High"]), 2),
-                        "low": round(float(row["Low"]), 2),
-                        "close": round(float(row["Close"]), 2),
-                        "volume": float(row.get("Volume", 0)),
+                        "open": round(float(cast(Any, row["Open"])), 2),
+                        "high": round(float(cast(Any, row["High"])), 2),
+                        "low": round(float(cast(Any, row["Low"])), 2),
+                        "close": round(float(cast(Any, row["Close"])), 2),
+                        "volume": int(float(cast(Any, row.get("Volume", 0)))),
                     })
                 return candles
             except Exception as e:
@@ -389,7 +390,7 @@ class IndianEquityMarketDataProvider(BaseMarketDataProvider):
                             close=rec["close"],
                             change=rec["change"],
                             change_pct=rec["change_pct"],
-                            volume=rec["volume"],
+                            volume=int(float(cast(Any, rec["volume"]))),
                             asset_class=self._asset_class_for(sym),
                             feed_mode=self.feed_mode,
                             data_source=self.data_source,

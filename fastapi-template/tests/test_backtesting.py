@@ -57,8 +57,8 @@ def test_charges_are_truthful_and_net_of_costs():
 
 
 def test_determinism_same_seed_same_report():
-    kw = dict(quantity=65, timeframe="15m", days=25, seed=42,
-              stop_loss_pct=0.5, take_profit_pct=1.0)
+    kw: dict = dict(quantity=65, timeframe="15m", days=25, seed=42,
+                    stop_loss_pct=0.5, take_profit_pct=1.0)
     r1 = run_backtest("FINNIFTY", RSI_COND, **kw)
     r2 = run_backtest("FINNIFTY", RSI_COND, **kw)
     assert r1["metrics"] == r2["metrics"]

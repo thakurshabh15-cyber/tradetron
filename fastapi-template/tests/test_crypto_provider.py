@@ -204,7 +204,7 @@ def test_websocket_broadcast_carries_metadata():
         from app.market_data.manager import ws_manager
         fake = FakeWS()
         original = ws_manager._channels.get("market:stream")
-        ws_manager._channels["market:stream"] = {fake}
+        ws_manager._channels["market:stream"] = {fake}  # type: ignore[arg-type]
         try:
             await ws_manager.broadcast("market:stream", enriched)
             return fake, enriched

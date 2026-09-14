@@ -31,6 +31,7 @@ import uuid
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from httpx import Response as _HttpxResponse
 from sqlalchemy import delete, select
 
 from app.main import app
@@ -231,7 +232,7 @@ async def test_concurrent_manual_live_closes_single_dispatch(monkeypatch):
             return_exceptions=True,
         )
 
-    statuses = [r.status_code for r in results if not isinstance(r, Exception)]
+    statuses = [r.status_code for r in results if isinstance(r, _HttpxResponse)]
     assert len(statuses) == 2
     assert sorted(statuses) == [200, 404], f"expected one 200 and one 404, got {statuses}"
 
@@ -240,6 +241,7 @@ async def test_concurrent_manual_live_closes_single_dispatch(monkeypatch):
 
     async with SessionLocal() as db:
         pos = await db.get(PositionRecord, seeded["position_id"])
+        assert pos is not None
         assert pos.status == "CLOSED"
         assert pos.realized_pnl == round((2540.0 - 2500.0) * 10, 2)  # = 400.0
 
@@ -386,6 +388,7 @@ async def test_manual_live_close_broker_failure_never_fabricates_close(monkeypat
 
     async with SessionLocal() as db:
         pos = await db.get(PositionRecord, seeded["position_id"])
+        assert pos is not None
         assert pos.status == "OPEN", "broker failure must NOT fabricate CLOSED"
         assert pos.realized_pnl == 0.0, "no PnL may be booked without a real close"
         trades = (
@@ -437,6 +440,7 @@ async def test_concurrent_copy_live_closes_single_dispatch(monkeypatch):
 
     async with SessionLocal() as db:
         pos = await db.get(PositionRecord, seeded["position_id"])
+        assert pos is not None
         assert pos.status == "CLOSED"
         assert pos.realized_pnl == round((260.0 - 250.0) * 20, 2)  # = 200.0
 
@@ -479,6 +483,7 @@ async def test_copy_live_close_broker_failure_never_fabricates_close(monkeypatch
 
     async with SessionLocal() as db:
         pos = await db.get(PositionRecord, seeded["position_id"])
+        assert pos is not None
         assert pos.status == "OPEN", "copy close broker failure must NOT fabricate CLOSED"
         assert pos.realized_pnl == 0.0
         trades = (
@@ -517,6 +522,7 @@ async def test_paper_single_close_still_works():
 
     async with SessionLocal() as db:
         pos = await db.get(PositionRecord, seeded["position_id"])
+        assert pos is not None
         assert pos.status == "CLOSED"
         assert pos.realized_pnl == round((260.0 - 250.0) * 20, 2)  # = 200.0
         trades = (

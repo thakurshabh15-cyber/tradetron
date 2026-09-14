@@ -111,6 +111,7 @@ class TestZerodhaNormalization:
     def test_short(self):
         r = normalize_zerodha_position(
             {"tradingsymbol": "RELIANCE", "quantity": -5, "average_price": 2600.0})
+        assert r is not None
         assert r["side"] == "SHORT" and r["quantity"] == -5
 
     def test_zero_dropped(self):
@@ -124,6 +125,7 @@ class TestZerodhaNormalization:
 
     def test_uppercased(self):
         r = normalize_zerodha_position({"tradingsymbol": "reliance", "quantity": 10})
+        assert r is not None
         assert r["symbol"] == "RELIANCE"
 
 
@@ -137,6 +139,7 @@ class TestUpstoxNormalization:
     def test_short(self):
         r = normalize_upstox_position(
             {"tradingsymbol": "INFY", "quantity": -15, "buy_price": 1500.0})
+        assert r is not None
         assert r["side"] == "SHORT"
 
     def test_zero_dropped(self):
@@ -144,6 +147,7 @@ class TestUpstoxNormalization:
 
     def test_missing_buy_price_defaults_zero(self):
         r = normalize_upstox_position({"tradingsymbol": "INFY", "quantity": 10})
+        assert r is not None
         assert r["average_price"] == 0.0
 
 
@@ -157,16 +161,19 @@ class TestAngelOneNormalization:
     def test_short_string_qty(self):
         r = normalize_angelone_position(
             {"tradingsymbol": "SBIN", "netqty": "-10", "averageprc": 630.0})
+        assert r is not None
         assert r["side"] == "SHORT" and r["quantity"] == -10
 
     def test_int_qty(self):
         r = normalize_angelone_position(
             {"tradingsymbol": "SBIN", "netqty": 25, "averageprc": 620.0})
+        assert r is not None
         assert r["quantity"] == 25
 
     def test_string_avg_price(self):
         r = normalize_angelone_position(
             {"tradingsymbol": "SBIN", "netqty": 25, "averageprc": "620.75"})
+        assert r is not None
         assert r["average_price"] == 620.75
 
     def test_zero_dropped(self):
@@ -185,6 +192,7 @@ class TestBinanceNormalization:
 
     def test_large_qty(self):
         r = normalize_binance_position({"symbol": "BTCUSDT", "positionAmt": "100000.0"})
+        assert r is not None
         assert r["quantity"] == 100000
 
     def test_zero_dropped(self):
@@ -209,6 +217,7 @@ class TestSimulatedNormalization:
     def test_short(self):
         r = normalize_simulated_position(
             {"symbol": "RELIANCE", "quantity": -10, "avg_price": 2500.0})
+        assert r is not None
         assert r["side"] == "SHORT"
 
     def test_zero_dropped(self):
@@ -231,7 +240,8 @@ async def test_zerodha_long_filled(monkeypatch):
     s = await BrokerOrderReconciliationEngine().reconcile_once(now=_future_now())
     assert s["filled"] >= 1
     async with SessionLocal() as db:
-        assert (await db.get(OrderRecord, oid)).status == "FILLED"
+        rec = await db.get(OrderRecord, oid)
+        assert rec is not None and rec.status == "FILLED"
 
 
 @pytest.mark.asyncio
@@ -247,7 +257,8 @@ async def test_zerodha_short_filled(monkeypatch):
     s = await BrokerOrderReconciliationEngine().reconcile_once(now=_future_now())
     assert s["filled"] >= 1
     async with SessionLocal() as db:
-        assert (await db.get(OrderRecord, oid)).status == "FILLED"
+        rec = await db.get(OrderRecord, oid)
+        assert rec is not None and rec.status == "FILLED"
 
 
 @pytest.mark.asyncio
@@ -303,7 +314,8 @@ async def test_no_exposure_stays_pending(monkeypatch):
     s = await BrokerOrderReconciliationEngine().reconcile_once(now=_future_now())
     assert s["unknown"] >= 1
     async with SessionLocal() as db:
-        assert (await db.get(OrderRecord, oid)).status == "PENDING"
+        rec = await db.get(OrderRecord, oid)
+        assert rec is not None and rec.status == "PENDING"
 
 
 @pytest.mark.asyncio
@@ -317,7 +329,8 @@ async def test_malformed_positions_stay_pending(monkeypatch):
     s = await BrokerOrderReconciliationEngine().reconcile_once(now=_future_now())
     assert s["unknown"] >= 1
     async with SessionLocal() as db:
-        assert (await db.get(OrderRecord, oid)).status == "PENDING"
+        rec = await db.get(OrderRecord, oid)
+        assert rec is not None and rec.status == "PENDING"
 
 
 @pytest.mark.asyncio
@@ -332,7 +345,8 @@ async def test_non_list_positions_stay_pending(monkeypatch):
     s = await BrokerOrderReconciliationEngine().reconcile_once(now=_future_now())
     assert s["unknown"] >= 1
     async with SessionLocal() as db:
-        assert (await db.get(OrderRecord, oid)).status == "PENDING"
+        rec = await db.get(OrderRecord, oid)
+        assert rec is not None and rec.status == "PENDING"
 
 
 @pytest.mark.asyncio
@@ -347,7 +361,8 @@ async def test_broker_error_stays_pending(monkeypatch):
     s = await BrokerOrderReconciliationEngine().reconcile_once(now=_future_now())
     assert s["unknown"] >= 1
     async with SessionLocal() as db:
-        assert (await db.get(OrderRecord, oid)).status == "PENDING"
+        rec = await db.get(OrderRecord, oid)
+        assert rec is not None and rec.status == "PENDING"
 
 
 @pytest.mark.asyncio
@@ -363,7 +378,8 @@ async def test_opposite_direction_stays_pending(monkeypatch):
     s = await BrokerOrderReconciliationEngine().reconcile_once(now=_future_now())
     assert s["unknown"] >= 1
     async with SessionLocal() as db:
-        assert (await db.get(OrderRecord, oid)).status == "PENDING"
+        rec = await db.get(OrderRecord, oid)
+        assert rec is not None and rec.status == "PENDING"
 
 
 @pytest.mark.asyncio
@@ -379,7 +395,8 @@ async def test_partial_quantity_stays_pending(monkeypatch):
     s = await BrokerOrderReconciliationEngine().reconcile_once(now=_future_now())
     assert s["unknown"] >= 1
     async with SessionLocal() as db:
-        assert (await db.get(OrderRecord, oid)).status == "PENDING"
+        rec = await db.get(OrderRecord, oid)
+        assert rec is not None and rec.status == "PENDING"
 
 
 @pytest.mark.asyncio
@@ -395,7 +412,8 @@ async def test_exact_qty_filled(monkeypatch):
     s = await BrokerOrderReconciliationEngine().reconcile_once(now=_future_now())
     assert s["filled"] >= 1
     async with SessionLocal() as db:
-        assert (await db.get(OrderRecord, oid)).status == "FILLED"
+        rec = await db.get(OrderRecord, oid)
+        assert rec is not None and rec.status == "FILLED"
 
 
 @pytest.mark.asyncio
@@ -456,7 +474,8 @@ async def test_zero_avg_price_falls_back_to_order_price(monkeypatch):
     s = await BrokerOrderReconciliationEngine().reconcile_once(now=_future_now())
     assert s["filled"] >= 1
     async with SessionLocal() as db:
-        assert (await db.get(OrderRecord, oid)).status == "FILLED"
+        rec = await db.get(OrderRecord, oid)
+        assert rec is not None and rec.status == "FILLED"
 
 
 # ── RED evidence ──────────────────────────────────────────────────────────
@@ -475,7 +494,8 @@ async def test_red_evidence_raw_zerodha_skipped(monkeypatch):
     assert s["unknown"] >= 1
     assert "symbol" not in raw[0] and "tradingsymbol" in raw[0]
     async with SessionLocal() as db:
-        assert (await db.get(OrderRecord, oid)).status == "PENDING"
+        rec = await db.get(OrderRecord, oid)
+        assert rec is not None and rec.status == "PENDING"
 
 
 @pytest.mark.asyncio
@@ -526,7 +546,7 @@ async def test_zerodha_adapter_normalizes():
 
     broker = ZerodhaKiteBroker.__new__(ZerodhaKiteBroker)
     broker._kite = _FakeKite()
-    broker._connected = True
+    broker._is_connected = True
     broker.access_token = "mock-token"
     broker._is_connected = True
     positions = await broker.get_positions()

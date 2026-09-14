@@ -8,7 +8,7 @@ so they don't block the event loop.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from app.brokers.base import (
     BrokerClient,
@@ -71,6 +71,20 @@ class AngelOneBroker(BrokerClient):
         # simulated deployment cannot instantiate the real Angel One SDK at all.
         self._client = None
         self._session: dict | None = None
+
+    def _require_client(self) -> Any:
+        """Return the initialised SmartConnect client.
+
+        Raises ``RuntimeError`` if called before ``connect()`` /
+        ``validate_credentials()``.  Returning ``Any`` keeps the method
+        ergonomic with the untyped SmartAPI SDK while narrowing the
+        ``Optional`` away for pyright's ``reportOptionalMemberAccess`` checks.
+        """
+        if self._client is None:
+            raise RuntimeError(
+                "SmartConnect client not initialised — call connect() first"
+            )
+        return self._client
 
     async def validate_credentials(self) -> tuple[bool, str]:
         if not self.api_key or len(self.api_key.strip()) < 8 or self.api_key.strip().lower() in ("test", "mock", "placeholder", "123", "angel_api_key"):
@@ -167,7 +181,7 @@ class AngelOneBroker(BrokerClient):
         totp = pyotp.TOTP(self.totp_key).now()
 
         self._session = await _sdk_call(
-            self._client.generateSession,
+            self._require_client().generateSession,
             self.client_id,
             self.pin,
             totp,
@@ -229,7 +243,7 @@ class AngelOneBroker(BrokerClient):
             "triggerprice": str(trigger_price) if trigger_price is not None else "0",
         }
 
-        response = await _sdk_call(self._client.placeOrder, payload)
+        response = await _sdk_call(self._require_client().placeOrder, payload)
 
         if not response:
             raise RuntimeError(f"Angel One order failed for {order.symbol}")
@@ -281,7 +295,7 @@ class AngelOneBroker(BrokerClient):
         """Resolve trading symbol to Angel One's instrument token via searchScrip."""
         try:
             result = await _sdk_call(
-                self._client.searchScrip, "NSE", symbol
+                self._require_client().searchScrip, "NSE", symbol
             )
             if result and result.get("data"):
                 for scrip in result["data"]:
@@ -317,13 +331,13 @@ class AngelOneBroker(BrokerClient):
         if price is not None:
             params["price"] = str(price)
 
-        result = await _sdk_call(self._client.modifyOrder, params)
+        result = await _sdk_call(self._require_client().modifyOrder, params)
         return {"status": "MODIFIED", "broker_order_id": broker_order_id, "raw": result}
 
     async def get_order_status(self, broker_order_id: str) -> dict[str, Any]:
         """Retrieve execution status for a specific order on Angel One."""
         await self.connect()
-        order_book = await _sdk_call(self._client.orderBook)
+        order_book = await _sdk_call(self._require_client().orderBook)
         if order_book and order_book.get("data"):
             for o in order_book["data"]:
                 if str(o.get("orderid")) == str(broker_order_id):
@@ -338,13 +352,13 @@ class AngelOneBroker(BrokerClient):
     async def cancel_order(self, broker_order_id: str) -> dict[str, Any]:
         await self.connect()
         result = await _sdk_call(
-            self._client.cancelOrder, broker_order_id, "NORMAL"
+            self._require_client().cancelOrder, broker_order_id, "NORMAL"
         )
         return {"status": "CANCELLED", "broker_order_id": broker_order_id, "raw": result}
 
     async def get_positions(self) -> list[dict[str, Any]]:
         await self.connect()
-        result = await _sdk_call(self._client.position)
+        result = await _sdk_call(self._require_client().position)
         if not result or not result.get("data"):
             return []
         from app.brokers.position_normalizer import normalize_angelone_position
@@ -358,7 +372,7 @@ class AngelOneBroker(BrokerClient):
         """Retrieve available cash and margin collateral from Angel One."""
         await self.connect()
         try:
-            res = await _sdk_call(self._client.rmsLimit)
+            res = await _sdk_call(self._require_client().rmsLimit)
             if res and res.get("data"):
                 data = res["data"]
                 return {
@@ -374,7 +388,7 @@ class AngelOneBroker(BrokerClient):
     async def get_holdings(self) -> list[dict[str, Any]]:
         await self.connect()
         try:
-            res = await _sdk_call(self._client.holding)
+            res = await _sdk_call(self._require_client().holding)
             if res and res.get("data"):
                 return res["data"]
         except Exception as exc:
@@ -433,7 +447,7 @@ def place_tradethrone_order(payload: dict) -> dict:
 
         try:
             # Initialize SmartConnect
-            client = SmartConnect(api_key=settings.angel_api_key)
+            client = SmartConnect(api_key=settings.angel_api_key)  # type: ignore[misc]
             
             # Generate session using PIN + TOTP
             if not settings.angel_totp_key:
@@ -441,22 +455,23 @@ def place_tradethrone_order(payload: dict) -> dict:
                 raise RuntimeError("Angel One TOTP key is not configured.")
             
             totp = pyotp.TOTP(settings.angel_totp_key.strip()).now()
-            session = client.generateSession(
+            session = cast(dict[str, Any], client.generateSession(
                 settings.angel_client_id.strip(),
                 settings.angel_pin.strip(),
                 totp,
-            )
+            ))
             
             if not session or not session.get("status"):
                 raise RuntimeError(f"Angel One auth failed: {session.get('message', 'Unknown error')}")
             
             # Resolve symbol token
-            search_result = client.searchScrip(exchange, symbol)
+            search_result = cast(dict[str, Any], client.searchScrip(exchange, symbol))
             if not search_result or not search_result.get("data"):
                 raise RuntimeError(f"Could not resolve symbol token for '{symbol}' on {exchange}")
             
             symbol_token = None
-            for scrip in search_result["data"]:
+            data = search_result["data"]
+            for scrip in data:
                 if scrip.get("tradingsymbol", "").upper() == symbol.upper():
                     symbol_token = scrip.get("symboltoken", "")
                     break

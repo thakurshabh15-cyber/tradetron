@@ -408,7 +408,7 @@ async def verify_payment(
             "id": sub.id,
             "plan_name": sub.plan_name,
             "status": sub.status,
-            "end_date": sub.end_date.isoformat(),
+            "end_date": sub.end_date.isoformat() if sub.end_date else None,
         },
         "invoice_number": inv_num,
     }
@@ -623,7 +623,7 @@ async def razorpay_webhook(
                 await db.commit()
                 logger.info(
                     "[Webhook] subscription.charged: extended sub %s until %s",
-                    rzp_sub_id, s_rec.end_date.isoformat(),
+                    rzp_sub_id, (s_rec.end_date or now).isoformat(),
                 )
 
     elif event_type in ("subscription.halted", "subscription.cancelled", "payment.refunded"):

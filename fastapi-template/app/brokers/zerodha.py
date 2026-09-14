@@ -28,7 +28,7 @@ import httpx
 
 # Optional import for KiteConnect - allows mock mode without the package
 try:
-    from kiteconnect import KiteConnect
+    from kiteconnect import KiteConnect  # pyright: ignore[reportMissingImports]
 except ImportError:
     KiteConnect = None
 
@@ -69,7 +69,21 @@ class ZerodhaKiteBroker(BrokerClient):
             )
         self._kite = KiteConnect(api_key=self.api_key)
         if self.access_token:
-            self._kite.set_access_token(self.access_token)
+            self._require_kite().set_access_token(self.access_token)
+
+    def _require_kite(self) -> Any:
+        """Return the initialised KiteConnect client.
+
+        Raises ``RuntimeError`` if called before ``_ensure_kite()``.
+        Using a return-type of ``Any`` keeps the method ergonomic with the
+        untyped KiteConnect SDK while still narrowing the ``Optional`` away
+        for pyright's ``reportOptionalMemberAccess`` checks.
+        """
+        if self._kite is None:
+            raise RuntimeError(
+                "KiteConnect client not initialised — call _ensure_kite() first"
+            )
+        return self._kite
 
     def get_login_url(self) -> str:
         """Return Zerodha's official OAuth authorization URL."""
@@ -86,11 +100,11 @@ class ZerodhaKiteBroker(BrokerClient):
             }
         self._ensure_kite()
         try:
-            session_data = self._kite.generate_session(
+            session_data = self._require_kite().generate_session(
                 request_token, api_secret=self.api_secret
             )
             self.access_token = session_data["access_token"]
-            self._kite.set_access_token(self.access_token)
+            self._require_kite().set_access_token(self.access_token)
             self._is_connected = True
             logger.info(
                 "Zerodha Kite session generated successfully (user: %s)",
@@ -166,7 +180,7 @@ class ZerodhaKiteBroker(BrokerClient):
         if not self._is_connected:
             # Verify the token is still valid by calling profile
             try:
-                profile = await asyncio.to_thread(self._kite.profile)
+                profile = await asyncio.to_thread(self._require_kite().profile)
                 logger.info("Zerodha connected — user: %s", profile.get("user_id"))
                 self._is_connected = True
             except Exception as exc:
@@ -201,25 +215,25 @@ class ZerodhaKiteBroker(BrokerClient):
                 kite_order_type = getattr(self._kite, "ORDER_TYPE_SL")
                 kite_price = float(order.price) if order.price else trigger_price
             elif order_type_lit == "TP_LIMIT":
-                kite_order_type = self._kite.ORDER_TYPE_LIMIT
+                kite_order_type = self._require_kite().ORDER_TYPE_LIMIT
                 kite_price = trigger_price if trigger_price else (float(order.price) if order.price else None)
             else:
                 kite_order_type = (
-                    self._kite.ORDER_TYPE_MARKET
+                    self._require_kite().ORDER_TYPE_MARKET
                     if order_type_lit == "MARKET"
-                    else self._kite.ORDER_TYPE_LIMIT
+                    else self._require_kite().ORDER_TYPE_LIMIT
                 )
                 kite_price = order.price if order_type_lit != "MARKET" else None
 
             order_id = await asyncio.to_thread(
-                self._kite.place_order,
-                variety=self._kite.VARIETY_REGULAR,
+                self._require_kite().place_order,
+                variety=self._require_kite().VARIETY_REGULAR,
                 exchange=exchange,
                 tradingsymbol=order.symbol,
-                transaction_type=self._kite.TRANSACTION_TYPE_BUY if order.side.value == "BUY" else self._kite.TRANSACTION_TYPE_SELL,
+                transaction_type=self._require_kite().TRANSACTION_TYPE_BUY if order.side.value == "BUY" else self._require_kite().TRANSACTION_TYPE_SELL,
                 quantity=order.quantity,
                 order_type=kite_order_type,
-                product=self._kite.PRODUCT_MIS,
+                product=self._require_kite().PRODUCT_MIS,
                 price=kite_price,
                 trigger_price=trigger_price,
             )
@@ -281,13 +295,13 @@ class ZerodhaKiteBroker(BrokerClient):
         self, broker_order_id: str, quantity: Optional[int] = None, price: Optional[float] = None
     ) -> dict[str, Any]:
         await self.connect()
-        params: dict[str, Any] = {"order_id": broker_order_id, "variety": self._kite.VARIETY_REGULAR}
+        params: dict[str, Any] = {"order_id": broker_order_id, "variety": self._require_kite().VARIETY_REGULAR}
         if quantity is not None:
             params["quantity"] = quantity
         if price is not None:
             params["price"] = price
         try:
-            await asyncio.to_thread(self._kite.modify_order, **params)
+            await asyncio.to_thread(self._require_kite().modify_order, **params)
         except Exception as exc:
             logger.error("Zerodha order modify failed: %s", exc)
             raise RuntimeError(f"Zerodha modify failed: {exc}")
@@ -298,7 +312,7 @@ class ZerodhaKiteBroker(BrokerClient):
         await self.connect()
         try:
             await asyncio.to_thread(
-                self._kite.cancel_order, variety=self._kite.VARIETY_REGULAR, order_id=broker_order_id
+                self._require_kite().cancel_order, variety=self._require_kite().VARIETY_REGULAR, order_id=broker_order_id
             )
         except Exception as exc:
             logger.error("Zerodha order cancel failed: %s", exc)
@@ -309,7 +323,7 @@ class ZerodhaKiteBroker(BrokerClient):
     async def get_order_status(self, broker_order_id: str) -> dict[str, Any]:
         await self.connect()
         try:
-            order_history = await asyncio.to_thread(self._kite.order_history, order_id=broker_order_id)
+            order_history = await asyncio.to_thread(self._require_kite().order_history, order_id=broker_order_id)
             if order_history:
                 latest = order_history[-1]
                 status_raw = latest.get("status", "").upper()
@@ -330,7 +344,7 @@ class ZerodhaKiteBroker(BrokerClient):
     async def get_positions(self) -> list[dict[str, Any]]:
         await self.connect()
         try:
-            positions = await asyncio.to_thread(self._kite.positions)
+            positions = await asyncio.to_thread(self._require_kite().positions)
             net_positions = positions.get("net", [])
             from app.brokers.position_normalizer import normalize_zerodha_position
             return [
@@ -346,7 +360,7 @@ class ZerodhaKiteBroker(BrokerClient):
         """Fetch real available margins from Zerodha."""
         await self.connect()
         try:
-            margins = await asyncio.to_thread(self._kite.margins, segment="equity")
+            margins = await asyncio.to_thread(self._require_kite().margins, segment="equity")
             return {
                 "available_cash": float(margins.get("available", {}).get("cash", 0)),
                 "utilized_margin": float(margins.get("utilised", {}).get("debits", 0)),
@@ -362,7 +376,7 @@ class ZerodhaKiteBroker(BrokerClient):
         """Fetch real portfolio holdings from Zerodha."""
         await self.connect()
         try:
-            holdings = await asyncio.to_thread(self._kite.holdings)
+            holdings = await asyncio.to_thread(self._require_kite().holdings)
             return [
                 {
                     "tradingsymbol": h.get("tradingsymbol", ""),
@@ -384,7 +398,7 @@ class ZerodhaKiteBroker(BrokerClient):
         """Fetch authenticated user profile from Zerodha."""
         await self.connect()
         try:
-            profile = await asyncio.to_thread(self._kite.profile)
+            profile = await asyncio.to_thread(self._require_kite().profile)
             return {
                 "user_id": profile.get("user_id", ""),
                 "user_name": profile.get("user_name", ""),

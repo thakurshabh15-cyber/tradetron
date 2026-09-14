@@ -6,27 +6,30 @@ import logging
 import json
 from datetime import datetime, timezone
 from typing import Any
-from pythonjsonlogger import jsonlogger
+from pythonjsonlogger.jsonlogger import JsonFormatter  # pyright: ignore[reportPrivateImportUsage]  # pythonjsonlogger re-exports the class at runtime
 
 from app.config import settings
 
 
-class WebhookJsonFormatter(jsonlogger.JsonFormatter):
+class WebhookJsonFormatter(JsonFormatter):
     """JSON formatter with webhook-specific fields"""
     
-    def add_fields(self, log_record: dict, record: logging.LogRecord, message_dict: dict) -> None:
-        super().add_fields(log_record, record, message_dict)
-        log_record["timestamp"] = datetime.now(timezone.utc).isoformat()
-        log_record["service"] = "tradetron-webhooks"
-        log_record["environment"] = settings.environment
+    def add_fields(self, log_data: dict, record: logging.LogRecord, message_dict: dict) -> None:
+        super().add_fields(log_data, record, message_dict)
+        log_data["timestamp"] = datetime.now(timezone.utc).isoformat()
+        log_data["service"] = "tradetron-webhooks"
+        log_data["environment"] = settings.environment
         
-        # Add webhook context if available
-        if hasattr(record, "webhook_event_id"):
-            log_record["webhook_event_id"] = record.webhook_event_id
-        if hasattr(record, "webhook_provider"):
-            log_record["webhook_provider"] = record.webhook_provider
-        if hasattr(record, "webhook_event_type"):
-            log_record["webhook_event_type"] = record.webhook_event_type
+        # Add webhook context if available (custom attrs attached via extra=).
+        webhook_event_id = getattr(record, "webhook_event_id", None)
+        if webhook_event_id is not None:
+            log_data["webhook_event_id"] = webhook_event_id
+        webhook_provider = getattr(record, "webhook_provider", None)
+        if webhook_provider is not None:
+            log_data["webhook_provider"] = webhook_provider
+        webhook_event_type = getattr(record, "webhook_event_type", None)
+        if webhook_event_type is not None:
+            log_data["webhook_event_type"] = webhook_event_type
 
 
 def setup_webhook_logging() -> None:

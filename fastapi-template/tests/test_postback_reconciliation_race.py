@@ -196,6 +196,7 @@ async def test_postback_after_reconciliation_race_books_single_fill():
     # read a concurrent transaction performs.
     async with SessionLocal() as db_worker:
         stale_order = await db_worker.get(OrderRecord, seeded["order_id"])
+        assert stale_order is not None
         assert stale_order.status == "PENDING"
         await db_worker.commit()
 
@@ -203,6 +204,7 @@ async def test_postback_after_reconciliation_race_books_single_fill():
         # OPEN position) in a separate session.
         async with SessionLocal() as db_recon:
             recon_order = await db_recon.get(OrderRecord, seeded["order_id"])
+            assert recon_order is not None
             outcome, detail = await _reconciliation_finalize(db_recon, recon_order)
             assert outcome == "filled", detail
 
@@ -251,6 +253,7 @@ async def test_reconciliation_after_postback_race_skips():
     # "Reconciliation scheduler" session holds the stale PENDING snapshot.
     async with SessionLocal() as db_recon:
         stale_order = await db_recon.get(OrderRecord, seeded["order_id"])
+        assert stale_order is not None
         assert stale_order.status == "PENDING"
         await db_recon.commit()
 
@@ -268,7 +271,7 @@ async def test_reconciliation_after_postback_race_skips():
             assert outcome["event_processed"] is True
 
         # Reconciliation attempt from the stale snapshot must lose the claim.
-        outcome, detail = await _reconciliation_finalize(db_recon, stale_order)
+        outcome, detail = await _reconciliation_finalize(db_recon, stale_order)  # stale_order already asserted non-None above
         assert outcome == "skipped", (outcome, detail)
 
     order = await _fetch_order(seeded["order_id"])
@@ -298,6 +301,7 @@ async def test_reconciliation_single_finalize_still_books_once():
 
     async with SessionLocal() as db:
         order = await db.get(OrderRecord, seeded["order_id"])
+        assert order is not None
         outcome, detail = await _reconciliation_finalize(db, order)
         assert outcome == "filled", detail
 
@@ -334,6 +338,7 @@ async def test_raw_complete_then_filled_postback_books_exactly_once():
     # status COMPLETE, ledgers untouched.
     async with SessionLocal() as db:
         order = await db.get(OrderRecord, seeded["order_id"])
+        assert order is not None
         order.status = "COMPLETE"
         await db.commit()
 
@@ -373,6 +378,7 @@ async def test_filled_postback_on_rejected_order_books_nothing():
 
     async with SessionLocal() as db:
         order = await db.get(OrderRecord, seeded["order_id"])
+        assert order is not None
         order.status = "REJECTED"
         await db.commit()
 

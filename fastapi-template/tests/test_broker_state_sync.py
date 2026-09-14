@@ -376,6 +376,7 @@ async def test_sync_account_broker_api_failure_preserves_last_good():
                 BrokerStateRecord.broker_account_id == ids["broker_id"]
             )
         )).scalar_one_or_none()
+        assert snap is not None
         assert snap.status == "ERROR"
         assert snap.last_good_captured_at is not None  # preserved, not wiped
 
@@ -413,6 +414,7 @@ async def test_sync_account_fresh_broker_data_persists_snapshot():
                 BrokerStateRecord.broker_account_id == ids["broker_id"]
             )
         )).scalar_one_or_none()
+        assert snap is not None
         assert snap.status == "LIVE"
         assert snap.source == "BROKER"
         assert snap.available_cash == pytest.approx(320_000.0)
@@ -624,7 +626,7 @@ async def test_broker_state_gate_fresh_passes():
 
     from app.engine.trading_engine import TradingEngine
 
-    engine = TradingEngine(broker=_FakeBroker(), tick_queue=asyncio.Queue())
+    engine = TradingEngine(broker=_FakeBroker(), tick_queue=asyncio.Queue())  # type: ignore[arg-type]
     snapshot, reason = await engine._broker_state_gate_for_live(
         ids["broker_id"], ids["uid"]
     )
@@ -644,7 +646,7 @@ async def test_broker_state_gate_stale_rejects():
 
     from app.engine.trading_engine import TradingEngine
 
-    engine = TradingEngine(broker=_FakeBroker(), tick_queue=asyncio.Queue())
+    engine = TradingEngine(broker=_FakeBroker(), tick_queue=asyncio.Queue())  # type: ignore[arg-type]
     snapshot, reason = await engine._broker_state_gate_for_live(
         ids["broker_id"], ids["uid"]
     )
@@ -664,7 +666,7 @@ async def test_broker_state_gate_unavailable_and_simulated_reject(seed_broker_na
 
     from app.engine.trading_engine import TradingEngine
 
-    engine = TradingEngine(broker=_FakeBroker(), tick_queue=asyncio.Queue())
+    engine = TradingEngine(broker=_FakeBroker(), tick_queue=asyncio.Queue())  # type: ignore[arg-type]
 
     if seed_broker_name == "SIMULATED":
         # A simulated account might have a PAPER snapshot; the gate still
@@ -698,7 +700,7 @@ async def test_paper_unaffected_feed_enforced_both_gates_required():
 
     from app.engine.trading_engine import TradingEngine
 
-    engine = TradingEngine(broker=_FakeBroker(), tick_queue=asyncio.Queue())
+    engine = TradingEngine(broker=_FakeBroker(), tick_queue=asyncio.Queue())  # type: ignore[arg-type]
 
     # ── Scenario 1: PAPER unaffected by construction ──────────────────────
     assert hasattr(engine, "_broker_state_gate_for_live")

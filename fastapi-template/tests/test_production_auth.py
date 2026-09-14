@@ -82,7 +82,9 @@ async def test_production_auth_suite():
         # 5. Password Reset Flow (un-locks account upon reset)
         forgot_res = await client.post("/api/auth/forgot-password", json={"identifier": test_email})
         assert forgot_res.status_code == 200
-        reset_otp = _IN_MEMORY_OTP_STORE.get(test_email)["code"]
+        reset_otp_entry = _IN_MEMORY_OTP_STORE.get(test_email)
+        assert reset_otp_entry is not None
+        reset_otp = reset_otp_entry["code"]
 
         reset_res = await client.post("/api/auth/reset-password", json={
             "identifier": test_email,

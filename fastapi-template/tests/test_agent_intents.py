@@ -193,7 +193,8 @@ class IntentEnv:
         )
 
     async def get_intent(self, intent_id: str) -> dict:
-        return await self.service.get_intent(intent_id)
+        result = await self.service.get_intent(intent_id)
+        return result if result is not None else {}
 
     async def grant_approval(self, intent_id: str, approver_id: str) -> None:
         from datetime import datetime, timezone

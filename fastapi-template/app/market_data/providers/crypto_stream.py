@@ -413,7 +413,11 @@ class CryptoStreamMarketDataProvider(BaseMarketDataProvider):
             ask = price + spread / 2
 
         # OHLC: prefer @ticker values; fall back to open price
-        open_p = state.get("ticker_open", 0.0) or self._open_prices.get(symbol, price)
+        open_p = float(
+            state.get("ticker_open", 0.0)
+            or self._open_prices.get(symbol, price)
+            or price
+        )
         high = state.get("ticker_high", 0.0) or price
         low = state.get("ticker_low", 0.0) or price
         change = state.get("ticker_change", 0.0) or (price - open_p)

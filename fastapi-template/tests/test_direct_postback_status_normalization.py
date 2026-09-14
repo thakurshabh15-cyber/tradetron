@@ -142,7 +142,7 @@ async def _seed_order(order_status: str = "OPEN", broker_name: str = "ZERODHA") 
         }
 
 
-async def _fetch_order(order_id: str) -> OrderRecord:
+async def _fetch_order(order_id: str) -> OrderRecord | None:
     async with SessionLocal() as db:
         return await db.get(OrderRecord, order_id)
 
@@ -210,6 +210,7 @@ async def test_direct_nonzerodha_complete_reaches_filled_path():
     assert body["event_processed"] is True
 
     order = await _fetch_order(seeded["order_id"])
+    assert order is not None
     assert order.status == "FILLED"
     assert order.filled_quantity == 50
     assert order.filled_price == 24850.0
@@ -227,6 +228,7 @@ async def test_direct_nonzerodha_completed_maps_to_filled():
     assert resp.status_code == 200, resp.text
     assert resp.json()["reconciled_status"] == "FILLED"
     order = await _fetch_order(seeded["order_id"])
+    assert order is not None
     assert order.status == "FILLED"
     assert len(await _fetch_postback_trades(seeded["user_id"])) == 1
 
@@ -239,6 +241,7 @@ async def test_direct_nonzerodha_filled_stays_filled():
     assert resp.status_code == 200, resp.text
     assert resp.json()["reconciled_status"] == "FILLED"
     order = await _fetch_order(seeded["order_id"])
+    assert order is not None
     assert order.status == "FILLED"
     assert len(await _fetch_postback_trades(seeded["user_id"])) == 1
 
@@ -251,6 +254,7 @@ async def test_direct_nonzerodha_rejected_remains_terminal():
     assert resp.status_code == 200, resp.text
     assert resp.json()["reconciled_status"] == "REJECTED"
     order = await _fetch_order(seeded["order_id"])
+    assert order is not None
     assert order.status == "REJECTED"
     assert await _fetch_postback_trades(seeded["user_id"]) == []
     assert await _fetch_postback_positions(seeded["user_id"]) == []
@@ -266,6 +270,7 @@ async def test_direct_nonzerodha_cancellation_remains_terminal():
         assert resp.status_code == 200, resp.text
         assert resp.json()["reconciled_status"] == "CANCELLED", raw
         order = await _fetch_order(seeded["order_id"])
+        assert order is not None
         assert order.status == "CANCELLED", raw
         assert await _fetch_postback_trades(seeded["user_id"]) == [], raw
     assert await _fetch_postback_positions(seeded["user_id"]) == []
@@ -280,6 +285,7 @@ async def test_direct_nonzerodha_open_does_not_fabricate_fill():
         assert resp.status_code == 200, resp.text
         assert resp.json()["reconciled_status"] == "OPEN", raw
         order = await _fetch_order(seeded["order_id"])
+        assert order is not None
         assert order.status == "OPEN", raw
         assert await _fetch_postback_trades(seeded["user_id"]) == [], raw
     assert await _fetch_postback_positions(seeded["user_id"]) == []
@@ -298,6 +304,7 @@ async def test_direct_nonzerodha_unknown_status_fails_closed_no_mutation():
     assert body["reconciled_status"] is None
 
     order = await _fetch_order(seeded["order_id"])
+    assert order is not None
     assert order.status == "OPEN"
     assert order.filled_quantity == 0
     assert await _fetch_postback_trades(seeded["user_id"]) == []
@@ -321,6 +328,7 @@ async def test_direct_nonzerodha_missing_status_fails_closed():
     assert resp.json()["event_processed"] is False
     assert resp.json()["reason"] == "unknown_status"
     order = await _fetch_order(seeded["order_id"])
+    assert order is not None
     assert order.status == "OPEN"
     assert await _fetch_postback_trades(seeded["user_id"]) == []
 
@@ -334,6 +342,7 @@ async def test_direct_duplicate_filled_complete_delivery_idempotent():
         resp = await _post_direct("UPSTOX_PRO", seeded, raw)
         assert resp.status_code == 200, resp.text
     order = await _fetch_order(seeded["order_id"])
+    assert order is not None
     assert order.status == "FILLED"
     trades = await _fetch_postback_trades(seeded["user_id"])
     assert len(trades) == 1, f"expected 1 TradeRecord, got {len(trades)}"
@@ -357,6 +366,7 @@ async def test_direct_zerodha_complete_still_books_fill_no_regression():
     assert body["event_processed"] is True
 
     order = await _fetch_order(seeded["order_id"])
+    assert order is not None
     assert order.status == "FILLED"
     trades = await _fetch_postback_trades(seeded["user_id"])
     assert len(trades) == 1, f"expected 1 trade, got {len(trades)}"

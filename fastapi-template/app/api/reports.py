@@ -47,22 +47,22 @@ async def get_performance_report(
     trades = res.scalars().all()
 
     total_trades = len(trades)
-    closed_trades = [t for t in trades if t.pnl is not None]
-    winning_trades = [t for t in closed_trades if t.pnl > 0]
-    losing_trades = [t for t in closed_trades if t.pnl < 0]
-    breakeven_trades = [t for t in closed_trades if t.pnl == 0]
+    closed_pnls = [t.pnl for t in trades if t.pnl is not None]
+    winning_pnls = [p for p in closed_pnls if p > 0]
+    losing_pnls = [p for p in closed_pnls if p < 0]
+    breakeven_trades = [t for t in trades if t.pnl == 0]
 
-    gross_profit = round(sum(t.pnl for t in winning_trades), 2)
-    gross_loss = round(abs(sum(t.pnl for t in losing_trades)), 2)
-    total_realized_pnl = round(sum(t.pnl for t in closed_trades), 2)
+    gross_profit = round(sum(winning_pnls), 2)
+    gross_loss = round(abs(sum(losing_pnls)), 2)
+    total_realized_pnl = round(sum(closed_pnls), 2)
 
-    total_evaluated = len(winning_trades) + len(losing_trades)
-    win_rate = round((len(winning_trades) / total_evaluated * 100), 1) if total_evaluated > 0 else 0.0
+    total_evaluated = len(winning_pnls) + len(losing_pnls)
+    win_rate = round((len(winning_pnls) / total_evaluated * 100), 1) if total_evaluated > 0 else 0.0
     profit_factor = round(gross_profit / gross_loss, 2) if gross_loss > 0 else (gross_profit if gross_profit > 0 else 1.0)
-    avg_trade_pnl = round(total_realized_pnl / len(closed_trades), 2) if closed_trades else 0.0
+    avg_trade_pnl = round(total_realized_pnl / len(closed_pnls), 2) if closed_pnls else 0.0
 
-    largest_win = max([t.pnl for t in winning_trades], default=0.0)
-    largest_loss = min([t.pnl for t in losing_trades], default=0.0)
+    largest_win = max(winning_pnls, default=0.0)
+    largest_loss = min(losing_pnls, default=0.0)
 
     # Strategy breakdown
     strat_map: dict[str, dict[str, Any]] = {}
@@ -100,9 +100,9 @@ async def get_performance_report(
     return {
         "summary": {
             "total_trades": total_trades,
-            "closed_trades": len(closed_trades),
-            "winning_trades": len(winning_trades),
-            "losing_trades": len(losing_trades),
+            "closed_trades": len(closed_pnls),
+            "winning_trades": len(winning_pnls),
+            "losing_trades": len(losing_pnls),
             "breakeven_trades": len(breakeven_trades),
             "win_rate_pct": win_rate,
             "total_realized_pnl": total_realized_pnl,

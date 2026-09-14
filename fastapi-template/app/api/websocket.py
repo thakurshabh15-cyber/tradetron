@@ -198,8 +198,11 @@ async def option_chain_stream(websocket: WebSocket, symbol: str):
             spot = None
             if isinstance(quote, dict):
                 for k in ("price", "last_price", "ltp", "close"):
+                    raw = quote.get(k)
+                    if raw is None:
+                        continue
                     try:
-                        v = float(quote.get(k))
+                        v = float(raw)
                         if v > 0:
                             spot = v
                             break

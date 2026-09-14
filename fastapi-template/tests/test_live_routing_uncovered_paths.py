@@ -243,7 +243,7 @@ def test_copy_trading_executor_rejects_live_fill_without_owned_broker():
 
         return (
             await CopyTradingEngine()._execute_single_follower_order(
-                follower=snap,
+                follower=snap,  # type: ignore[arg-type]
                 symbol="NIFTY50",
                 side="BUY",
                 master_qty=10,

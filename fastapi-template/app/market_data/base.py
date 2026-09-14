@@ -108,6 +108,7 @@ class BaseMarketDataProvider(ABC):
         self._subscribers: set[str] = set()
         self._callbacks: list[TickCallback] = []
         self._is_running = False
+        self._quotes: dict[str, NormalizedTick] = {}
 
     def add_callback(self, callback: TickCallback) -> None:
         """Register a callback invoked whenever a normalized tick arrives."""
@@ -145,3 +146,14 @@ class BaseMarketDataProvider(ABC):
     def get_latest_quote(self, symbol: str) -> Optional[NormalizedTick]:
         """Fetch the most recent cached quote for a symbol."""
         pass
+
+    async def get_historical_candles(
+        self, symbol: str, timeframe: str = "5m", limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """Return authentic historical OHLCV candles for ``symbol``.
+
+        Non-abstract default: providers that do not implement real historical
+        feeds return an empty list; the unified manager then either falls back
+        to another provider or reports ``UNAVAILABLE``.
+        """
+        return []

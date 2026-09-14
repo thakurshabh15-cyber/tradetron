@@ -30,7 +30,7 @@ from typing import Any, Optional
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
-from app.db.session import SessionLocal
+from app.db.session import SessionLocal, rows_affected
 from app.models.trading import OrderRecord, PositionRecord, TradeRecord
 
 # Non-retryable claim statuses for a given key (map to "must NOT dispatch").
@@ -83,7 +83,7 @@ async def claim_order_record(
                     position_id=None,
                 )
             )
-            if retry.rowcount == 1:
+            if rows_affected(retry) == 1:
                 await session.commit()
                 return existing.id
             # Lost the CAS race: follow whatever the winner did.
@@ -131,7 +131,7 @@ async def reject_order_claim(claim_id: str, reason: str) -> None:
                 error_message=reason,
             )
         )
-        if result.rowcount == 1:
+        if rows_affected(result) == 1:
             await session.commit()
         else:
             await session.rollback()
@@ -189,7 +189,7 @@ async def finalize_order_claim(
                 error_message=None,
             )
         )
-        if result.rowcount != 1:
+        if rows_affected(result) != 1:
             # Already finalized by a concurrent worker or broker postback.
             await session.rollback()
             finalized = await session.get(OrderRecord, claim_id)

@@ -127,3 +127,22 @@ class BrokerClient(ABC):
             ),
         )
 
+    def update_price(self, symbol: str, price: float) -> None:
+        """Forward a market price tick to the adapter (used in simulated mode).
+
+        Non-abstract default no-op: live adapters track prices via their SDK
+        feeds, while ``SimulatedBroker`` overrides this to fill paper orders at
+        the latest price.
+        """
+        return None
+
+    async def get_order_status_with_symbol(
+        self, symbol: str, broker_order_id: str
+    ) -> dict[str, Any]:
+        """Query brokerage order status paired with the trading symbol.
+
+        Non-abstract default delegates to ``get_order_status``; adapters whose
+        SDK requires the symbol (e.g. Binance) override it.
+        """
+        return await self.get_order_status(broker_order_id)
+

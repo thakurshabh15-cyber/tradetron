@@ -22,7 +22,7 @@ def _tick(seconds_ago: float, feed_mode=DataFeedMode.LIVE_BROKER_VENDOR,
     return NormalizedTick(
         symbol="BTCUSDT", price=60000.0, bid=59999.0, ask=60001.0,
         open=60000.0, high=60100.0, low=59900.0, close=60000.0,
-        change=0.0, change_pct=0.0, volume=100.0,
+        change=0.0, change_pct=0.0, volume=100,
         asset_class=asset_class, feed_mode=feed_mode,
         data_source="CoinGecko Public API", timestamp=ts,
     )
@@ -30,8 +30,9 @@ def _tick(seconds_ago: float, feed_mode=DataFeedMode.LIVE_BROKER_VENDOR,
 
 def test_tick_age_seconds_freshness():
     tick = _tick(seconds_ago=5)
-    assert tick.age_seconds() is not None
-    assert 3.0 <= tick.age_seconds() <= 7.0
+    age = tick.age_seconds()
+    assert age is not None
+    assert 3.0 <= age <= 7.0
     assert tick.is_stale(max_age_seconds=60) is False
     assert tick.is_stale(max_age_seconds=2) is True
 

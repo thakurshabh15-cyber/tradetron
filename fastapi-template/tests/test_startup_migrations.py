@@ -159,7 +159,7 @@ def test_legacy_schema_upgraded_by_run_migrations(tmp_path):
     assert "signal_key" in _col_names(db, "orders")
     assert "ux_orders_user_client_order_id" in _indexes(db, "orders")
     assert "ux_orders_signal_key" in _indexes(db, "orders")
-    assert _version(db) == "0011_agent_control"
+    assert _version(db) == "0012_subscription_cancel_fields"
 
     # Behavioral D: create_all did NOT run — only migration-defined tables
     # (0006 adds user_setup_tasks; 0007 adds broker_state; 0008 adds
@@ -191,12 +191,12 @@ def test_second_upgrade_head_is_idempotent(tmp_path):
     original = _patch_env(_set_db_env(db))
     try:
         run_migrations()
-        assert _version(db) == "0011_agent_control"
+        assert _version(db) == "0012_subscription_cancel_fields"
         run_migrations()  # second run: no-op
     finally:
         _restore_env(original)
 
-    assert _version(db) == "0011_agent_control"
+    assert _version(db) == "0012_subscription_cancel_fields"
     assert "client_order_id" in _col_names(db, "orders")
     assert "signal_key" in _col_names(db, "orders")
     assert "ux_orders_signal_key" in _indexes(db, "orders")
@@ -239,7 +239,7 @@ def test_lifespan_fails_closed_before_init_db(monkeypatch):
 
     # asynccontextmanager wraps the raw generator in __wrapped__; call the raw
     # generator directly so we can drive it one step at a time.
-    raw_gen = lifespan.__wrapped__(FastAPI())
+    raw_gen = lifespan.__wrapped__(FastAPI())  # type: ignore[attr-defined]
     with pytest.raises(MigrationError):
         asyncio.run(raw_gen.asend(None))
     assert "init_db" not in calls

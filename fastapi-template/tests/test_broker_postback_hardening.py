@@ -160,7 +160,7 @@ async def _seed_order(
         return {"user_id": user.id, "broker_id": broker.id, "order_id": order.id}
 
 
-async def _fetch_order(order_id: str) -> OrderRecord:
+async def _fetch_order(order_id: str) -> OrderRecord | None:
     async with SessionLocal() as db:
         return await db.get(OrderRecord, order_id)
 
@@ -229,6 +229,7 @@ async def test_unsigned_direct_postback_rejected_no_mutation():
         assert resp.status_code == 401, resp.text
 
         order = await _fetch_order(seeded["order_id"])
+        assert order is not None
         assert order.status == "OPEN", "order must NOT be mutated by an unsigned postback"
         assert order.filled_quantity == 0
         assert order.filled_price is None
@@ -248,6 +249,7 @@ async def test_invalid_signature_direct_postback_rejected():
         assert resp.status_code == 401, resp.text
 
         order = await _fetch_order(seeded["order_id"])
+        assert order is not None
         assert order.status == "OPEN"
         assert await _fetch_postback_trades(seeded["user_id"]) == []
 
@@ -265,6 +267,7 @@ async def test_tampered_payload_after_signing_rejected():
         assert resp.status_code == 401, resp.text
 
         order = await _fetch_order(seeded["order_id"])
+        assert order is not None
         assert order.status == "OPEN"
         assert order.filled_quantity == 0
         assert await _fetch_postback_trades(seeded["user_id"]) == []
@@ -289,6 +292,7 @@ async def test_valid_signed_postback_reconciles_order():
         assert body["status"] == "ok"
 
         order = await _fetch_order(seeded["order_id"])
+        assert order is not None
         assert order.status == "FILLED"
         assert order.filled_quantity == 50
         assert order.filled_price == 24850.0
@@ -337,6 +341,7 @@ async def test_signed_postback_cross_account_ignored_without_mutation():
         assert body["reason"] == "account_mismatch"
 
         order = await _fetch_order(seeded["order_id"])
+        assert order is not None
         assert order.status == "OPEN", "cross-account postback must NOT mutate the order"
         assert order.filled_quantity == 0
         assert await _fetch_postback_trades(seeded["user_id"]) == []
@@ -380,8 +385,10 @@ async def test_worker_postback_refuses_unbound_or_disconnected_order():
         await handle_broker_postback(webhook)
 
     order_a = await _fetch_order(seeded_a["order_id"])
+    assert order_a is not None
     assert order_a.status == "OPEN", "disconnected-account order must not be filled"
     order_b = await _fetch_order(seeded_b["order_id"])
+    assert order_b is not None
     assert order_b.status == "OPEN", "unbound order must not be filled"
     assert await _fetch_postback_trades(seeded_a["user_id"]) == []
     assert await _fetch_postback_trades(seeded_b["user_id"]) == []
@@ -409,6 +416,7 @@ async def test_local_mode_keeps_unsigned_bypass_for_dev():
             assert resp.json()["event_processed"] is True
 
             order = await _fetch_order(seeded["order_id"])
+            assert order is not None
             assert order.status == "FILLED"
     finally:
         settings.webhook_local_mode = False

@@ -211,7 +211,7 @@ class StrategyExecutor:
 
 
 def _strategy_client_order_id(
-    strategy_id: str,
+    strategy_id: Optional[str],
     symbol: str,
     side: str,
     quantity: int,
@@ -907,9 +907,9 @@ class TradingEngine:
     async def _claim_strategy_order(
         self,
         *,
-        user_id: str,
-        broker_account_id: str,
-        strategy_id: str,
+        user_id: Optional[str],
+        broker_account_id: Optional[str],
+        strategy_id: Optional[str],
         symbol: str,
         side: str,
         quantity: int,
@@ -975,15 +975,15 @@ class TradingEngine:
         self,
         *,
         claim_id: str,
-        strategy_id: str,
+        strategy_id: Optional[str],
         strategy_name: str,
         broker_order_id: str,
         symbol: str,
         side: str,
         quantity: int,
         filled_price: float,
-        user_id: str,
-        broker_account_id: str,
+        user_id: Optional[str],
+        broker_account_id: Optional[str],
         mode: str,
     ) -> dict[str, Any]:
         """Finalize a LIVE strategy claim after broker acceptance.

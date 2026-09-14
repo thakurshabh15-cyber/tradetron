@@ -123,21 +123,27 @@ class BinanceBroker(BrokerClient):
             logger.error("Binance API request failed [%s %s]: %s", method, path, exc)
             raise RuntimeError(f"Binance request failed: {exc}")
 
-    async def connect(self) -> bool:
-        """Verify API connectivity with Binance."""
+    async def connect(self) -> None:
+        """Establish connection / authenticate with the broker API.
+
+        For Binance this performs a lightweight connectivity ping and records
+        the result on ``self._is_connected`` (callers inspect that flag rather
+        than this method's return value).
+        """
         if not self._has_credentials:
             self._is_connected = False
-            return False
+            return
 
         try:
-            data = await self._api_request("GET", "/api/v3/ping", signed=False)
+            await self._api_request("GET", "/api/v3/ping", signed=False)
             self._is_connected = True
-            logger.info("Binance Crypto broker connected (%s)", "Testnet" if self.testnet else "Production")
-            return True
+            logger.info(
+                "Binance Crypto broker connected (%s)",
+                "Testnet" if self.testnet else "Production",
+            )
         except Exception as exc:
             self._is_connected = False
             logger.warning("Binance connection check failed: %s", exc)
-            return False
 
     async def disconnect(self) -> None:
         """Close the underlying HTTP session."""

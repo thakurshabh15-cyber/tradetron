@@ -418,6 +418,7 @@ async def test_sell_filled_postback_opens_short_position():
     seeded = await _seed_order(order_status="OPEN")
     async with SessionLocal() as db:
         order = await db.get(OrderRecord, seeded["order_id"])
+        assert order is not None
         order.side = "SELL"
         await db.commit()
 
@@ -468,6 +469,7 @@ async def test_filled_postback_after_local_finalization_books_no_second_position
     # Simulate the local entry path's linked open position.
     async with SessionLocal() as db:
         order = await db.get(OrderRecord, seeded["order_id"])
+        assert order is not None
         local_pos = PositionRecord(
             user_id=seeded["user_id"],
             broker_account_id=seeded["broker_id"],
@@ -512,6 +514,7 @@ async def test_open_order_with_linked_position_not_rebooked():
     seeded = await _seed_order(order_status="OPEN")
     async with SessionLocal() as db:
         order = await db.get(OrderRecord, seeded["order_id"])
+        assert order is not None
         existing_pos = PositionRecord(
             user_id=seeded["user_id"],
             broker_account_id=seeded["broker_id"],

@@ -19,6 +19,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -76,7 +77,7 @@ def _prod_settings(**overrides) -> Settings:
     # URL fixtures are assembled from parts so this test module's own source
     # never literally contains the ``user:pass@host`` patterns the P0 scanner is
     # designed to detect in tracked source.
-    base = dict(
+    base: dict[str, Any] = dict(
         environment="production",
         jwt_secret="p" * 40,
         skip_signature_verification=False,

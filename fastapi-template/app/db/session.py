@@ -14,6 +14,7 @@ from collections.abc import AsyncGenerator
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy import select, text
+from sqlalchemy.engine import CursorResult, Result
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -21,13 +22,22 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase
+from typing import Any, cast
 
-from app.config import settings
+from app.config import BASE_DIR, settings
 from app.core.logging import get_logger
 
 logger = get_logger("db")
 
-logger = get_logger("db")
+
+def rows_affected(result: Result[Any]) -> int:
+    """Rows affected by an executed UPDATE/DELETE statement.
+
+    SQLAlchemy's public ``Result`` type does not expose ``rowcount`` in its type
+    stubs even though the underlying ``CursorResult`` always carries it for DML.
+    Centralising this cast keeps every call site honest and statically clean.
+    """
+    return cast(CursorResult[Any], result).rowcount
 
 
 def _resolve_admin_bootstrap_password() -> str:
@@ -59,7 +69,7 @@ def _resolve_admin_bootstrap_password() -> str:
 def normalize_database_url(raw_url: str) -> str:
     """Normalize raw database URLs from various cloud hosts for SQLAlchemy AsyncEngine."""
     if not raw_url or raw_url.strip() == "":
-        return f"sqlite+aiosqlite:///{settings.BASE_DIR / 'trading.db'}"
+        return f"sqlite+aiosqlite:///{BASE_DIR / 'trading.db'}"
 
     url = raw_url.strip()
 
@@ -266,6 +276,8 @@ async def init_db() -> None:
         ("subscriptions", "plan_code VARCHAR(50)"),
         ("subscriptions", "current_period_end TIMESTAMP"),
         ("subscriptions", f"auto_renew BOOLEAN DEFAULT {bool_default_true}"),
+        ("subscriptions", "cancelled_at TIMESTAMP"),
+        ("subscriptions", "cancellation_reason VARCHAR(255)"),
         ("notification_preferences", f"margin_calls_enabled BOOLEAN DEFAULT {bool_default_true}"),
         ("plans", "code VARCHAR(50)"),
         ("plans", "max_brokers INTEGER DEFAULT 1"),

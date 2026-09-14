@@ -14,6 +14,7 @@ from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import RevokedTokenRecord
+from app.db.session import rows_affected
 
 
 async def prune_expired_revoked_tokens(
@@ -35,6 +36,6 @@ async def prune_expired_revoked_tokens(
     result = await db.execute(
         delete(RevokedTokenRecord).where(RevokedTokenRecord.expires_at < now)
     )
-    if result.rowcount:
+    if rows_affected(result):
         await db.commit()
-    return int(result.rowcount or 0)
+    return rows_affected(result)

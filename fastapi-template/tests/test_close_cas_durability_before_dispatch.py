@@ -208,7 +208,7 @@ async def _seed_copy_scenario(follower_mode: str = "LIVE") -> dict:
 @pytest.mark.asyncio
 async def test_manual_live_close_cas_committed_before_dispatch(monkeypatch):
     """The CAS must be durable before the broker sees the close order."""
-    observed_statuses: list[str] = []
+    observed_statuses: list[str | None] = []
 
     class _ObservingBroker:
         async def place_order(self, req):
@@ -249,7 +249,7 @@ async def test_manual_live_close_cas_committed_before_dispatch(monkeypatch):
 @pytest.mark.asyncio
 async def test_copy_live_close_cas_committed_before_dispatch(monkeypatch):
     """The copy-trading CAS must also be durable before broker dispatch."""
-    observed_statuses: list[str] = []
+    observed_statuses: list[str | None] = []
 
     class _ObservingBroker:
         async def place_order(self, req):
@@ -311,6 +311,7 @@ async def test_manual_live_close_broker_failure_reopens_after_cas_commit(monkeyp
 
     async with SessionLocal() as db:
         pos = await db.get(PositionRecord, seeded["position_id"])
+        assert pos is not None
         assert pos.status == "OPEN", (
             "after broker failure the already-committed CAS must be explicitly "
             "reverted so the position stays retryable"

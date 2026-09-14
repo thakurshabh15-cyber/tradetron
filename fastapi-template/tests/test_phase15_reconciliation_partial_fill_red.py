@@ -87,7 +87,7 @@ async def _seed_stale_pending_order(
         return str(order.id)
 
 
-async def _fetch_order(order_id: str) -> OrderRecord:
+async def _fetch_order(order_id: str) -> OrderRecord | None:
     from app.db.session import SessionLocal
 
     async with SessionLocal() as db:
@@ -101,6 +101,7 @@ async def _fetch_derived(order_id: str) -> tuple[TradeRecord | None, PositionRec
 
     async with SessionLocal() as db:
         order = await db.get(OrderRecord, order_id)
+        assert order is not None
         trades = (
             await db.execute(select(TradeRecord).where(TradeRecord.order_id == order_id))
         ).scalars().all()
@@ -171,6 +172,7 @@ async def test_partial_fill_books_confirmed_quantity_not_order_quantity(monkeypa
     summary = await engine.reconcile_once()
 
     order = await _fetch_order(oid)
+    assert order is not None
     assert order.status == "FILLED", summary
     assert order.filled_quantity == 4
     assert fake.place_calls == 0

@@ -15,7 +15,7 @@ Security model:
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, NoReturn, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -74,7 +74,7 @@ _HTTP_400 = {
 }
 
 
-def _raise_control_error(exc: AgentControlError) -> None:
+def _raise_control_error(exc: AgentControlError) -> NoReturn:
     if exc.code in _HTTP_404:
         status_code = 404
     elif exc.code in _HTTP_403:
