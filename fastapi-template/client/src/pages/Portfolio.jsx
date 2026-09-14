@@ -16,7 +16,10 @@ export default function Portfolio() {
   const { data: summaryData } = useApi("/api/dashboard/summary");
   const equity = summaryData?.equity || null;
 
-  const rows = positions || [];
+  // Stable array identity for the derived risk memos below: `positions || []`
+  // would mint a fresh array every render while positions is null, which would
+  // re-run bySymbol on every unrelated re-render.
+  const rows = useMemo(() => positions || [], [positions]);
   const upnl = rows.reduce((a, p) => a + (p.unrealized_pnl || 0), 0);
   const netWorth = paperBalance + upnl;
   const grossExposure = rows.reduce((a, p) => a + Math.abs((p.quantity || 0) * (p.current_price || p.entry_price || 0)), 0);

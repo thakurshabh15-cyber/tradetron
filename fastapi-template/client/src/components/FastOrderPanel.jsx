@@ -66,7 +66,9 @@ function FastOrderPanelComponent({ symbol = "NIFTY50", currentPrice = null, onOr
     } finally {
       setLoading(false);
     }
-  }, [executeOrder, symbol, side, quantity, orderType, customPrice, onOrderPlaced]);
+    // toast is a stable reference (memoized toast-context value) — required
+    // for exhaustive-deps correctness.
+  }, [executeOrder, symbol, side, quantity, orderType, customPrice, onOrderPlaced, toast]);
 
   return (
     <div className="glass-panel rounded-2xl p-5 border border-slate-800/80 shadow-glass-md flex flex-col justify-between space-y-4">

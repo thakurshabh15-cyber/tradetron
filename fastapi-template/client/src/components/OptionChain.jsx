@@ -129,7 +129,10 @@ function OptionChain({ symbol = "NIFTY50" }) {
       stopPolling();
       if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(); }
     };
-  }, [activeSymbol, expiry, applyChain, loading]);
+    // loadRest is included for exhaustive-deps correctness: its identity only
+    // changes when activeSymbol/applyChain change (already in this list), so
+    // adding it cannot trigger extra reconnects.
+  }, [activeSymbol, expiry, applyChain, loading, loadRest]);
 
   const rows = chain?.rows || [];
   const maxOi = Math.max(1, ...rows.map((r) => Math.max(r.CE.oi, r.PE.oi)));

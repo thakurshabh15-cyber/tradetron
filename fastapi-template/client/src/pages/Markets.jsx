@@ -26,10 +26,12 @@ export default function Markets() {
     return base.filter((s) => s.includes(q.toUpperCase()));
   }, [tab, q]);
 
-  // Debounced global instrument search beyond the curated universe
+  // Debounced global instrument search beyond the curated universe. The
+  // short-query clear-path also runs inside the timer callback so no setState
+  // executes synchronously in the effect body.
   useEffect(() => {
-    if (q.trim().length < 2) { setResults([]); return; }
     const t = setTimeout(async () => {
+      if (q.trim().length < 2) { setResults([]); return; }
       try {
         const res = await fetch(`${API_BASE}/api/market-data/instruments/search?q=${encodeURIComponent(q)}&limit=8`);
         if (res.ok) setResults((await res.json()).instruments || []);

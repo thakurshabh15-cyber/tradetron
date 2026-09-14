@@ -42,7 +42,9 @@ export function useApi(path, { immediate = true, public: isPublic = false, cache
     } finally {
       setLoading(false);
     }
-  }, [path, isPublic, fetcher, cacheTtlMs]);
+    // isPublic is intentionally NOT a dependency: it only selects `fetcher`
+    // above, which is already in the dependency array.
+  }, [path, fetcher, cacheTtlMs]);
 
   useEffect(() => {
     if (immediate) fetchData();

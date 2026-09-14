@@ -77,13 +77,15 @@ export default function CommandPalette() {
     }
   }, [open]);
 
-  // Debounced instrument search against the real instrument master
+  // Debounced instrument search against the real instrument master. The
+  // clear-path also defers into the timer callback so no setState runs
+  // synchronously inside the effect body.
   useEffect(() => {
-    if (!open || query.trim().length < 2) {
-      setInstruments([]);
-      return undefined;
-    }
     const t = setTimeout(async () => {
+      if (!open || query.trim().length < 2) {
+        setInstruments([]);
+        return;
+      }
       try {
         const res = await fetch(
           `${API_BASE}/api/market-data/instruments/search?q=${encodeURIComponent(query.trim())}&limit=6`
@@ -120,6 +122,11 @@ export default function CommandPalette() {
 
   const flat = useMemo(() => [...commandHits, ...instrumentHits], [commandHits, instrumentHits]);
 
+  // Derived key cursor: clamp the tracked index to the current list bounds at
+  // consumption time (highlight + Enter), so list shrinkage never needs an
+  // effect to re-sync state.
+  const cursorIndex = Math.min(cursor, Math.max(0, flat.length - 1));
+
   const go = useCallback(
     (item) => {
       setOpen(false);
@@ -131,10 +138,6 @@ export default function CommandPalette() {
     },
     [navigate]
   );
-
-  useEffect(() => {
-    setCursor((c) => Math.min(c, Math.max(0, flat.length - 1)));
-  }, [flat.length]);
 
   // Precompute grouped entries so rendering never mutates render-scope vars
   const sections = useMemo(() => {
@@ -161,7 +164,7 @@ export default function CommandPalette() {
             onKeyDown={(e) => {
               if (e.key === "ArrowDown") { e.preventDefault(); setCursor((c) => Math.min(c + 1, flat.length - 1)); }
               else if (e.key === "ArrowUp") { e.preventDefault(); setCursor((c) => Math.max(c - 1, 0)); }
-              else if (e.key === "Enter" && flat[cursor]) { go(flat[cursor]); }
+              else if (e.key === "Enter" && flat[cursorIndex]) { go(flat[cursorIndex]); }
             }}
             placeholder="Search instruments, strategies or jump to…"
             className="w-full bg-transparent text-sm text-white placeholder-slate-500 outline-none"
@@ -177,7 +180,7 @@ export default function CommandPalette() {
             <div key={section} className="mb-1">
               <p className="px-4 pb-1 pt-2 text-[9px] font-bold uppercase tracking-[0.18em] text-slate-600">{section}</p>
               {items.map((it) => {
-                const active = flat.indexOf(it) === cursor;
+                const active = flat.indexOf(it) === cursorIndex;
                 return (
                   <button
                     key={it.symbol || it.to}
