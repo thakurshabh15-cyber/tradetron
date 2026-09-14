@@ -147,7 +147,8 @@ class AgentDecisionRecord(Base):
         nullable=True, index=True,
     )
     user_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=False
+        String(36), ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=False, index=True,
     )
     task_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("agent_tasks.id", ondelete="SET NULL"),
