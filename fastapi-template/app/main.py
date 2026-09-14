@@ -204,6 +204,16 @@ app = FastAPI(
     redoc_url="/redoc" if settings.environment != "production" else None,
     openapi_url="/openapi.json" if settings.environment != "production" else None,
 )
+# Market-data subscription ceiling -> HTTP 429 (fail-closed, no partial state).
+# Keeps a dynamic subscribe() beyond settings.max_subscribed_symbols from
+# surfacing as a generic 500: clients get an actionable message instead.
+from fastapi.responses import JSONResponse as _JSONResponse
+from app.market_data.unified_manager import SubscriptionLimitError
+
+
+@app.exception_handler(SubscriptionLimitError)
+async def _subscription_limit_handler(request, exc: SubscriptionLimitError):
+    return _JSONResponse(status_code=429, content={"detail": str(exc)})
 
 
 # Phase 14 / OBS-1: unhandled-exception handling — inner middleware layer.

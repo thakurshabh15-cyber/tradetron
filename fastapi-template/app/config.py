@@ -283,6 +283,27 @@ class Settings(BaseSettings):
     # ── Market data simulator ────────────────────────────────────────
     sim_symbols: str = "AAPL,MSFT,NVDA,GOOGL,AMZN"
     sim_tick_interval: float = 0.5  # seconds between simulated ticks (500ms live cadence)
+# ---- In-process PAPER-book / memory bounds ---------------------------------
+    #
+    # OrderManager's in-memory PAPER ledger keeps the NEWEST closed positions
+    # and executions and drops the oldest beyond this cap.  Trading/audit truth
+    # always lives in the `orders` / `trades` / `positions` DB tables (the
+    # in-process book is a process-lifetime shadow only) so capping it cannot
+    # lose authoritative history.  Lifetime counters continue to report exact
+    # totals.  Values >= 2 are respected verbatim (default 5000; hard ceiling
+    # 100_000); a value below 2 (0, negative, unset/broken) resolves to the
+    # 100-row safety floor -- the memory bound can never be switched off.
+    paper_book_max_history: int = 5000
+
+    # ---- Market-data subscription bounds --------------------------------------
+    # Maximum distinct symbols the unified market hub may keep subscribed at
+    # once.  Every dynamically-subscribed symbol adds a per-symbol quote slot in
+    # provider memory and (for live crypto) a Binance wire subscription; without
+    # a ceiling, symbols subscribed once accumulate forever on a long-running
+    # process.  Values >= 2 are respected verbatim (default 250; hard ceiling
+    # 10_000); a value below 2 (0, negative, unset/broken) resolves to the
+    # 200-symbol safety floor -- the bound can never be disabled (fail closed).
+    max_subscribed_symbols: int = 250
 
     # ── Market data freshness ──────────────────────────────────────────
     # Max age (seconds) before a *real* tick is considered STALE and must no

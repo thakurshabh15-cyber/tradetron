@@ -16,6 +16,14 @@ from app.market_data.providers.indian_equity import IndianEquityMarketDataProvid
 logger = get_logger("market.unified")
 
 
+class SubscriptionLimitError(RuntimeError):
+    """Raised when a dynamic market-data subscription would exceed the bound.
+
+    Fail-closed: the subscription is NOT applied when this is raised, so a
+    caller can surface a 429/400 without partial provider state.
+    """
+
+
 class UnifiedMarketDataManager:
     """Central market data hub that multiplexes across Indian Equities, Crypto, and Forex providers."""
 
@@ -131,12 +139,101 @@ class UnifiedMarketDataManager:
         logger.info("Unified Market Data Hub stopped")
 
     async def subscribe(self, symbols: list[str]) -> None:
-        """Dynamically subscribe symbols to their respective provider."""
+        """Dynamically subscribe symbols to their respective provider.
+
+        Bounded by ``settings.max_subscribed_symbols`` (any positive configured
+        value is respected verbatim up to the 10_000 ceiling; a missing, zero,
+        negative or tiny value resolves to the 200-symbol safety floor): an
+        attempt that would grow the distinct subscribed
+        symbol set beyond the cap raises :class:`SubscriptionLimitError`
+        WITHOUT mutating any provider (fail closed, no partial state).  After
+        a successful subscription the unified quote cache is pruned to the
+        still-subscribed universe so historically-subscribed symbols can never
+        accumulate in memory on a long-running process.  Trading truth is
+        unaffected - quotes are a presentational cache; the engine consumes
+        ticks from the queue directly.
+        """
+        new_set: set[str] = set()
         for sym in symbols:
-            asset_class = self.classify_symbol(sym)
+            clean = sym.upper().strip()
+            if not clean:
+                continue
+            asset_class = self.classify_symbol(clean)
+            provider = self._providers.get(asset_class)
+            if provider is None:
+                continue
+            subscribers = getattr(provider, "_subscribers", None)
+            if subscribers is not None and clean not in subscribers:
+                new_set.add(clean)
+
+        cap = self._effective_subscription_cap()
+        if new_set:
+            current_universe = self._subscribed_symbols()
+            if len(current_universe | new_set) > cap:
+                raise SubscriptionLimitError(
+                    f"Subscription limit reached: cannot exceed {cap} distinct "
+                    f"subscribed symbols (currently {len(current_universe)}, "
+                    f"requested +{len(new_set)})."
+                )
+
+        for sym in symbols:
+            clean = sym.upper().strip()
+            if not clean:
+                continue
+            asset_class = self.classify_symbol(clean)
             provider = self._providers.get(asset_class)
             if provider:
-                await provider.subscribe([sym])
+                await provider.subscribe([clean])
+
+        # Prune on EVERY successful subscribe (not only when the universe grew):
+        # a quote for a symbol no provider subscribes to is stale by definition
+        # and must never linger in the presentational cache on a long-running
+        # process.  Unsubscribing stale quotes here is safe -- pruning only
+        # drops keys absent from the still-subscribed universe.
+        self._prune_unsubscribed_quotes()
+
+    def _effective_subscription_cap(self) -> int:
+        """Configured hard ceiling for the distinct subscribed-symbol universe.
+
+        Positive configured values are respected verbatim up to the 10_000
+        ceiling; a missing, zero, negative or tiny value resolves to the
+        200-symbol safety floor so a misconfiguration can never silently
+        disable the memory bound.
+        """
+        from app.config import settings
+
+        raw = getattr(settings, "max_subscribed_symbols", 250)
+        raw = 250 if raw in (None, "") else int(raw)
+        # A value below 2 (missing, "0", negative, or "1") means the bound was
+        # not really configured and resolves to the 200-symbol safety floor --
+        # the bound can never be switched off by config (fail closed).  Values
+        # >= 2 are respected verbatim (documented default 250) up to 10_000.
+        return 200 if raw <= 1 else min(raw, 10_000)
+
+    def _subscribed_symbols(self) -> set[str]:
+        """Union of every provider's currently subscribed symbol set."""
+        universe: set[str] = set()
+        for provider in set(self._providers.values()):
+            subscribers = getattr(provider, "_subscribers", None)
+            if subscribers:
+                universe.update(subscribers)
+        return universe
+
+    def _prune_unsubscribed_quotes(self) -> None:
+        """Drop quote-cache entries for symbols no provider subscribes to.
+
+        Keeps ``self._quotes`` bounded by the (capped) subscribed universe
+        instead of growing with every historically-seen symbol.  Only the
+        presentational snapshot cache is touched; the tick queue, broker price
+        cache and provider state are never modified here.
+        """
+        subscribed = self._subscribed_symbols()
+        stale = [sym for sym in self._quotes if sym not in subscribed]
+        if not stale:
+            return
+        for sym in stale:
+            self._quotes.pop(sym, None)
+        logger.debug("Pruned %d unsubscribed quote-cache symbols", len(stale))
 
     async def _handle_incoming_tick(self, tick: NormalizedTick) -> None:
         """Process incoming standardized tick: cache, enqueue to trading engine, and broadcast."""

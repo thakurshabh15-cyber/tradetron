@@ -110,12 +110,44 @@ class OrderManager:
 
         # Active open positions: symbol -> Position
         self.active_positions: dict[str, Position] = {}
-        # History of closed positions
+        # History of closed positions (bounded to the newest N rows).
+        # Trading/audit truth always lives in the orders/trades/positions DB
+        # tables -- this in-process ledger is only a process-lifetime shadow,
+        # so capping it cannot lose authoritative history.
         self.closed_positions: list[Position] = []
-        # Audit log of all executions
+        # Audit log of all executions (bounded likewise).
         self.execution_history: list[TradeExecution] = []
+        # Lifetime totals (monotonic) -- stay exact after bounded trimming.
+        self.closed_positions_lifetime: int = 0
+        self.executions_lifetime: int = 0
+        # Retained-row ceiling.  A configured value below 2 (missing, "0",
+        # negative, or "1") means the bound was not really set and resolves to
+        # the 100-row safety floor -- the memory bound can never be switched
+        # off by config.  Values >= 2 are respected verbatim (documented
+        # default 5000) up to the 100_000 hard ceiling.
+        from app.config import settings
+
+        raw = getattr(settings, "paper_book_max_history", 5000)
+        raw_cap = 5000 if raw in (None, "") else int(raw)
+        self._book_cap = 100 if raw_cap <= 1 else min(raw_cap, 100_000)
         # Cumulative realized PnL
         self.realized_pnl: float = 0.0
+
+    def _record_closed_position(self, position: Position) -> None:
+        """Append a closed position to the bounded in-process ledger."""
+        self.closed_positions_lifetime += 1
+        self.closed_positions.append(position)
+        if len(self.closed_positions) > self._book_cap:
+            excess = len(self.closed_positions) - self._book_cap
+            del self.closed_positions[:excess]
+
+    def _record_execution(self, execution: TradeExecution) -> None:
+        """Append an execution to the bounded in-process ledger."""
+        self.executions_lifetime += 1
+        self.execution_history.append(execution)
+        if len(self.execution_history) > self._book_cap:
+            excess = len(self.execution_history) - self._book_cap
+            del self.execution_history[:excess]
 
         # Pre-trade risk gate.  The TradingEngine wires ``self._risk`` here so
         # the webhook handler's ``engine._order_manager.risk_manager.check()``
@@ -449,7 +481,7 @@ class OrderManager:
             price=filled_price,
             action_type="ENTRY",
         )
-        self.execution_history.append(execution)
+        self._record_execution(execution)
 
         logger.info(
             "POSITION OPENED: %s %s %d @ %.2f | SL=%.2f (%.1f%%), TP=%.2f (%.1f%%)",
@@ -522,9 +554,9 @@ class OrderManager:
             except Exception as exc:  # never break trade flow
                 logger.debug("Auto-pilot risk feed skipped: %s", exc)
 
-        # Move from active to closed
+        # Move from active to closed (bounded in-process ledger)
         self.active_positions.pop(position.symbol, None)
-        self.closed_positions.append(position)
+        self._record_closed_position(position)
 
         # Record Execution
         execution = TradeExecution(
@@ -537,7 +569,7 @@ class OrderManager:
             action_type=action_type,
             pnl=pnl,
         )
-        self.execution_history.append(execution)
+        self._record_execution(execution)
 
         logger.info(
             "POSITION CLOSED [%s]: %s %s %d @ %.2f (Entry: %.2f) | PnL: $%+.2f | Total Realized: $%+.2f",
