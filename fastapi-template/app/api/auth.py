@@ -351,6 +351,16 @@ async def logout(
             # fails (e.g. duplicate key on concurrent logout from multiple tabs).
             logger.debug("Token revocation commit skipped (likely already revoked)")
 
+        # Storage safety: purge revocation rows whose refresh-token expiry has
+        # already passed (they can never authenticate again).  Best-effort and
+        # never fatal to the logout flow.
+        try:
+            from app.db.maintenance import prune_expired_revoked_tokens
+
+            await prune_expired_revoked_tokens(db)
+        except Exception:
+            logger.debug("Expired revoked-token prune skipped", exc_info=True)
+
     logger.info("User session logged out and token invalidated server-side")
     return {"success": True, "message": "Logged out successfully"}
 
@@ -400,6 +410,15 @@ async def refresh_token(
     )
     db.add(revocation)
     await db.commit()
+
+    # Storage safety: prune already-expired revocation rows on rotation (bounded
+    # table growth).  Best-effort; a maintenance failure must not break refresh.
+    try:
+        from app.db.maintenance import prune_expired_revoked_tokens
+
+        await prune_expired_revoked_tokens(db)
+    except Exception:
+        logger.debug("Expired revoked-token prune skipped", exc_info=True)
 
     return _generate_token_response(user)
 

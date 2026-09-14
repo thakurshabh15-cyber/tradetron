@@ -222,6 +222,14 @@ async def admin_reset_password(
                 expires_at=datetime.now(timezone.utc) + timedelta(days=7),
             ))
             await db.commit()
+            # Storage safety: purge already-expired revocation rows (bounded
+            # table growth).  Best-effort; never fatal to the reset flow.
+            try:
+                from app.db.maintenance import prune_expired_revoked_tokens
+
+                await prune_expired_revoked_tokens(db)
+            except Exception:
+                logger.debug("Expired revoked-token prune skipped", exc_info=True)
         except Exception as exc:  # pragma: no cover - revocation is best-effort
             logger.warning("Failed to record token revocation: %s", exc)
 
