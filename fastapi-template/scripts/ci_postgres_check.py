@@ -18,13 +18,13 @@ constraints, partial indexes, CHECK constraints).  This guard closes that gap:
                     ORM declares fails the run.
 
 Usage (PostgreSQL reachable — e.g. ``docker compose up postgres`` or a local
-server; defaults match the repo compose service on host port 5434):
+server; defaults match the repo compose service on host port 5432):
 
     python scripts/ci_postgres_check.py
 
 Tunable via environment:
     PARITY_PG_HOST      (default localhost)
-    PARITY_PG_PORT      (default 5434)
+    PARITY_PG_PORT      (default 5432)
     PARITY_PG_USER      (default tradetron)
     PARITY_PG_PASSWORD  (default tradetron_secure_password)
 
@@ -72,7 +72,7 @@ def _pg_host() -> str:
 
 
 def _pg_port() -> str:
-    return os.environ.get("PARITY_PG_PORT", "5434")
+    return os.environ.get("PARITY_PG_PORT", "5432")
 
 
 def _pg_user() -> str:
