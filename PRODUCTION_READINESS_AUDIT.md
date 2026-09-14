@@ -430,6 +430,48 @@ Remaining items require **operator / infrastructure action only:**
 
 ---
 
+## Section 19 — Phase 1 Step 9 release-hardening status (2026-09-14) 🟢
+
+> Final resolution record for the Step-9 remediation scope. Every code-level item
+> from earlier sections is now closed with executable evidence; the only remaining
+> items are operator-only (credential rotation, Render restart, Redis provisioning).
+
+| Gate | Command / Scope | Result |
+|---|---|---|
+| Backend pytest (full suite) | `pytest -q` (`fastapi-template\.venv`) | **899 passed / 0 failed** — 886.76 s, 3 warnings |
+| Postgres parity | `python scripts/ci_postgres_check.py` against `docker compose` Postgres (port 5432) | **✔ 32/32 tables exact** — no ORM↔migration drift |
+| Alembic drift | `python scripts/ci_alembic_check.py` | ✔ single head, no pending ops |
+| CI secret scan | `python scripts/ci_secret_scan.py` | ✔ clean — 453 tracked files, 0 findings |
+| Frontend vitest | `npm test` (client) | ✔ 71 / 71 passed |
+| Frontend ESLint | `npm run lint` (client) | ✔ 0 errors — 19 informational warnings |
+| Frontend build | `npm run build` (client, Vite) | ✔ build OK |
+
+Fixes shipped in this pass:
+
+1. **Phase-E fail-closed bounds** (`order_manager.py`, `unified_manager.py`): parseable
+   values ≥ 2 respected verbatim up to the hard ceiling; `0`/negative/`1` → safety floor
+   (100 / 200); `None`/empty → documented defaults.
+2. **Quote-cache prune on every subscribe** (`unified_manager.py`): stale-quote pruning
+   no longer depends on the subscribed universe *growing*.
+3. **Subscription ceiling → HTTP 429** (`app/main.py`): `SubscriptionLimitError` handler,
+   fail-closed with an actionable message.
+4. **ORM↔migration drift** (`app/models/agent_control.py`): `AgentDecision.user_id` now
+   `index=True` to match `0011_agent_control` (`ix_agent_decisions_user_id`) — caught by
+   the Postgres parity gate.
+5. **Revoked-token table hygiene** (`auth.py`, `admin.py`, new `app/db/maintenance.py`):
+   best-effort `prune_expired_revoked_tokens()`; callers fail open so logout/rotation/reset
+   never break. 2 regression tests.
+6. **CI parity port alignment** (`scripts/ci_postgres_check.py`): default port `5434 → 5432`
+   to match the compose mapping.
+7. **Frontend lint cleanup (S9-D3)**: 7 `react-hooks/set-state-in-effect` warnings cleared
+   in 6 files; 19 informational warnings remain (tracked).
+
+7 new regression tests added (paper-book bounds 2, subscription cap 3, revoked-token
+retention 2). All 7 commits pushed to `origin/feat/autonomous-os`; remote HEAD verified.
+Sections 1–18 of this report remain the historical record; this section supersedes their
+**code-level** status only — operator infrastructure items are unchanged.
+---
+
 ## Section 17 — Additional production hardening (2026-09-08 pass)
 
 Independent re-audit of the current code confirmed the prior P1/P2 work and closed the following additional **P1 (security)** and **P2 (warning/hygiene)** gaps:
