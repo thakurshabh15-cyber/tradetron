@@ -54,11 +54,17 @@
 
 ### Option A: Render (Blueprint included — `render.yaml`)
 1. New → **Blueprint** → point at repo root `fastapi-template/`.
-2. Replace env vars with production values from `.env.production` (**never commit real secrets**):
+2. **Provision Redis FIRST (this fixes the 503, "missing REDIS_URL" class of failures).** Render Blueprints cannot auto-provision Key Value instances, and `render.yaml` intentionally declares no `REDIS_URL`/`UPSTASH_REDIS_URL` value:
+   - Dashboard → **New → Key Value** → name `tradetron-redis`, region `oregon` (same as the web service), pick a plan.
+   - Open the `tradetron-backend` service → **Connect a Key Value** → select `tradetron-redis`.
+   - Render auto-injects `REDIS_URL` (e.g. `redis://red-xxxx:6379`) on redeploy — no manual secret entry, no committed value.
+   - **Verify after deploy:** `https://<service>.onrender.com/readyz` returns `{"checks":{"database":true,"cache":true}}`. `/readyz` is **fail-closed in production**: Redis unreachable → HTTP 503, so every deploy needs the link above.
+   - (Alternative) an external managed Redis (e.g. Upstash `rediss://…`) set as a manual secret `UPSTASH_REDIS_URL` works too; `settings.effective_redis_url` prefers it over `REDIS_URL`.
+3. Replace env vars with production values from `.env.production` (**never commit real secrets**):
    | Key | Value |
    |---|---|
    | `DATABASE_URL` | Supabase pooler URL |
-   | `UPSTASH_REDIS_URL` | `rediss://…` |
+   | `UPSTASH_REDIS_URL` | `rediss://…` (only if NOT using the linked Key Value above) |
    | `JWT_SECRET` | 64-char hex (`python -c "import secrets;print(secrets.token_hex(32))"`) |
    | `JWT_ALGORITHM` | `HS256` |
    | `ACCESS_TOKEN_EXPIRE_MINUTES` | `1440` |
@@ -69,12 +75,12 @@
    | Broker keys | `ANGEL_*`, `DHAN_*`, `FYERS_*`, `ZERODHA_*`, `BINANCE_*` |
    | Feed keys | `ALPACA_API_KEY/SECRET`, `OANDA_API_TOKEN` |
    | Payments | `RAZORPAY_KEY_ID/SECRET` (`rzp_live_…`), `STRIPE_SECRET_KEY` (`sk_live_…`) |
-3. Start command (already in blueprint):
+4. Start command (already in blueprint):
    ```bash
    uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'
    ```
-4. Health check path: `/healthz` (liveness) / `/readyz` (readiness).
-5. SSL: automatic (`*.onrender.com`) — add custom domain for full HSTS preload eligibility.
+5. Health check path: `/healthz` (liveness) / `/readyz` (readiness).
+6. SSL: automatic (`*.onrender.com`) — add custom domain for full HSTS preload eligibility.
 
 ### Option B: Railway (`railway.json` committed)
 ```bash

@@ -74,6 +74,40 @@ def _build_formatter() -> logging.Formatter:
     )
 
 
+class _UTF8StreamHandler(logging.StreamHandler):
+    """StreamHandler that bypasses the encoding layer on the stream and writes
+    UTF-8 bytes directly to the underlying raw buffer.
+
+    On Windows the default console/file encoding is cp1252, which cannot
+    represent emoji or other non-BMP characters.  Colourama (and similar
+    wrappers) add additional layers that inherit this limitation.  This
+    handler reaches through every wrapper to ``stream.buffer`` and encodes
+    the formatted message as UTF-8 before writing, so every log line
+    succeeds regardless of the terminal codepage.
+
+    On POSIX (Render/Linux) stdout is already UTF-8; the ``buffer`` path
+    is harmless and produces identical output.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:  # noqa: D102
+        try:
+            msg = self.format(record)
+            stream = self.stream
+            buf = getattr(stream, "buffer", None)
+            if buf is not None:
+                # Write UTF-8 bytes directly — no TextIOWrapper in the path.
+                buf.write((msg + self.terminator).encode("utf-8", errors="backslashreplace"))
+                buf.flush()
+            else:
+                # Pytest capture objects etc. have no .buffer; write text.
+                stream.write(msg + self.terminator)
+                stream.flush()
+        except RecursionError:  # same contract as logging.StreamHandler.emit
+            raise
+        except Exception:
+            self.handleError(record)
+
+
 def setup_logging() -> None:
     """Configure the root logger for the application.
 
@@ -88,7 +122,7 @@ def setup_logging() -> None:
         if getattr(handler, _OWNED_HANDLER_ATTR, False):
             root.removeHandler(handler)
 
-    handler = logging.StreamHandler(sys.stdout)
+    handler = _UTF8StreamHandler(sys.stdout)
     setattr(handler, _OWNED_HANDLER_ATTR, True)
     handler.setFormatter(_build_formatter())
 
