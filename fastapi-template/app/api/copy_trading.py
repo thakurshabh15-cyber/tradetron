@@ -71,7 +71,13 @@ class JoinGroupRequest(BaseModel):
     invite_code: Optional[str] = None
     multiplier: float = Field(1.0, ge=0.1, le=10.0)
     max_allocation: float = Field(50000.0, ge=1000.0)
-    mode: Literal["PAPER", "LIVE"] = "PAPER"
+    # Step 9 fix: mode must be distinguishable from "not provided". The old
+    # ``= "PAPER"`` default made an omitted mode identical to an explicit
+    # PAPER, so resuming a STOPPED subscription without mode silently reset a
+    # LIVE follower to PAPER and detached their broker.  None now means
+    # "preserve existing" on resume; fresh subscriptions default to PAPER at
+    # the point of row creation.
+    mode: Optional[Literal["PAPER", "LIVE"]] = None
     broker_account_id: Optional[str] = None
 
 
@@ -331,8 +337,24 @@ async def join_copy_group(
             existing.status = "ACTIVE"
             existing.multiplier = req.multiplier
             existing.max_allocation = req.max_allocation
-            existing.mode = req.mode
-            existing.broker_account_id = req.broker_account_id if req.mode == "LIVE" else None
+            # ── Resume path consistency fix (Step 9 audit):
+            #    A follower re-subscribing WITHOUT resending `mode` must keep
+            #    their existing execution mode — the old code defaulted the
+            #    row to None and silently detached a previously-LIVE broker
+            #    linkage.  Mirror update_following_settings' semantics:
+            #      * mode resolves to (requested ?? existing);
+            #      * a broker account is only ever attached while LIVE;
+            #      * an explicit replacement is validated above and honored;
+            #      * existing LIVE linkage is preserved when no swap is sent;
+            #      * switching away from LIVE always detaches.
+            resume_mode = req.mode or existing.mode
+            existing.mode = resume_mode
+            if req.broker_account_id is not None:
+                existing.broker_account_id = (
+                    req.broker_account_id if resume_mode == "LIVE" else None
+                )
+            elif resume_mode != "LIVE":
+                existing.broker_account_id = None
             await db.commit()
             return {"success": True, "message": "Resumed copy trading subscription", "follower_id": existing.id}
         raise HTTPException(status_code=400, detail="You are already following this copy group")
@@ -345,11 +367,11 @@ async def join_copy_group(
     follower = CopyFollowerRecord(
         group_id=group.id,
         follower_user_id=user.id,
-        broker_account_id=req.broker_account_id if req.mode == "LIVE" else None,
+        broker_account_id=req.broker_account_id if (req.mode or "PAPER") == "LIVE" else None,
         multiplier=req.multiplier,
         status="ACTIVE",
         max_allocation=req.max_allocation,
-        mode=req.mode,
+        mode=req.mode or "PAPER",
     )
     db.add(follower)
     await db.commit()
