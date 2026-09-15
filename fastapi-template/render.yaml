@@ -82,6 +82,63 @@ services:
       - key: LOG_LEVEL
         value: INFO
 
+  # ── D-1 FIX: Webhook Ingress Service ──────────────────────────────────────
+  # The webhook platform (app/webhooks/main.py) is a SEPARATE FastAPI app with
+  # its own health/readiness checks, Redis-backed queue, worker pool, rate
+  # limiter, and idempotency store.  It MUST be deployed as a second service:
+  # broker postbacks (Zerodha, Upstox, AngelOne), Razorpay billing callbacks,
+  # and TradeThrone signal webhooks all POST to this service's /webhooks/*
+  # routes.  Without this service, provider webhooks return HTTP 404 on the
+  # main API (which does NOT mount the ingress router).
+  #
+  # The webhook service shares the same DATABASE_URL and REDIS_URL as the main
+  # API.  Both services run `alembic upgrade head` during release; concurrent
+  # runs are idempotent (Alembic's version table makes re-runs a no-op).
+  #
+  # After applying this blueprint:
+  #   1. Link `tradetron-redis` to this service (same Key Value as the main API).
+  #   2. Update provider webhook URLs to point at the webhook service:
+  #      - Zerodha Kite: https://tradetron-webhooks.onrender.com/webhooks/tradethrone
+  #      - Razorpay:     https://tradetron-webhooks.onrender.com/webhooks/billing/razorpay
+  #      - Broker postbacks: https://tradetron-webhooks.onrender.com/webhooks/broker/{broker_name}
+  #   3. Verify: https://tradetron-webhooks.onrender.com/healthz → 200
+  #      https://tradetron-webhooks.onrender.com/readyz → 200 (Redis linked)
+  #      https://tradetron-webhooks.onrender.com/metrics → Prometheus text
+  - type: web
+    name: tradetron-webhooks
+    runtime: python
+    region: oregon
+    plan: starter
+    rootDir: fastapi-template
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: uvicorn app.webhooks.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'
+    releaseCommand: alembic upgrade head
+    healthCheckPath: /healthz
+    envVars:
+      - key: PORT
+        value: 10001
+      - key: DATABASE_URL
+        fromDatabase:
+          name: tradetron-postgres
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ENVIRONMENT
+        value: production
+      - key: BROKER_MODE
+        value: simulated
+      - key: WEBHOOK_LOCAL_MODE
+        value: "false"
+      # TRADETHRONE_WEBHOOK_SECRET is the HMAC signing secret used to verify
+      # incoming TradeThrone signal webhooks.  Set the SAME value on both
+      # the main API and webhook service.
+      - key: TRADETHRONE_WEBHOOK_SECRET
+        generateValue: true
+      - key: LOG_LEVEL
+        value: INFO
+      # FEED_MODE_CRYPTO and ALLOWED_ORIGINS are not needed for the webhook
+      # service (it does not serve the frontend or feed market data).
+
 databases:
   - name: tradetron-postgres
     region: oregon

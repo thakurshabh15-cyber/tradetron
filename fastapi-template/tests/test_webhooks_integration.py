@@ -2118,6 +2118,104 @@ class TestSchemaValidation:
         assert "Empty request body" in response.json()["detail"]
 
 
+def _resolved_route_paths(app) -> set[str]:
+    """Return every resolvable route path for a FastAPI app.
+
+    FastAPI 0.115+ wraps include_router() into an `_IncludedRouter` object that
+    lazily resolves its routes; those sub-routes are only visible through
+    `effective_route_contexts()`.  This helper flattens both the direct routes
+    and the lazily-included router surfaces so tests see the real HTTP surface.
+    """
+    paths: set[str] = set()
+    for r in app.routes:
+        if getattr(r, "path", None) is None and type(r).__name__ == "_IncludedRouter":
+            for ctx in r.effective_route_contexts():
+                if getattr(ctx, "path", None):
+                    paths.add(ctx.path)
+        elif getattr(r, "path", None):
+            paths.add(r.path)
+    return paths
+
+
+class TestDeploymentWiring:
+    """Regression tests for the D-1 production wiring of the webhook platform.
+
+    The webhook ingress app (app.webhooks.main:app) is a SEPARATE FastAPI app
+    from the main API.  Provider webhooks (Zerodha postbacks, Razorpay billing,
+    TradeThrone signals) must reach the webhook service, so every deployment
+    path must expose it: render.yaml declares a `tradetron-webhooks` service and
+    the Procfile declares a `webhook:` process line.  These tests fail loudly if
+    the wiring is ever removed or if the ingress router silently disappears.
+    """
+
+    def test_webhook_app_exposes_production_route_surfaces(self):
+        """The webhook app must mount health, readiness, metrics, and the
+        webhook ingress router — the contract the load balancer and providers
+        rely on."""
+        from app.webhooks.main import app as webhook_app
+
+        routes = _resolved_route_paths(webhook_app)
+        for required in (
+            "/healthz",
+            "/readyz",
+            "/metrics",
+            # The ingress router uses a path parameter /webhooks/{provider}
+            # which matches tradethrone, razorpay, etc. at runtime.
+            "/webhooks/{provider}",
+            "/webhooks/{provider}/health",
+        ):
+            assert required in routes, (
+                f"webhook app is missing required production route {required}"
+            )
+
+    def test_ingress_router_not_mounted_on_main_api(self):
+        """The main API intentionally does NOT mount /webhooks — the ingress
+        router belongs to the separate webhook service.  This documents the
+        split-service contract: a 404 on the main API is expected."""
+        from app.main import app as main_app
+
+        routes = _resolved_route_paths(main_app)
+        # The main API should never have /webhooks/{provider} routes
+        assert not any(
+            r and r.startswith("/webhooks/{") for r in routes
+        ), "Main API must not mount the webhook ingress router"
+
+    def test_render_blueprint_declares_webhook_service(self):
+        """render.yaml must declare the tradetron-webhooks service so the
+        Blueprint provisions the webhook platform on apply."""
+        from pathlib import Path
+
+        render_yaml = Path(__file__).resolve().parent.parent / "render.yaml"
+        content = render_yaml.read_text(encoding="utf-8")
+        assert "name: tradetron-webhooks" in content
+        assert "app.webhooks.main:app" in content
+        # The webhook service must stay fail-closed: WEBHOOK_LOCAL_MODE=false
+        # is mandatory in production (never accept unverified webhooks).
+        assert 'WEBHOOK_LOCAL_MODE' in content
+
+    def test_procfile_declares_webhook_process(self):
+        """The Procfile (Railway + any Procfile-driven host) must run the
+        webhook platform as a second process."""
+        from pathlib import Path
+
+        procfile = Path(__file__).resolve().parent.parent / "Procfile"
+        content = procfile.read_text(encoding="utf-8")
+        assert any(
+            line.strip().startswith("webhook:") and "app.webhooks.main:app" in line
+            for line in content.splitlines()
+        )
+
+    def test_deployment_manual_documents_webhook_service(self):
+        """DEPLOYMENT.md must mention the webhook service so operators know
+        provider webhook URLs must point at it (not the main API)."""
+        from pathlib import Path
+
+        deployment = Path(__file__).resolve().parent.parent / "DEPLOYMENT.md"
+        content = deployment.read_text(encoding="utf-8")
+        assert "Webhook Ingress Service" in content
+        assert "app.webhooks.main" in content
+
+
 # Pytest configuration
 def pytest_configure(config):
     config.addinivalue_line("markers", "asyncio: mark test as async")

@@ -1,1 +1,8 @@
 web: uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080} --proxy-headers --forwarded-allow-ips='*'
+# D-1 FIX: Webhook ingress service — Railway runs both processes; Render uses
+# the second web service in render.yaml instead.  The webhook platform is a
+# separate FastAPI app (app/webhooks/main.py) with its own Redis-backed queue,
+# worker pool, rate limiter, and idempotency store.  Provider webhooks
+# (Zerodha postbacks, Razorpay billing, TradeThrone signals) must reach this
+# service; the main API does NOT mount the ingress router.
+webhook: uvicorn app.webhooks.main:app --host 0.0.0.0 --port ${WEBHOOK_PORT:-8081} --proxy-headers --forwarded-allow-ips='*'

@@ -98,6 +98,42 @@ docker run -p 8080:8080 --env-file .env.production tradethrone-api
 > removed; the only container build context is `fastapi-template/`.
 > Behind Cloudflare proxy: enable *Full (strict)* SSL + "Always Use HTTPS".
 
+### Option D: Webhook Ingress Service (REQUIRED for provider callbacks)
+
+The webhook platform (`app/webhooks/main.py`) is a **separate FastAPI app** from
+the main API.  It is intentionally NOT mounted inside `app.main` — it runs its
+own Redis-backed queue (Redis Streams), worker pool, Token Bucket rate limiter,
+and idempotency store, plus its own `/healthz`, `/readyz` (fail-closed on Redis)
+and `/metrics` endpoints.
+
+> ⚠️ **D-1** — Without this service, provider webhooks (Zerodha postbacks,
+> Razorpay billing callbacks, TradeThrone signal webhooks) return **HTTP 404**
+> because the ingress router is only mounted in the webhook app.  Deploy BOTH
+> services.
+
+1. **Render** — already declared in `render.yaml` as the `tradetron-webhooks`
+   service (same rootDir/build, separate start command, same Postgres +
+   Redis).  After creating the Blueprint:
+   - Link the same `tradetron-redis` Key Value to the webhook service
+     (Dashboard → `tradetron-webhooks` → Connect a Key Value).
+   - Point provider webhook URLs at the webhook service:
+     - TradeThrone signals: `https://tradetron-webhooks.onrender.com/webhooks/tradethrone`
+     - Razorpay:            `https://tradetron-webhooks.onrender.com/webhooks/billing/razorpay`
+     - Broker postbacks:    `https://tradetron-webhooks.onrender.com/webhooks/broker/{broker_name}`
+   - Verify: `/healthz` → 200, `/readyz` → 200, `/metrics` → `webhook_*` series.
+2. **Railway** — the committed `Procfile` declares two processes:
+   ```bash
+   web:     uvicorn app.main:app ...            # main API
+   webhook: uvicorn app.webhooks.main:app ...   # webhook platform
+   ```
+3. **Env vars for the webhook service:** `DATABASE_URL`, `REDIS_URL` (or
+   `UPSTASH_REDIS_URL`), `JWT_SECRET`, `BROKER_MODE=simulated`,
+   `WEBHOOK_LOCAL_MODE=false` (production must NEVER run in local mode),
+   `TRADETHRONE_WEBHOOK_SECRET` (HMAC secret for TradeThrone signal webhooks).
+4. **Migration ownership:** the webhook service runs `alembic upgrade head` in
+   its release step too.  Concurrent runs with the main API are safe — Alembic's
+   version table makes them idempotent no-ops.
+
 ---
 
 ## 4. Frontend — Vercel
@@ -134,11 +170,12 @@ docker run -p 8080:8080 --env-file .env.production tradethrone-api
 
 1. Provision Supabase + Upstash → collect URLs.
 2. Deploy backend (Render/Railway) with all `.env.production` values → verify `/readyz` = 200.
-3. Deploy frontend on Vercel with `VITE_API_URL`/`VITE_WS_URL`.
-4. DNS: map both Vercel domains; enable HTTPS-only.
-5. Register admin → seed plans auto-created on first boot.
-6. Flip `BROKER_MODE=live` only after SEBI KYC + broker API activation; TOTP sessions auto-renew daily 08:45 IST via built-in scheduler.
-7. Monitor: Sentry DSN optional; structured JSON logs ship to platform stdout.
+3. **Deploy the webhook service** (§3 Option D) → verify `/healthz` = 200, `/readyz` = 200, then point every provider webhook (Zerodha postbacks, Razorpay, TradeThrone signals) at the webhook service.
+4. Deploy frontend on Vercel with `VITE_API_URL`/`VITE_WS_URL`.
+5. DNS: map both Vercel domains; enable HTTPS-only.
+6. Register admin → seed plans auto-created on first boot.
+7. Flip `BROKER_MODE=live` only after SEBI KYC + broker API activation; TOTP sessions auto-renew daily 08:45 IST via built-in scheduler.
+8. Monitor: Sentry DSN optional; structured JSON logs ship to platform stdout. Scrape `/metrics` on **both** services (`tradetron_*` on the API, `webhook_*` on the webhook service).
 ---
 
 ## 7. Production Hardening — P2 (CI, Alembic Governance, Observability)
