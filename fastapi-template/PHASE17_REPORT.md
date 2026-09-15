@@ -1,5 +1,12 @@
 # PHASE 17 REPORT — Strategy Deployment Tenant-Scoping (owner column)
 
+> **Status banner (2026-09-15):** This is a historical phase report. The current
+> integration-readiness state of `feat/autonomous-os` is governed by
+> `AUTONOMOUS_OS_LAUNCH_AUDIT.md` (Phases A–K, HEAD `9dc46921`) and
+> `RELEASE_CANDIDATE.md` §0. The full suite today is **907/907 pytest +
+> 71/71 Vitest + pyright clean + Alembic single-head `0012_subscription_cancel_fields`**
+> — this Phase 17 fix continues to be covered by that suite.
+
 **HEAD after commit:** `e1f5f959` → new commit
 **Alembic head:** `0005_strategy_deployments_owner`
 **Date:** 2026-09-09

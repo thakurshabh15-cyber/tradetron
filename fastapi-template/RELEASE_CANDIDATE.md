@@ -1,9 +1,29 @@
 # TradeThrone — Phase P Release Candidate verification report
 
 > **Branch:** `feat/autonomous-os`
-> **Date:** 2026-09-14
-> **Baseline:** `197bc2108d3370421bceddea4791872bb366eb7e` (HEAD == origin)
+> **Date:** 2026-09-14 (Phase P baseline) · superseded for current state by `AUTONOMOUS_OS_LAUNCH_AUDIT.md`
+> **Baseline:** `197bc2108d3370421bceddea4791872bb366eb7e` (HEAD == origin at Phase P)
 > **Classification legend:** 🟢 GREEN = verified in a real test environment · ⛔ BLOCKED = requires external infrastructure/credentials · 🟡 AMBER = locally verified, external verification pending
+
+---
+
+## 0. Status Update — 2026-09-15 (Phase A–K completion supersedes counts below)
+
+- Full deployment-readiness workflow Phases A–K are COMPLETE and documented in
+  `AUTONOMOUS_OS_LAUNCH_AUDIT.md` at `219671f8`/`35591d0a`; current HEAD is
+  `9dc46921` (docs-polish only after the audit).
+- Test counts re-verified at the audited baseline: **907/907 pytest** (3 benign
+  warnings) + **71/71 Vitest** + **pyright 0/0/0** + **alembic drift clean**
+  (single head `0012_subscription_cancel_fields`, 32-table ORM parity). The
+  "899 tests" numbers below are the older Phase P snapshot.
+- **Live deployment re-verified 2026-09-15 against `tradetron-8jkz.onrender.com`:**
+  `/readyz` → 200 `{database:true, cache:true}` (Redis now connected), `/api/health`
+  → 200 `broker_mode=simulated, engine_running=true`, `/metrics` → Prometheus with
+  `tradetron_broker_mode_live 0`, docs hidden (404), auth enforced (401), CORS
+  exact-origin lock live. Vercel bundle URL config verified byte-identical to
+  local `dist` (`jsx-runtime-BGt-GG7e.js`). **Remaining:** `tradetron-webhooks`
+  ingress service NOT deployed (`x-render-routing: no-server`), broker sandbox
+  credentials still absent, Vercel rebuild needed to ship HEAD UI chunks.
 
 ---
 

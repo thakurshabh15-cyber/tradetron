@@ -126,17 +126,40 @@ Risk defaults: `max_position_size=100`, `max_daily_loss=10000`, `max_orders_per_
 
 ---
 
-## 4. External Blockers (unchanged — require operator action)
+## 4. External Blockers (as of live re-verification, 2026-09-15)
 
 | # | Blocker | Impact | Action |
 |---|---|---|---|
-| **E-1** | Render Key Value (Redis) not provisioned | Backend `/readyz` `cache:false` → 503 at boot in production | Dashboard → New → Key Value → `tradetron-redis` (oregon) → link to BOTH `tradetron-backend` and `tradetron-webhooks` |
+| **E-1** | ~~Render Key Value (Redis) not provisioned~~ | **RESOLVED on `tradetron-backend`** — deployed `/readyz` returns `{"database":true,"cache":true}` (Redis linked). Still REQUIRED for `tradetron-webhooks` once that service is deployed. | n/a (backend) / link Key Value to webhook service when created |
 | **E-2** | Broker sandbox credentials absent (Angel One/Zerodha/Upstox/Binance) | No live-integration verification; bounds current work to simulated | Obtain sandbox creds; configure in Render secrets |
-| **E-3** | Alembic migrations not yet run against real Render Postgres | Schema may lag on first deploy | After E-1/E-2: deploy → `releaseCommand` runs `alembic upgrade head` |
-| **E-4** | Final Render/Vercel deploy verification | `/healthz`, `/readyz`, `/metrics`, frontend integration unconfirmed on live host | After E-1/E-3: run `verify-live/e2e-smoke.mjs` against prod |
+| **E-3** | ~~Alembic migrations not yet run against real Render Postgres~~ | **RESOLVED —** deployed production host serves `/api/health` with `engine_running=true` (boot refused on drifted schema, so Alembic `upgrade head` succeeded on the real Render Postgres). | n/a |
+| **E-4** | Final Render/Vercel deploy verification | Backend `/healthz|readyz|metrics|api/health` **VERIFIED live**; CORS exact-origin lock VERIFIED; `tradetron-webhooks.onrender.com` is **NOT deployed** (`x-render-routing: no-server`); Vercel bundle URL config verified but bundle predates HEAD. | Deploy the `tradetron-webhooks` service (`render.yaml`), link Redis, then re-push frontend so Vercel rebuilds from HEAD |
 
 ---
 
-## 5. Verdict
+## 5. Live Deployment Re-verification (2026-09-15, direct HTTP probes)
 
-**LOCAL CODE READINESS — CONFIRMED.** Backend 907 + frontend 71 + pyright clean + alembic drift clean at a synced HEAD. Webhook, autonomous-chain, protective-order, tenant-isolation, resilience, performance, and observability domains each re-verified GREEN at this HEAD. **LIVE-trading readiness NOT declared** — `BROKER_MODE=simulated` remains enforced at every dispatch gate. Next required step is the external infrastructure milestones (E-1 → E-4).
+Probed from this machine against the currently-deployed Render + Vercel hosts:
+
+| Probe | Result | Evidence |
+|---|---|---|
+| `https://tradetron-8jkz.onrender.com/healthz` | 200 | `{"status":"healthy","service":"tradethrone-platform"}` |
+| `.../readyz` | 200 | `{"status":"ready","environment":"production","checks":{"database":true,"cache":true}}` |
+| `.../api/health` | 200 | `{"status":"healthy","broker_mode":"simulated","engine_running":true,"ws_channels":{"market:stream":1}}` |
+| `.../metrics` | 200 | Prometheus text; `tradetron_engine_state 1`, `tradetron_broker_mode_live 0` |
+| `.../openapi.json`, `.../docs` | 404 | Docs correctly disabled in production |
+| `.../api/strategies`, `.../api/admin/users` (no token) | 401 | Auth enforced |
+| `.../webhooks/tradethrone` (POST) | 404 | Ingress router NOT mounted on main API (correct separation) |
+| CORS `Origin: https://tradethrone.vercel.app` | ACAO echoed + `creds=true` | Exact-origin lock live |
+| CORS `Origin: https://evil.vercel.app` | no ACAO header | Not trusted (fail-closed) |
+| `https://tradetron-webhooks.onrender.com` (/healthz, /readyz) | 404 `x-render-routing: no-server` | Webhook ingress service NOT deployed |
+| `https://tradethrone.vercel.app` | 200 HTML shell | Frontend live |
+| Vercel bundle `assets/jsx-runtime-BGt-GG7e.js` | byte-identical to local `dist` | Deployed bundle bakes `https://tradetron-8jkz.onrender.com` + `wss://` |
+
+**Conclusion:** Backend engine + Redis + Postgres + auth + CORS all verified against the live host, and the Vercel bundle URL config is correct. The **only missing infrastructure piece is the webhook ingress service** (`tradetron-webhooks`), and the deployed frontend bundle predates HEAD (Vercel rebuild required to ship the latest UI chunks).
+
+---
+
+## 6. Verdict
+
+**LOCAL CODE READINESS — CONFIRMED.** Backend 907 + frontend 71 + pyright clean + alembic drift clean at a synced HEAD. Webhook, autonomous-chain, protective-order, tenant-isolation, resilience, performance, and observability domains each re-verified GREEN at this HEAD. **LIVE-trading readiness NOT declared** — `BROKER_MODE=simulated` remains enforced at every dispatch gate, and the live host explicitly reports `tradetron_broker_mode_live 0`. Remaining operator actions: deploy the webhook ingress service (E-4) and obtain broker sandbox credentials (E-2).
