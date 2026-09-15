@@ -7,7 +7,7 @@
 
 ## 0. Pre-Flight Checklist
 
-- [x] `pytest` → **156/156 passed** (114 core + 42 Phase 3 staging)
+- [x] `pytest` → **907/907 passed** (BROKER_MODE=simulated, 0 failed)
 - [x] `npm run build` → zero-warning `/dist`
 - [x] `/healthz` → `{"status": "healthy", "service": "tradethrone-platform"}`
 - [x] `/readyz` → HTTP 200 when Supabase DB + Upstash Redis reachable
