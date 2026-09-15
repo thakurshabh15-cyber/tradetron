@@ -124,6 +124,13 @@ function TradingChart({ symbol = "NIFTY50", currentPrice = null, positions = [],
   const priceLineRefs = useRef([]);
   const dragRef = useRef(null);
   const candlesRef = useRef([]);
+  // Keep the latest onModifyRisk handler in a ref so the chart-build effect
+  // (deps: candles/toggles/timeframe/positions) never captures a stale closure
+  // while the parent re-renders with a fresh callback identity. Adding the
+  // callback to the effect deps would rebuild the whole chart on every parent
+  // render — the ref avoids that while keeping drag-commit always current.
+  const onModifyRiskRef = useRef(onModifyRisk);
+  useEffect(() => { onModifyRiskRef.current = onModifyRisk; });
   const [timeframe, setTimeframe] = useState("5m");
   const [toggles, setToggles] = useState(DEFAULT_TOGGLES);
   const [candles, setCandles] = useState([]);
@@ -324,9 +331,9 @@ function TradingChart({ symbol = "NIFTY50", currentPrice = null, positions = [],
       container.style.cursor = "default";
       dragRef.current = null;
       setDragBadge(null);
-      if (d && onModifyRisk) {
+      if (d && onModifyRiskRef.current) {
         const finalPrice = d.line.options().price;
-        onModifyRisk(d.posId, d.field, finalPrice);
+        onModifyRiskRef.current(d.posId, d.field, finalPrice);
       }
     };
 
@@ -361,7 +368,7 @@ function TradingChart({ symbol = "NIFTY50", currentPrice = null, positions = [],
       overlayRefs.current = {};
       priceLineRefs.current = [];
     };
-  }, [candles, toggles, timeframe, positions]);
+  }, [candles, toggles, timeframe, positions, symbol]);
 
   // ── Real-time tick updates (1s builds candles from ticks) ──
   useEffect(() => {
