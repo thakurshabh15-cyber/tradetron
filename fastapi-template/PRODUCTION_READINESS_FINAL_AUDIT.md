@@ -1,7 +1,7 @@
 # TRADETHRONE — PRODUCTION READINESS · CONSOLIDATED FINAL AUDIT
 
 > **Branch:** `feat/autonomous-os`
-> **HEAD:** `64b2fd52`
+> **HEAD:** `64b2fd52` (audit baseline) → `e50dcfeb` (post-audit follow-up, §K D-1b)
 > **Date:** 2026-09-15
 > **Overall Verdict:** 🟢 **PRODUCTION-READY** (all engineering-owned items resolved; external operator actions remain as documented in §K)
 
@@ -11,7 +11,7 @@
 
 | Gate | Result | Detail |
 |---|---|---|
-| Backend pytest | **902 / 902 passed** | 446 s, 3 pre-existing warnings |
+| Backend pytest | **907 / 907 passed** | 799 s, 3 pre-existing warnings (re-measured at `e50dcfeb`; 902 baseline + 5 D-1b wiring tests) |
 | Frontend vitest | **71 / 71 passed** | 6.98 s |
 | Frontend build | **OK** | 1.99 s, 9 chunks |
 | ESLint | **0 errors** | 18 `react-hooks/set-state-in-effect` warnings (pre-existing) |
@@ -266,6 +266,7 @@ An `autonomous` task executes only when:
 | # | Finding | Resolution |
 |---|---|---|
 | D-1 | **P0: Silent webhook data loss on degraded Redis** | Fixed: `QueueUnavailableError` → HTTP 503 (commit `64b2fd52`); 3 regression tests |
+| D-1b | **Webhook ingress deployment wiring** | Fixed: webhook platform must be a **separate deployable service** — added `tradetron-webhooks` to `render.yaml`, `webhook:` process to `Procfile`, Option D to `DEPLOYMENT.md`, and 5 deployment-wiring regression tests (`TestDeploymentWiring`, commit `e50dcfeb`). Without it provider webhooks 404'd on the main API. |
 
 ### Resolution Summary
 
@@ -299,4 +300,4 @@ An `autonomous` task executes only when:
 
 ---
 
-*Audit concluded: 2026-09-15. All engineering-owned items resolved. No further code changes required.*
+*Audit concluded: 2026-09-15 (baseline), refreshed at `e50dcfeb` after the D-1b deployment-wiring follow-up. All engineering-owned items resolved. No further code changes required.*
