@@ -2,7 +2,8 @@
 
 > **Branch:** `feat/autonomous-os`
 > **Date:** 2026-09-15
-> **HEAD == origin:** `35591d0a5b5cffdb2b23e7b9680484c753a0c428` (tree clean, fully synced)
+> **Audited baseline:** `35591d0a5b5cffdb2b23e7b9680484c753a0c428` (HEAD == origin, tree clean at audit time)
+> **Document commit:** `219671f8` (docs only — audit + DEPLOYMENT.md pre-flight count fix)
 > **Operational posture:** `BROKER_MODE=simulated` — LIVE trading disabled at every dispatch gate.
 > **Classification:** 🟢 GREEN (verified locally / in suite) · ⛔ BLOCKED (external infra/credentials) · 🟡 AMBER (locally verified, external verification pending)
 
@@ -31,6 +32,7 @@
   - **Redis is NOT auto-provisionable by Blueprint** — must be created as a Render Key Value and linked to both services (`⛔ E-1`).
 - **Procfile** (Railway path): `web` = main API, `webhook` = webhook service on `WEBHOOK_PORT`.
 - **Dockerfile**: `python:3.11-slim`, non-root `appuser` (UID 1000), `curl`/`build-essential`/`libpq-dev`, `HEALTHCHECK` hits `/api/health`, uvicorn with `--proxy-headers --forwarded-allow-ips='*'`. no `.pyc` writes, unbuffered output.
+
 ### 1.2 Configuration guards (`app/config.py`)
 
 `_validate_production_boot()` fails fast (refuses to boot) when `ENVIRONMENT=production` and any of:
@@ -121,6 +123,7 @@ Risk defaults: `max_position_size=100`, `max_daily_loss=10000`, `max_orders_per_
 | R4 | Cross-tenant mutation | Every engine op re-binds order/position to its own broker account & owner | MITIGATED (G suites) |
 | R5 | Redis outage → silent data loss | `QueueUnavailableError` → HTTP 503 | MITIGATED (fail-closed) |
 | R6 | Credential leak in logs | Alembic output redacted; sentinel text redacts configured secrets | MITIGATED |
+
 ---
 
 ## 4. External Blockers (unchanged — require operator action)
