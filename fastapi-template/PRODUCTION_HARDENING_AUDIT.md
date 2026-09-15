@@ -1,5 +1,11 @@
 # Production Hardening Audit — Phases A–O
 
+> **Status banner (2026-09-15):** Historical audit doc. Current authoritative
+> state is `AUTONOMOUS_OS_LAUNCH_AUDIT.md` (Phases A–K, HEAD `3870735a`) and
+> `RELEASE_CANDIDATE.md` §0. Test count today is **907/907 pytest + 71/71 Vitest
+> + pyright 0/0/0 + Alembic single-head `0012_subscription_cancel_fields`**; the
+> `899/899` figure below is the older `197bc210` snapshot.
+
 > **Branch:** `feat/autonomous-os` @ `197bc210`  
 > **Date:** 2026-09-14  
 > **Tests:** 899/899 passing (last verified `197bc210`)  
