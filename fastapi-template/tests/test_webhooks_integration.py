@@ -594,6 +594,115 @@ class TestQueueIntegration:
             mock_enqueue.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_degraded_queue_returns_503_not_silent_202(
+        self, async_client, razorpay_payment_captured_payload
+    ):
+        """Regression (P0): a degraded webhook queue must NOT silently accept
+        and drop webhooks.
+
+        When Redis is unavailable at boot (``WebhookQueue._initialized`` is
+        False in a non-local-mode deployment), ``enqueue()`` used to return the
+        string ``"local-mode"`` and the ingress converted that into HTTP 202
+        ACCEPTED — the sender believed the event was durably queued while the
+        event was actually dropped.  For broker fills, trade signals, and
+        payment events this is silent data loss (no sender retry ever occurs).
+
+        The fix: ``enqueue()`` raises ``QueueUnavailableError`` in that state
+        and the ingress surfaces HTTP 503 so the upstream sender retries.
+        """
+        from app.webhooks.queue.redis_streams import (
+            QueueUnavailableError,
+            webhook_queue,
+        )
+
+        # Force the degraded state exactly as boot-without-Redis produces it.
+        saved_initialized = webhook_queue._initialized
+        saved_redis = webhook_queue._redis
+        webhook_queue._initialized = False
+        webhook_queue._redis = None
+        try:
+            signature = compute_razorpay_signature(
+                razorpay_payment_captured_payload, TEST_RAZORPAY_WEBHOOK_SECRET
+            )
+            body = json.dumps(
+                razorpay_payment_captured_payload, separators=(",", ":")
+            ).encode()
+            response = await async_client.post(
+                "/webhooks/razorpay",
+                content=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Razorpay-Signature": signature,
+                },
+            )
+            # 503 (retryable), never a silent 202 acceptance of a dropped event.
+            assert response.status_code == 503
+        finally:
+            webhook_queue._initialized = saved_initialized
+            webhook_queue._redis = saved_redis
+
+    @pytest.mark.asyncio
+    async def test_enqueue_raises_queue_unavailable_when_uninitialized(self):
+        """Unit-level contract: ``enqueue()`` raises ``QueueUnavailableError``
+        from the degraded (uninitialized, non-local-mode) state instead of
+        silently returning ``"local-mode"``."""
+        from app.webhooks.queue.redis_streams import (
+            QueueUnavailableError,
+            WebhookQueue,
+        )
+        from app.webhooks.validation.schemas import WebhookEnvelope
+        from datetime import datetime, timezone
+
+        queue = WebhookQueue(redis_url="redis://localhost:6379/0")
+        # Fresh instance: _initialized is False, _redis is None — no initialize().
+        assert queue._initialized is False
+        assert queue._redis is None
+
+        saved_local_mode = settings.webhook_local_mode
+        settings.webhook_local_mode = False
+        try:
+            with pytest.raises(QueueUnavailableError):
+                await queue.enqueue(
+                    WebhookEnvelope(
+                        event_id="evt-degraded-1",
+                        event_type="order_update",
+                        timestamp=datetime.now(timezone.utc),
+                        provider="zerodha",
+                        payload={"order_id": "TESTX"},
+                        idempotency_key=None,
+                    )
+                )
+        finally:
+            settings.webhook_local_mode = saved_local_mode
+
+    @pytest.mark.asyncio
+    async def test_enqueue_local_mode_keeps_noop_contract(self):
+        """In ``webhook_local_mode`` (dev/test only) an uninitialized queue
+        keeps the historical no-op ``"local-mode"`` contract — the explicit
+        dev sameness that production boot validation already forbids."""
+        from app.webhooks.queue.redis_streams import WebhookQueue
+        from app.webhooks.validation.schemas import WebhookEnvelope
+        from datetime import datetime, timezone
+
+        queue = WebhookQueue(redis_url="redis://localhost:6379/0")
+        saved_local_mode = settings.webhook_local_mode
+        settings.webhook_local_mode = True
+        try:
+            entry = await queue.enqueue(
+                WebhookEnvelope(
+                    event_id="evt-local-1",
+                    event_type="order_update",
+                    timestamp=datetime.now(timezone.utc),
+                    provider="zerodha",
+                    payload={"order_id": "TESTY"},
+                    idempotency_key=None,
+                )
+            )
+            assert entry == "local-mode"
+        finally:
+            settings.webhook_local_mode = saved_local_mode
+
+    @pytest.mark.asyncio
     async def test_queue_priority_routing(self, async_client, zerodha_order_fill_payload, razorpay_payment_captured_payload):
         """Test critical broker webhooks go to critical queue, billing to high queue."""
         with patch.object(webhook_queue, 'enqueue', new_callable=AsyncMock) as mock_enqueue:

@@ -18,6 +18,18 @@ from app.core.logging import get_logger
 logger = get_logger("webhook.queue")
 
 
+class QueueUnavailableError(RuntimeError):
+    """Raised when the Redis-backed webhook queue cannot accept new events.
+
+    This is a FAIL-CLOSED signal for the ingress layer: while the deployment is
+    NOT in ``webhook_local_mode`` a webhook that cannot be durably queued must
+    surface HTTP 503 so the sender retries — never a silent 202.  A silent
+    acceptance would tell the sending broker/payment provider the event was
+    handled while the platform actually dropped it (data loss on fills,
+    signals, and payments).
+    """
+
+
 @dataclass
 class QueuedWebhook:
     """Webhook event in the queue"""
@@ -89,8 +101,24 @@ class WebhookQueue:
     async def enqueue(self, envelope: WebhookEnvelope, priority: int = 2) -> str:
         """Enqueue webhook event with priority routing"""
         if not self._initialized or not self._redis:
-            logger.warning("Queue not initialized, skipping enqueue for %s", envelope.event_id)
-            return "local-mode"
+            if settings.webhook_local_mode:
+                # Local/dev mode: the lifecycle intentionally skips Redis; the
+                # ingress fast-path handles events synchronously.  Defensive
+                # no-op for any caller that reaches here in that mode.
+                logger.info(
+                    "Queue unused in webhook_local_mode; returning local-mode "
+                    "entry for %s",
+                    envelope.event_id,
+                )
+                return "local-mode"
+            # Production-degraded state: Redis is down or was never initialized.
+            # FAIL CLOSED — the caller (webhook ingress) turns this into HTTP 503
+            # so the sender retries.  A silent "local-mode" no-op here would ACK
+            # a dropped broker fill / trade signal / payment event: data loss.
+            raise QueueUnavailableError(
+                "Webhook queue is unavailable (Redis not initialized); "
+                "refusing to silently accept the event"
+            )
         
         route = resolve_route(envelope.provider, envelope.event_type)
         queue_name = route.queue_name
