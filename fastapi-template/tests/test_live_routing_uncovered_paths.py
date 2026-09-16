@@ -347,10 +347,46 @@ def _module_exists(dotted: str) -> bool:
 
 
 def _grep(pattern: str) -> list[str]:
-    """Return '<relpath>:<lineno>: <line>' for every code match (excluding tests)."""
+    """Return '<relpath>:<lineno>: <line>' for every code match (excluding tests).
+
+    Only git-tracked source files are searched.  A stray gitignored second
+    checkout physically present under the repo (e.g. the local
+    ``tt-main-wt-origin`` worktree) would otherwise double-count the same
+    definitions and break the exactly-one assertions below; the committed
+    codebase is the git tracked tree, not whatever extra copies happen to sit
+    on disk.
+    """
     hits: list[str] = []
     root = Path(__file__).resolve().parent.parent
-    for path in sorted(root.rglob("*.py")):
+    paths: list[Path] = sorted(root.rglob("*.py"))
+    try:
+        import subprocess
+
+        top = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=root, capture_output=True, text=True,
+            check=False, timeout=10,
+        ).stdout.strip()
+        if top:
+            ls = subprocess.run(
+                ["git", "ls-files"], cwd=top,
+                capture_output=True, text=True, check=False, timeout=15,
+            )
+            if ls.returncode == 0:
+                top_p = Path(top).resolve()
+                root_p = root.resolve()
+                tracked = [
+                    (top_p / rel).resolve()
+                    for rel in ls.stdout.splitlines()
+                    if rel.endswith(".py")
+                ]
+                paths = sorted(
+                    p for p in tracked
+                    if p.parent == root_p or root_p in p.parents
+                )
+    except Exception:  # noqa: BLE001 - fall back to a filesystem walk
+        paths = sorted(root.rglob("*.py"))
+    for path in paths:
         if "tests" in path.parts:
             continue
         try:
