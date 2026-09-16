@@ -57,6 +57,9 @@ Thumbs.db
 # Dev / third-party folders
 agency-agents-main/
 OmniRoute-release*/
+# Local main-branch worktree copy (never commit the second checkout tree)
+tt-main-wt-origin/
+
 # Scratch / diagnostic / credential-dump artifacts
 _scan*.txt
 _scan*.log
@@ -66,6 +69,20 @@ _prev_env_prod.txt
 _ci_*.db
 *.pid
 # Diagnostic probe / checkpoint artifacts (must never contain secrets)
+# Diagnostic probe / checkpoint artifacts (must never contain secrets)
+_diag.py
+_probe.py
+_ws_live_probe*.py
+_ws_root.py
+_env_probe.py
+_p1.txt
+_p2.txt
+_probe_*.txt
+_probe_*.sql
+_probe_*.ps1
+_probe_harness_nums.txt
+_probe_chain_mid.txt
+_probe_main_tail.txt
 _diag.py
 _probe.py
 _ws_live_probe*.py

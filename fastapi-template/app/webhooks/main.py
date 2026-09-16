@@ -90,6 +90,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="TradeThrone Webhook Platform",
     version="1.0.0",
+    lifespan=lifespan,
     # Interactive docs are a development aid; hide the full endpoint/schema
     # inventory when running under ENVIRONMENT=production.
     docs_url="/docs" if settings.environment != "production" else None,

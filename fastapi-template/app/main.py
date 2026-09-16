@@ -113,6 +113,22 @@ async def lifespan(application: FastAPI):  # noqa: ARG001
     _engine = TradingEngine(broker=broker, tick_queue=tick_queue)
     await _engine.start()
 
+    # 5b. Agent intents must not inherit the engine's shared RiskManager
+    #     life-to-date state (the builtin strategy engine accumulates P&L /
+    #     circuit-breaker state on that instance through the trading loop).
+    #     Wire a dedicated instance so the governed agent-intent risk gate is
+    #     evaluated against its own deterministic pre-trade snapshot and can
+    #     never be spuriously rejected by broker-journal state accumulated by
+    #     the builtin live strategies.  A single process-wide instance keeps
+    #     cumulative position-limit bookkeeping across successive intents.
+    from app.engine.agent_intents import (
+        RiskManager as _AgentIntentRiskManager,
+        set_engine_risk_getter,
+    )
+
+    _agent_intent_risk = _AgentIntentRiskManager()
+    set_engine_risk_getter(lambda: _agent_intent_risk)
+
     # 6. Start Automated Daily 8:45 AM IST Broker TOTP & Session Renewal Scheduler
     from app.engine.broker_cron import broker_scheduler
 

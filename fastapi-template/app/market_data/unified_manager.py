@@ -15,6 +15,16 @@ from app.market_data.providers.indian_equity import IndianEquityMarketDataProvid
 
 logger = get_logger("market.unified")
 
+# Canonical ↔ feed-label aliases for the quote cache.
+# Compliance (``resolve_symbol``) canonicalizes ``NIFTY50`` → ``NIFTY``; the
+# Indian Equity provider (and Unified hub) subscribe under the feed label
+# ``NIFTY50``.  ``get_quote`` must resolve the canonical request to the
+# feed-keyed cache entry so the agent-intent freshness gate passes.
+_QUOTE_SYMBOL_ALIASES: dict[str, str] = {
+    "NIFTY": "NIFTY50",
+    "NIFTY50": "NIFTY",
+}
+
 
 class SubscriptionLimitError(RuntimeError):
     """Raised when a dynamic market-data subscription would exceed the bound.
@@ -256,7 +266,16 @@ class UnifiedMarketDataManager:
 
     def get_quote(self, symbol: str) -> Optional[dict[str, Any]]:
         """Retrieve standardized quote for a single symbol (with freshness metadata)."""
-        tick = self._quotes.get(symbol.upper().strip())
+        key = symbol.upper().strip()
+        tick = self._quotes.get(key)
+        if tick is None:
+            # Canonical compliance symbols (NIFTY) map to the provider's feed
+            # label (NIFTY50).  Resolve the alias before failing as
+            # UNAVAILABLE so the agent intent freshness gate and order path
+            # agree on symbol naming.
+            alias = _QUOTE_SYMBOL_ALIASES.get(key)
+            if alias:
+                tick = self._quotes.get(alias)
         if tick is None:
             return None
         q = tick.to_dict()

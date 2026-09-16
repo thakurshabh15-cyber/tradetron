@@ -9,6 +9,7 @@ Never: real-money orders, existing customer accounts, secret output.
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.request
 import ssl
@@ -50,6 +51,22 @@ def req(method: str, path: str, body=None, token=None, headers=None, timeout=25)
         return e.code, data
     except Exception as e:
         return -1, f"{type(e).__name__}: {str(e)[:200]}"
+
+
+def req_retry(method: str, path: str, body=None, token=None, headers=None,
+              timeout=30, attempts=4) -> tuple[int, Any]:
+    """Like req() but retries transient network errors (code -1) with backoff.
+
+    Render cold starts can exceed the single-request timeout; a probe gate
+    must not fail its whole run on one slow first response.
+    """
+    last = (-1, "no attempt")
+    for i in range(attempts):
+        last = req(method, path, body=body, token=token, headers=headers, timeout=timeout)
+        if last[0] != -1:
+            return last
+        time.sleep(2 * (i + 1))
+    return last
 
 
 def check(name, cond, detail=""):
@@ -134,9 +151,16 @@ def main():
 
     # ── PHASE 10: PAPER TRADING SMOKE ────────────────────────────────────
     print("\n===== PHASE 10: PAPER TRADING SMOKE =====")
-    code, login = req("POST", "/api/auth/login", {"identifier": emailA, "password": pw})
-    tokenA = login["access_token"] if code == 200 else None
+    # The 9.10 logout revoked user A's session.  Re-login with a FRESH access
+    # token and use it from here on — reusing the revoked token would make every
+    # protected call below return 401 and /api/trades fall back to the public
+    # tape (a probe artifact, not a product defect).
+    code, login = req_retry("POST", "/api/auth/login", {"identifier": emailA, "password": pw})
+    tokenA = login.get("access_token") if code == 200 else None
     check("10.1 re-login for trading", bool(tokenA), f"{code}")
+    if not tokenA:
+        print("  abort: no valid login token; refusing to cascade a false failure summary")
+        sys.exit(1)
 
     sym = "RELIANCE"
     cid = f"RELQA-{ts[-8:]}"
@@ -179,8 +203,12 @@ def main():
         check("10.7 duplicate close rejected", False, "no position_id available")
 
     code, trades = req("GET", "/api/trades", token=tokenA)
-    check("10.8 order history scoped to caller", code == 200 and isinstance(trades, list),
-          f"code={code} count={len(trades) if isinstance(trades, list) else trades}")
+    t_syms = {t.get("symbol") for t in trades if isinstance(t, dict)} if isinstance(trades, list) else set()
+    scoped = (code == 200 and isinstance(trades, list) and sym in t_syms
+              and t_syms <= {sym}
+              and any(t.get("order_id") for t in trades if isinstance(t, dict)))
+    check("10.8 order history scoped to caller", scoped,
+          f"code={code} syms={t_syms} count={len(trades) if isinstance(trades, list) else trades}")
 
     # ── PHASE 11: TENANT ISOLATION ───────────────────────────────────────
     print("\n===== PHASE 11: TENANT ISOLATION =====")

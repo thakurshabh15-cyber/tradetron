@@ -70,13 +70,13 @@ def main():
                  "client_order_id": f"DMAQA-{str(ts)[-6:]}"}, tok)
     print("\nDMA PAPER:", s3, json.dumps(b3)[:600])
 
-    s4, b4 = rq("GET", "/api/trades/positions", tok)
+    s4, b4 = rq("GET", "/api/trades/positions", t=tok)
     print("\nPOSITIONS:", s4, json.dumps(b4)[:800])
 
-    s5, b5 = rq("GET", "/api/trades", tok)
+    s5, b5 = rq("GET", "/api/trades", t=tok)
     print("\nTRADES:", s5, json.dumps(b5)[:800])
 
-    s6, b6 = rq("GET", "/api/brokers/balance", tok)
+    s6, b6 = rq("GET", "/api/brokers/balance", t=tok)
     print("\nBALANCE:", s6, json.dumps(b6)[:400])
 
 
