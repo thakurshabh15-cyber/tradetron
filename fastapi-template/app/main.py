@@ -409,6 +409,13 @@ async def health_check():
     # quarantine state without grepping rotating logs.
     engine = get_engine()
     active_count = len(engine._strategies) if engine is not None else 0
+    quarantined_count = engine.quarantined_strategies if engine is not None else 0
+
+    condition_health = {
+        "total": active_count + quarantined_count,
+        "valid": active_count,
+        "quarantined": quarantined_count,
+    }
 
     return {
         "status": "healthy",
@@ -416,6 +423,37 @@ async def health_check():
         "engine_running": _engine is not None,
         "ws_channels": ws_manager.channel_counts,
         "engine_strategies_loaded": active_count,
+        "condition_health": condition_health,
+    }
+
+
+@app.get("/api/engine/status", tags=["observability"])
+async def engine_status():
+    """Engine status -- comprehensive runtime snapshot for ops/monitoring.
+
+    Returns engine state, strategy counts (including quarantined), broker
+    mode, WebSocket subscriber counts, and condition-contract health.  Never
+    triggers a broker call or market-data fetch -- safe for frequent polling.
+    """
+    from app.market_data.manager import ws_manager
+
+    engine = get_engine()
+    active_count = len(engine._strategies) if engine is not None else 0
+    quarantined_count = engine.quarantined_strategies if engine is not None else 0
+
+    return {
+        "status": "operational" if _engine is not None else "stopped",
+        "engine_running": _engine is not None,
+        "broker_mode": settings.broker_mode,
+        "environment": settings.environment,
+        "engine_strategies_loaded": active_count,
+        "engine_strategies_quarantined": quarantined_count,
+        "condition_health": {
+            "total": active_count + quarantined_count,
+            "valid": active_count,
+            "quarantined": quarantined_count,
+        },
+        "ws_channels": ws_manager.channel_counts if engine is not None else {},
     }
 
 

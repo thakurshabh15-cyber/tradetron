@@ -271,6 +271,17 @@ class TradingEngine:
         # In-memory cache of active user-defined strategies
         self._strategies: dict[str, dict[str, Any]] = {}
 
+        # Quarantine tracking: count of strategies rejected at load time for
+        # violating the typed condition/action contract (fail-closed, see
+        # app.engine.conditions).  Reset on every _load_strategies so the
+        # gauge always reflects the latest load cycle.
+        self._quarantined_count: int = 0
+
+    @property
+    def quarantined_strategies(self) -> int:
+        """Number of strategies quarantined at the last load for contract violations."""
+        return self._quarantined_count
+
     # ── Lifecycle ────────────────────────────────────────────────────
 
     async def start(self) -> None:
@@ -308,6 +319,7 @@ class TradingEngine:
                 rows = result.scalars().all()
 
                 self._strategies.clear()
+                self._quarantined_count = 0
                 for row in rows:
                     # Typed condition/action contract (fail-closed).  The
                     # production KeyError('value') incident came from raw
@@ -326,6 +338,7 @@ class TradingEngine:
                         # (corrupt JSON, missing column) is equally fatal for
                         # this row — quarantine with diagnostics.
                         record_condition_validation_error("engine_load")
+                        self._quarantined_count += 1
                         logger.error(
                             "Strategy QUARANTINED at load — condition/action "
                             "contract violation (fails closed, never "
