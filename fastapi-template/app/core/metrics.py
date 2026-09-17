@@ -19,6 +19,10 @@ from typing import Any, cast
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse, Response
 
+from app.core.logging import get_logger
+
+logger = get_logger("core.metrics")
+
 try:  # prometheus-client is a declared runtime dependency
     from prometheus_client import CollectorRegistry, Counter, Gauge, generate_latest
 
@@ -57,11 +61,32 @@ if _PROM_CLIENT_AVAILABLE:
         "Current number of websocket subscribers",
         registry=APP_REGISTRY,
     )
+    strategy_condition_errors_total = cast(Any, Counter)(
+        "tradetron_strategy_condition_errors_total",
+        "Strategy condition/action contract violations rejected by the "
+        "typed validation layer, by discovery stage",
+        ["stage"],
+        registry=APP_REGISTRY,
+    )
 else:  # pragma: no cover — defensive fallback
     http_requests_total = None  # type: ignore[assignment]
     engine_state = None  # type: ignore[assignment]
     broker_mode_live = None  # type: ignore[assignment]
     ws_channels = None  # type: ignore[assignment]
+    strategy_condition_errors_total = None  # type: ignore[assignment]
+
+
+def record_condition_validation_error(stage: str) -> None:
+    """Increment the typed-contract rejection counter (best-effort, never raises).
+
+    ``stage`` is low-cardinality: ``engine_load`` | ``evaluator`` |
+    ``agent_decision`` | ``backtest``.
+    """
+    if _PROM_CLIENT_AVAILABLE and strategy_condition_errors_total is not None:
+        try:
+            strategy_condition_errors_total.labels(stage=stage).inc()
+        except Exception:  # pragma: no cover — metrics are best-effort
+            logger.warning("failed to record condition-validation metric")
 
 
 async def metrics_middleware(request: Request, call_next: Any):

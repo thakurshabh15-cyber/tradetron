@@ -992,9 +992,37 @@ class AgentControlService:
             if isinstance(conditions, dict):
                 conditions = conditions.get("conditions", [])
             if conditions:
-                matched = evaluator.evaluate(
-                    strategy["id"] or row.agent_config_id or "", symbol, conditions
-                )
+                try:
+                    matched = evaluator.evaluate(
+                        strategy["id"] or row.agent_config_id or "", symbol, conditions
+                    )
+                except Exception as exc:
+                    # Fail-closed: a strategy violating the typed condition
+                    # contract must produce an honest, durable NO_TRADE
+                    # decision — never a fabricated signal and never a
+                    # silently skipped condition.
+                    from app.core.metrics import record_condition_validation_error
+
+                    record_condition_validation_error("agent_decision")
+                    diagnostic = getattr(
+                        exc, "to_dict", lambda: {"reason": str(exc)}
+                    )()
+                    row.decision = DECISION_NO_TRADE
+                    row.reason = (
+                        f"strategy condition contract violation — fails closed"
+                    )
+                    row.risk_result = "INVALID_CONDITIONS"
+                    row.risk_reason = str(diagnostic)
+                    logger.error(
+                        "Agent evaluation skipped — strategy condition "
+                        "contract violation (fail-closed NO_TRADE): "
+                        "config=%s strategy=%s symbol=%s diagnostic=%s",
+                        row.agent_config_id,
+                        strategy.get("id"),
+                        symbol,
+                        diagnostic,
+                    )
+                    return row
                 if matched:
                     note = "strategy conditions matched"
         if not matched:

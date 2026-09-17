@@ -24,7 +24,9 @@ from app.brokers.base import BrokerClient
 from app.brokers.simulated import SimulatedBroker
 from app.config import settings
 from app.core.logging import get_logger
+from app.core.metrics import record_condition_validation_error
 from app.db.session import SessionLocal
+from app.engine.conditions import normalize_action, normalize_conditions
 from app.engine.order_manager import OrderManager, Position, TradeExecution
 from app.engine.risk_manager import RiskManager
 from app.engine.strategy_evaluator import StrategyEvaluator
@@ -307,13 +309,42 @@ class TradingEngine:
 
                 self._strategies.clear()
                 for row in rows:
+                    # Typed condition/action contract (fail-closed).  The
+                    # production KeyError('value') incident came from raw
+                    # rows reaching the evaluator unvalidated; normalization
+                    # here quarantines malformed strategies at load time with
+                    # structured diagnostics — one bad row can no longer
+                    # break (or be re-crashed by) the tick pipeline.
+                    try:
+                        condition_rules = normalize_conditions(
+                            json.loads(row.conditions_json),
+                            context=f"strategy {row.id}",
+                        )
+                        action_rule = normalize_action(json.loads(row.action_json))
+                    except Exception as exc:
+                        # ConditionValidationError first-class; anything else
+                        # (corrupt JSON, missing column) is equally fatal for
+                        # this row — quarantine with diagnostics.
+                        record_condition_validation_error("engine_load")
+                        logger.error(
+                            "Strategy QUARANTINED at load — condition/action "
+                            "contract violation (fails closed, never "
+                            "evaluated): strategy_id=%s user_id=%s "
+                            "diagnostic=%s",
+                            row.id,
+                            row.user_id,
+                            getattr(exc, "to_dict", lambda: {"reason": str(exc)})(),
+                        )
+                        continue
                     self._strategies[row.id] = {
                         "id": row.id,
                         "user_id": row.user_id,
                         "name": row.name,
                         "symbols": json.loads(row.symbols_json),
-                        "conditions": json.loads(row.conditions_json),
-                        "action": json.loads(row.action_json),
+                        # Typed rules — the evaluator consumes these directly
+                        # (fast path, no per-tick re-validation).
+                        "conditions": condition_rules,
+                        "action": action_rule.as_dict(),
                         "enabled": row.enabled,
                         "execution_mode": getattr(row, "execution_mode", "PAPER") or "PAPER",
                         "broker_account_id": getattr(row, "broker_account_id", None),

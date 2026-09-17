@@ -20,25 +20,28 @@ from collections import defaultdict, deque
 from typing import Any
 
 from app.core.logging import get_logger
+from app.engine.conditions import (
+    ConditionRule,
+    ConditionValidationError,
+    is_condition_rule,
+    normalize_conditions,
+)
+from app.core.metrics import record_condition_validation_error
 
 logger = get_logger("engine.evaluator")
 
 # Maximum price history kept per symbol for indicator calculation
 _MAX_HISTORY = 1000
 
+# Bound on the per-evaluator condition-violation dedup keys (one key per
+# broken (strategy, reason) pair) so long-running processes stay bounded.
+_MAX_CONDITION_ERROR_KEYS = 1024
+
 # Symbolic operator aliases accepted in stored strategy conditions (legacy data
 # created before normalization persisted raw operators such as ">", ">=", ...).
-# Mirrors the aliases handled by ``visual_strategy.VisualContext._compare`` so
-# DB-loaded conditions behave identically regardless of the form they were
-# saved in.
-_OPERATOR_ALIASES: dict[str, str] = {
-    ">": "gt",
-    "<": "lt",
-    ">=": "gte",
-    "<=": "lte",
-    "=": "eq",
-    "==": "eq",
-}
+# The authoritative alias tables now live in app.engine.conditions; these
+# shims keep the module-level names importable for existing tests.
+from app.engine.conditions import OPERATOR_ALIASES as _OPERATOR_ALIASES  # noqa: E402,F401
 
 
 class StrategyEvaluator:
@@ -51,6 +54,9 @@ class StrategyEvaluator:
         )
         # previous indicator values for crossover detection
         self._prev_values: dict[str, float] = {}
+        # de-dup of condition-contract violation diagnostics, keyed
+        # f"{strategy_id}:{reason}" — see _log_condition_failure.
+        self._condition_error_seen: set[str] = set()
 
     def update_price(self, symbol: str, price: float) -> None:
         """Record a new price in the rolling history."""
@@ -60,7 +66,7 @@ class StrategyEvaluator:
         self,
         strategy_id: str,
         symbol: str,
-        conditions: list[dict[str, Any]],
+        conditions: list[Any],
     ) -> bool:
         """Return True if ALL conditions are satisfied for the given symbol.
 
@@ -71,23 +77,36 @@ class StrategyEvaluator:
         symbol:
             The ticker symbol being evaluated.
         conditions:
-            List of condition dicts with keys: indicator, operator, value, period.
-        """
-        for cond in conditions:
-            indicator = cond["indicator"].upper()
-            raw_operator = cond["operator"].lower()
-            operator = _OPERATOR_ALIASES.get(raw_operator, raw_operator) or "gt"
-            threshold = float(cond["value"])
-            period = int(cond.get("period", 14))
+            Typed :class:`ConditionRule` list (preferred — the engine and the
+            agent layer validate at load time) or raw condition dicts, which
+            are validated here against the typed contract.
 
-            current = self._compute_indicator(symbol, indicator, period)
+        Fail-closed semantics
+        ---------------------
+        A condition that violates the typed contract (e.g. the legacy
+        production rows that raised ``KeyError: 'value'``) is NEVER evaluated
+        with an invented threshold.  The whole strategy evaluates to False
+        and a structured diagnostic is logged once per (strategy, reason)
+        so a permanently-broken strategy cannot spam the logs on every tick.
+        """
+        if not conditions:
+            return False
+
+        try:
+            rules = self._coerce_rules(conditions)
+        except ConditionValidationError as exc:
+            self._log_condition_failure(strategy_id, symbol, exc)
+            return False
+
+        for rule in rules:
+            current = self._compute_indicator(symbol, rule.indicator, rule.period)
             if current is None:
                 return False  # Not enough data yet
 
-            prev_key = f"{strategy_id}:{symbol}:{indicator}:{period}"
+            prev_key = f"{strategy_id}:{symbol}:{rule.indicator}:{rule.period}"
             previous = self._prev_values.get(prev_key)
 
-            matched = self._compare(operator, current, threshold, previous)
+            matched = self._compare(rule.operator, current, rule.value, previous)
 
             # Store current as previous for next evaluation
             self._prev_values[prev_key] = current
@@ -96,6 +115,62 @@ class StrategyEvaluator:
                 return False
 
         return True
+
+    # ── Typed-condition intake ───────────────────────────────────────
+
+    @staticmethod
+    def _coerce_rules(conditions: list[Any]) -> list[ConditionRule]:
+        """Accept pre-validated rules (fast path) or validate raw dicts."""
+        if all(is_condition_rule(cond) for cond in conditions):
+            return list(conditions)
+        return normalize_conditions(conditions)
+
+    def _log_condition_failure(
+        self,
+        strategy_id: str,
+        symbol: str,
+        exc: ConditionValidationError,
+    ) -> None:
+        """Structured, de-duplicated diagnostic for a contract violation.
+
+        One bad strategy must not kill the engine (per-tick containment
+        already guarantees that) and must not flood production logs with an
+        identical traceback on every tick — the first occurrence per
+        (strategy, reason) is logged at ERROR with the full diagnostic;
+        repeats are counted at DEBUG.
+        """
+        key = f"{strategy_id}:{exc.reason}"
+        if key not in self._condition_error_seen:
+            self._condition_error_seen.add(key)
+            self._prune_condition_error_seen()
+            record_condition_validation_error("evaluator")
+            logger.error(
+                "Strategy condition contract violation — strategy FAILS "
+                "CLOSED (never evaluated, no invented threshold): "
+                "strategy_id=%s symbol=%s diagnostic=%s",
+                strategy_id,
+                symbol,
+                exc.to_dict(),
+            )
+        else:
+            logger.debug(
+                "Strategy condition contract violation (repeat): "
+                "strategy_id=%s symbol=%s diagnostic=%s",
+                strategy_id,
+                symbol,
+                exc.to_dict(),
+            )
+
+    def _prune_condition_error_seen(self) -> None:
+        """Bound the dedup key set so long runs cannot grow it unboundedly."""
+        if len(self._condition_error_seen) > _MAX_CONDITION_ERROR_KEYS:
+            # Drop the oldest half (sets are unordered; keep it simple and
+            # just shrink — a repeat will log once more after pruning).
+            for key in list(self._condition_error_seen)[
+                : -(_MAX_CONDITION_ERROR_KEYS // 2)
+            ]:
+                self._condition_error_seen.discard(key)
+
 
     # ── Indicator calculations ───────────────────────────────────────
 

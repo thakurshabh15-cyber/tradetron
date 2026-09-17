@@ -183,6 +183,23 @@ def run_backtest(
 ) -> dict:
     """Execute a truthful, charge-aware backtest and return a full report."""
     canonical, exchange = resolve_symbol(symbol)
+
+    # Typed condition contract (fail-closed): reject malformed payloads with
+    # a structured 422 instead of crashing mid-run on a missing 'value'.
+    from app.core.metrics import record_condition_validation_error
+    from app.engine.conditions import ConditionValidationError, normalize_conditions
+
+    try:
+        validated_conditions = normalize_conditions(
+            conditions, context=f"backtest {symbol}"
+        )
+    except ConditionValidationError as exc:
+        record_condition_validation_error("backtest")
+        raise ValueError(
+            f"Invalid strategy conditions: {exc.reason} "
+            f"(condition {exc.index if exc.index is not None else '?'})"
+        ) from exc
+
     is_option, is_future = _classify_product(canonical, product_type)
 
     # Lot-size compliance: normalise quantity to a tradable multiple.
@@ -330,7 +347,8 @@ def run_backtest(
                     continue
         else:
             # Entry uses the same evaluator state machine as live trading
-            if evaluator.evaluate("backtest", canonical, conditions):
+            # (validated typed rules — fail-closed contract enforced above)
+            if evaluator.evaluate("backtest", canonical, validated_conditions):
                 entry_price = bar["close"]
                 sl: float | None = None
                 tp: float | None = None

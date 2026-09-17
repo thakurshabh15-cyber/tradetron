@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from typing import Any, Optional
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.api.auth import get_current_user
 from app.core.logging import get_logger
 from app.market_data.unified_manager import unified_market_manager
 
@@ -111,8 +112,14 @@ async def get_providers_status():
 
 
 @router.get("/risk-status")
-async def risk_status():
-    """Return current risk exposure snapshot."""
+async def risk_status(user=Depends(get_current_user)):
+    """Return current risk exposure snapshot (authenticated).
+
+    Risk state (limits, exposure, kill-switch status) is tenant-sensitive
+    operational information — it must never be served to anonymous callers.
+    The only frontend consumer (Execution.jsx) reads this through ``useApi``,
+    which always attaches the Authorization header.
+    """
     from app.main import get_engine
 
     engine = get_engine()

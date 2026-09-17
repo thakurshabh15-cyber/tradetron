@@ -402,11 +402,20 @@ async def health_check():
     """Health check endpoint."""
     from app.market_data.manager import ws_manager
 
+    # Strategy-contract observability: how many enabled strategies the
+    # engine currently holds vs how many were quarantined at the last load
+    # for violating the typed condition/action contract (the production
+    # KeyError('value') incident class).  Operators must be able to SEE
+    # quarantine state without grepping rotating logs.
+    engine = get_engine()
+    active_count = len(engine._strategies) if engine is not None else 0
+
     return {
         "status": "healthy",
         "broker_mode": settings.broker_mode,
         "engine_running": _engine is not None,
         "ws_channels": ws_manager.channel_counts,
+        "engine_strategies_loaded": active_count,
     }
 
 
